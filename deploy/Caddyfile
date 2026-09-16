@@ -1,0 +1,24 @@
+{
+	auto_https disable_redirects
+	default_sni 84.78.155.96
+	fallback_sni 84.78.155.96
+}
+
+https://84.78.155.96 {
+	tls {
+		issuer acme https://acme-v02.api.letsencrypt.org/directory {
+			profile shortlived
+			disable_http_challenge
+		}
+	}
+
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8765
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		-Server
+	}
+}
