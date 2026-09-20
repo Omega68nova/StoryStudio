@@ -42,9 +42,11 @@ class NpcDirector:
         for npc in candidates:
             facts = self.world.search(project_id, "", head_node_id=head_node_id, pov_character_id=npc["id"], narration_mode="third_limited", kinds=["fact"], limit=30)
             visible_fact_ids[npc["id"]] = {fact["id"] for fact in facts}
+            private_knowledge = [str(item) for item in npc.get("state", {}).get("character_secrets", []) if str(item).strip()] if isinstance(npc.get("state", {}).get("character_secrets"), list) else []
             packets.append({"npc_id": npc["id"], "name": npc["name"], "sheet": make_lore_card(npc, projection)["compact_text"],
+                            "private_knowledge": private_knowledge[:20],
                             "known_facts": [{"id": fact["id"], "summary": fact["card"]["compact_text"]} for fact in facts]})
-        messages = [{"role": "system", "content": "Generate optional NPC reactions, not narration. Return JSON only. Each intervention must cite every fact it relies on. NPCs may only use abilities they know."},
+        messages = [{"role": "system", "content": "Generate optional NPC reactions, not narration. Return JSON only. Each intervention must cite every canonical fact it relies on. private_knowledge belongs only to that NPC and may guide its behavior without being stated aloud. NPCs may only use abilities they know."},
                     {"role": "user", "content": json.dumps({"scene_intent": scene_intent, "npcs": packets, "shape": {"interventions": [{"npc_id": "uuid", "dialogue": "", "attempted_action": "", "cited_fact_ids": [], "ability": {"ability_key": "", "target_id": "uuid"}}]}})}]
         try:
             raw = parse_json_object(await cancelable(llama.complete(messages, json_mode=True), cancel_event)).get("interventions", [])

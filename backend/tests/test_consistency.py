@@ -48,14 +48,16 @@ def test_planning_conflict_resolutions_and_idempotent_approval(tmp_path: Path) -
     assert repeated["transaction"]["id"] == result["transaction"]["id"]
 
 
-def test_reopen_uses_inactive_ledger_and_preserves_immutable_transaction(tmp_path: Path) -> None:
+def test_reopen_keeps_approved_canonical_data_active(tmp_path: Path) -> None:
     _, project, world, planning = setup(tmp_path)
     session = planning.create_session(project["id"], {})
     draft = {"summary": "Root", "entities": [{"key": "hero", "kind": "character", "name": "Hero", "state": {}}], "relations": []}
     approved = planning.approve_stage(session["id"], 1, draft)
     planning.reopen_stage(session["id"], 1)
-    assert world.db.fetch_one("SELECT transaction_id FROM inactive_world_transactions WHERE transaction_id=?", (approved["transaction"]["id"],))
-    assert not world.projection(project["id"], use_cache=False)["entities"]
+    assert not world.db.fetch_one("SELECT transaction_id FROM inactive_world_transactions WHERE transaction_id=?", (approved["transaction"]["id"],))
+    projection = world.projection(project["id"], use_cache=False)
+    assert any(entity["name"] == "Hero" for entity in projection["entities"].values())
+    assert planning.get_session(session["id"])["stages"][0]["status"] == "ready"
 
 
 def test_restart_repairs_approved_json_stale_generation_and_current_stage(tmp_path: Path) -> None:

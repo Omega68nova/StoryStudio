@@ -187,7 +187,16 @@ class RuntimeSettingsUpdate(BaseModel):
     comfy_workdir: str = ""
     comfy_url: HttpUrl = "http://127.0.0.1:8188"
     context_tokens: int = Field(default=8192, ge=2048, le=131072)
+    planning_context_tokens: int | None = Field(default=None, ge=2048, le=131072)
     memory_provider: Literal["builtin", "cognee"] = "builtin"
+
+    @model_validator(mode="after")
+    def planning_context_covers_story_context(self) -> "RuntimeSettingsUpdate":
+        if self.planning_context_tokens is None:
+            self.planning_context_tokens = self.context_tokens
+        if self.planning_context_tokens < self.context_tokens:
+            raise ValueError("planning context tokens cannot be smaller than story context tokens")
+        return self
 
     @field_validator("llama_url", "comfy_url")
     @classmethod
@@ -261,10 +270,34 @@ class EventMessage(BaseModel):
 
 
 class PlanningSessionCreate(BaseModel):
-    major_locations: int = Field(default=4, ge=1, le=30)
-    secondary_locations: int = Field(default=12, ge=0, le=200)
-    characters: int = Field(default=8, ge=1, le=100)
+    scale_preset: Literal["intimate", "local", "regional", "global"] = "local"
+    major_locations: int = Field(default=6, ge=1, le=30)
+    minor_locations: int = Field(default=20, ge=0, le=200)
+    rooms: int = Field(default=16, ge=0, le=200)
+    characters: int = Field(default=10, ge=1, le=100)
     direction: str = Field(default="", max_length=10_000)
+
+
+class RandomPlanningDirectionRequest(BaseModel):
+    theme: str = Field(default="", max_length=200)
+
+
+class ProjectStoryDefaultsUpdate(BaseModel):
+    narration_mode: Literal["first_person", "third_limited", "third_omniscient"]
+    pov_strategy: Literal["first_player", "selected_character", "none"]
+    pov_character_id: str | None = None
+
+
+class PlanningImagePlanUpdate(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20_000)
+    negative_prompt: str = Field(default="", max_length=20_000)
+    workflow_preset_id: str | None = None
+    width: int | None = Field(default=None, ge=64, le=8192)
+    height: int | None = Field(default=None, ge=64, le=8192)
+
+
+class PlanningImageGenerateBatch(BaseModel):
+    plan_ids: list[str] = Field(default_factory=list, max_length=500)
 
 
 class PlanningDraftUpdate(BaseModel):
@@ -272,13 +305,17 @@ class PlanningDraftUpdate(BaseModel):
 
 
 class PlanningResolution(BaseModel):
-    action: Literal["link", "merge", "rename", "omit"]
+    action: Literal["link", "merge", "rename", "omit", "keep_manual", "overwrite", "unlink"]
     entity_id: str | None = None
     new_name: str | None = Field(default=None, min_length=1, max_length=200)
 
 
 class PlanningApprovalRequest(PlanningDraftUpdate):
     resolutions: dict[str, PlanningResolution] = Field(default_factory=dict)
+
+
+class PlanningBatchAcceptRequest(PlanningDraftUpdate):
+    focus: str = Field(min_length=1, max_length=64)
 
 
 class PlanningDeleteRequest(BaseModel):
@@ -325,6 +362,8 @@ class PlanningGenerateRequest(BaseModel):
     repair: bool = False
     automate: bool = False
     automation_prompt: str = Field(default="", max_length=10_000)
+    append: bool = False
+    focus: str | None = Field(default=None, max_length=64)
 
 
 class WorldEntityCreate(BaseModel):
@@ -402,6 +441,7 @@ class EnvironmentSettingsUpdate(BaseModel):
 class WeatherDefinitionUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=2000)
+    imagegen_description: str = Field(default="", max_length=4000)
     tags: list[str] = Field(default_factory=list, max_length=40)
     image_tags: list[str] = Field(default_factory=list, max_length=40)
     enabled: bool = True
@@ -415,11 +455,17 @@ class TimePhaseItem(BaseModel):
     id: str | None = None
     name: str = Field(min_length=1, max_length=120)
     duration_minutes: int = Field(ge=1, le=100_000)
+    description: str = Field(default="", max_length=2000)
+    imagegen_description: str = Field(default="", max_length=4000)
     enabled: bool = True
 
 
 class TimePhasesUpdate(BaseModel):
     phases: list[TimePhaseItem] = Field(min_length=1, max_length=24)
+
+
+class TimePhaseOrderUpdate(BaseModel):
+    phase_ids: list[str] = Field(min_length=1, max_length=24)
 
 
 class AmbientPreferenceUpdate(BaseModel):
@@ -439,11 +485,38 @@ class AmbientVariantCreate(BaseModel):
 class AmbientAssignmentCreate(BaseModel):
     owner_type: Literal["weather", "time", "location", "action"]
     owner_id: str = Field(min_length=1, max_length=200)
-    selector_type: Literal["default", "indoor", "outdoor", "tag"] = "default"
+    selector_type: Literal["default", "indoor", "outdoor", "isolated", "tag"] = "default"
     selector_value: str | None = None
     weather_id: str | None = None
     time_phase_id: str | None = None
     variant_id: str
+
+
+class AmbientSoundSet(BaseModel):
+    selector_type: Literal["default", "indoor", "outdoor", "isolated", "tag"] = "default"
+    selector_value: str | None = None
+    weather_id: str | None = None
+    time_phase_id: str | None = None
+    variant_ids: list[str] = Field(default_factory=list, max_length=200)
+
+
+class AmbientSoundSetsUpdate(BaseModel):
+    sets: list[AmbientSoundSet] = Field(default_factory=list, max_length=100)
+
+
+class EnvironmentLocationUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    parent_location_id: str | None = None
+    exposure: Literal["indoor", "outdoor", "isolated"] = "outdoor"
+    description: str = Field(default="", max_length=4000)
+    imagegen_description: str = Field(default="", max_length=4000)
+    tags: list[str] = Field(default_factory=list, max_length=100)
+    image_tags: list[str] = Field(default_factory=list, max_length=100)
+    enabled: bool = True
+    random_encounter: bool = False
+    discovered: bool = True
+    x: float | None = None
+    y: float | None = None
 
 
 class WeatherProposalDecision(BaseModel):

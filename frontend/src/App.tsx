@@ -11,6 +11,7 @@ import { createPortal } from "react-dom";
 import { api } from "./api";
 import { PlanningStudio } from "./PlanningStudio";
 import { WorldStudio } from "./WorldStudio";
+import { CharacterStudio } from "./CharacterStudio";
 import { MusicStudio } from "./MusicStudio";
 import { MusicPlayer } from "./MusicPlayer";
 import { AmbientPlayer, AmbientPreferences } from "./AmbientPlayer";
@@ -96,6 +97,7 @@ const defaultSettings: RuntimeSettings = {
   comfy_workdir: "",
   comfy_url: "http://127.0.0.1:8188",
   context_tokens: 8192,
+  planning_context_tokens: 8192,
   memory_provider: "builtin",
 };
 const expectedBackendVersion = "0.17.0-environment";
@@ -103,6 +105,7 @@ const expectedBackendVersion = "0.17.0-environment";
 type View =
   | "story"
   | "world"
+  | "characters"
   | "planning"
   | "music"
   | "environment"
@@ -118,6 +121,7 @@ type MobileScale = "comfortable" | "compact" | "dense" | "tiny";
 const viewLabels: Record<View, string> = {
   story: "Story",
   world: "World",
+  characters: "Characters",
   planning: "Preplanning",
   music: "Music",
   environment: "Environment",
@@ -138,6 +142,7 @@ export default function App() {
   const [leafId, setLeafId] = useState<string | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowPreset[]>([]);
   const [view, setView] = useState<View>("story");
+  const [environmentLocationId, setEnvironmentLocationId] = useState<string | null>(null);
   const [runtime, setRuntime] = useState("idle");
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [streamText, setStreamText] = useState("");
@@ -467,11 +472,13 @@ export default function App() {
                   !project &&
                   [
                     "world",
+                    "characters",
                     "planning",
                     "music",
                     "rules",
                     "minigames",
                     "bullethell",
+                    "environment",
                   ].includes(item)
                 }
                 onClick={() => {
@@ -548,7 +555,11 @@ export default function App() {
             revision={revision}
             workflows={workflows}
             fail={setError}
+            openEnvironmentLocation={(locationId) => { setEnvironmentLocationId(locationId); requestView("environment"); }}
           />
+        )}
+        {view === "characters" && project && (
+          <CharacterStudio projectId={project.id} revision={revision} workflows={workflows} fail={setError} />
         )}
         {view === "planning" && project && (
           <PlanningStudio
@@ -565,7 +576,7 @@ export default function App() {
           />
         )}
         {view === "environment" && project && (
-          <EnvironmentStudio projectId={project.id} revision={revision} workflows={workflows} fail={setError} />
+          <EnvironmentStudio projectId={project.id} revision={revision} workflows={workflows} fail={setError} focusLocationId={environmentLocationId} onFocusHandled={() => setEnvironmentLocationId(null)} />
         )}
         {view === "rules" && project && (
           <RulesStudio
@@ -717,19 +728,11 @@ export default function App() {
             This removes the story, world memory, and managed images. Active
             generation must be cancelled first.
           </p>
-          <TextField
-            autoFocus
-            fullWidth
-            label={`Type “${project?.title ?? ""}”`}
-            value={deleteConfirmation}
-            onChange={(e) => setDeleteConfirmation(e.target.value)}
-          />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setDeleteProjectOpen(false)}>Cancel</Button>
           <Button
             color="error"
-            disabled={deleteConfirmation !== project?.title}
             onClick={() => void deleteProject()}
           >
             Delete permanently
@@ -2868,10 +2871,15 @@ function SettingsPanel({
 }) {
   const [settings, setSettings] = useState<RuntimeSettings>(defaultSettings);
   const [contextTokenInput, setContextTokenInput] = useState(String(defaultSettings.context_tokens));
+  const [planningContextTokenInput, setPlanningContextTokenInput] = useState(String(defaultSettings.planning_context_tokens));
   const [report, setReport] = useState("");
   useEffect(() => {
     api<RuntimeSettings>("/settings")
-      .then((next) => { setSettings(next); setContextTokenInput(String(next.context_tokens)); })
+      .then((next) => {
+        setSettings(next);
+        setContextTokenInput(String(next.context_tokens));
+        setPlanningContextTokenInput(String(next.planning_context_tokens));
+      })
       .catch((cause) => fail(errorMessage(cause)));
   }, [fail]);
   const set = <K extends keyof RuntimeSettings>(
@@ -3048,10 +3056,48 @@ function SettingsPanel({
                 return;
               }
               set("context_tokens", parsed);
+              if (settings.planning_context_tokens < parsed) {
+                set("planning_context_tokens", parsed);
+                setPlanningContextTokenInput(String(parsed));
+              }
               setContextTokenInput(String(parsed));
             }}
           />
         </label>
+        <label>
+          Preplanning context tokens
+          <input
+            type="number"
+            min={settings.context_tokens}
+            max="131072"
+            value={planningContextTokenInput}
+            onChange={(e) => setPlanningContextTokenInput(e.target.value)}
+            onBlur={() => {
+              const parsed = Number(planningContextTokenInput);
+              if (!Number.isInteger(parsed) || parsed < settings.context_tokens || parsed > 131072) {
+                setPlanningContextTokenInput(String(settings.planning_context_tokens));
+                return;
+              }
+              set("planning_context_tokens", parsed);
+              setPlanningContextTokenInput(String(parsed));
+            }}
+          />
+        </label>
+        <div className="button-row">
+          <button
+            type="button"
+            onClick={() => {
+              const recommended = Math.max(32768, settings.context_tokens);
+              set("planning_context_tokens", recommended);
+              setPlanningContextTokenInput(String(recommended));
+            }}
+          >
+            Use recommended 32K
+          </button>
+        </div>
+        <p className="muted">
+          Larger planning contexts increase llama.cpp KV-cache memory. Do not exceed the model&apos;s native context unless its RoPE settings are configured deliberately. StoryStudio switches back before ordinary story generation.
+        </p>
         <h2>World memory</h2>
         <label>
           Retrieval provider

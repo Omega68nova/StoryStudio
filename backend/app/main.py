@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import secrets
 import asyncio
 import re
@@ -24,9 +25,14 @@ from app.schemas import (
     ImageSuggestionUpdate,
     PlanningDraftUpdate,
     PlanningApprovalRequest,
+    PlanningBatchAcceptRequest,
     PlanningDeleteRequest,
     PlanningGenerateRequest,
     PlanningSessionCreate,
+    RandomPlanningDirectionRequest,
+    PlanningImagePlanUpdate,
+    PlanningImageGenerateBatch,
+    ProjectStoryDefaultsUpdate,
     ProjectCreate,
     ProjectUpdate,
     ProjectMusicUpdate,
@@ -67,10 +73,10 @@ from app.schemas import (
     AdminUserUpdate,
     AdminPasswordReset,
     ProjectAssignmentsUpdate,
-    EnvironmentSettingsUpdate, WeatherDefinitionUpdate, WeatherTransitionsUpdate, TimePhasesUpdate,
-    AmbientPreferenceUpdate, AmbientVariantCreate, AmbientAssignmentCreate, WeatherProposalDecision,
+    EnvironmentSettingsUpdate, WeatherDefinitionUpdate, WeatherTransitionsUpdate, TimePhasesUpdate, TimePhaseItem, TimePhaseOrderUpdate,
+    AmbientPreferenceUpdate, AmbientVariantCreate, AmbientAssignmentCreate, AmbientSoundSetsUpdate, WeatherProposalDecision,
     SceneEnvironmentUpdate,
-    LocationBackgroundCreate,
+    LocationBackgroundCreate, EnvironmentLocationUpdate,
 )
 from app.services.events import EventHub
 from app.services.runtimes import ComfyClient, LlamaClient, ProcessSupervisor
@@ -1239,7 +1245,7 @@ async def update_environment_settings(project_id: str, request: EnvironmentSetti
 async def create_weather(project_id: str, request: WeatherDefinitionUpdate) -> dict[str, Any]:
     require_project(project_id); now, weather_id = utc_now(), new_id()
     try:
-        db.execute("INSERT INTO weather_definitions(id,project_id,name,description,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)", (weather_id, project_id, request.name.strip(), request.description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), now, now))
+        db.execute("INSERT INTO weather_definitions(id,project_id,name,description,imagegen_description,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (weather_id, project_id, request.name.strip(), request.description, request.imagegen_description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), now, now))
     except Exception as exc:
         raise HTTPException(409, "A weather definition with that name already exists") from exc
     await events.publish("environment", {"project_id": project_id, "action": "weather_changed"})
@@ -1254,7 +1260,20 @@ async def update_weather(project_id: str, weather_id: str, request: WeatherDefin
     settings = db.fetch_one("SELECT initial_weather_id FROM project_environment_settings WHERE project_id=?", (project_id,)) or {}
     if not request.enabled and settings.get("initial_weather_id") == weather_id:
         raise HTTPException(422, "The initial weather cannot be disabled")
-    db.execute("UPDATE weather_definitions SET name=?,description=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=?", (request.name.strip(), request.description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), utc_now(), weather_id))
+    db.execute("UPDATE weather_definitions SET name=?,description=?,imagegen_description=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=?", (request.name.strip(), request.description, request.imagegen_description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), utc_now(), weather_id))
+    if not request.enabled:
+        project = require_project(project_id)
+        projection = scheduler.world.projection(project_id)
+        if projection.get("current_weather_id") == weather_id:
+            focus = projection.get("entities", {}).get(projection.get("focused_character_id"))
+            if not focus or not focus.get("state", {}).get("player_controlled"):
+                focus = next((item for item in projection.get("entities", {}).values() if item.get("kind") == "character" and item.get("state", {}).get("player_controlled")), None)
+            if focus:
+                mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), [{"tool": "setSceneEnvironment", "arguments": {"focused_character_id": focus["id"], "player_action": projection.get("player_action") or "standing", "weather_id": settings["initial_weather_id"]}}], provenance="author")
+                if project.get("active_node_id"):
+                    scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="author", summary="Disabled active weather")
+                else:
+                    scheduler.world.commit_root(project_id, mutations, provenance="author", summary="Disabled active weather")
     await events.publish("environment", {"project_id": project_id, "action": "weather_changed"})
     return next(item for item in environment.settings(project_id)["weather"] if item["id"] == weather_id)
 
@@ -1271,7 +1290,7 @@ async def delete_weather(project_id: str, weather_id: str) -> None:
 @app.put("/api/projects/{project_id}/environment/weather/{weather_id}/transitions")
 async def update_weather_transitions(project_id: str, weather_id: str, request: WeatherTransitionsUpdate) -> dict[str, Any]:
     require_project(project_id)
-    valid = {row["id"] for row in db.fetch_all("SELECT id FROM weather_definitions WHERE project_id=? AND enabled=1", (project_id,))}
+    valid = {row["id"] for row in db.fetch_all("SELECT id FROM weather_definitions WHERE project_id=?", (project_id,))}
     if weather_id not in valid or not set(request.target_weather_ids) <= valid:
         raise HTTPException(422, "Transitions must reference enabled project weather")
     with db._lock, db.connect() as connection:
@@ -1287,11 +1306,103 @@ async def update_time_phases(project_id: str, request: TimePhasesUpdate) -> dict
     if not any(item.enabled for item in request.phases):
         raise HTTPException(422, "At least one time phase must be enabled")
     with db._lock, db.connect() as connection:
-        connection.execute("DELETE FROM time_phases WHERE project_id=?", (project_id,))
-        connection.executemany("INSERT INTO time_phases(id,project_id,name,duration_minutes,position,enabled) VALUES(?,?,?,?,?,?)", [(item.id or new_id(), project_id, item.name.strip(), item.duration_minutes, position, int(item.enabled)) for position, item in enumerate(request.phases)])
+        existing = {row["id"] for row in connection.execute("SELECT id FROM time_phases WHERE project_id=?", (project_id,)).fetchall()}
+        requested_ids = {item.id for item in request.phases if item.id}
+        connection.execute("UPDATE time_phases SET position=position+1000 WHERE project_id=?", (project_id,))
+        for position, item in enumerate(request.phases):
+            phase_id = item.id or new_id()
+            if phase_id in existing:
+                connection.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,position=?,enabled=? WHERE id=? AND project_id=?", (item.name.strip(), item.duration_minutes, item.description, item.imagegen_description, position, int(item.enabled), phase_id, project_id))
+            else:
+                connection.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, item.name.strip(), item.duration_minutes, item.description, item.imagegen_description, position, int(item.enabled)))
+        for removed_id in existing - requested_ids:
+            connection.execute("DELETE FROM time_phases WHERE id=? AND project_id=?", (removed_id, project_id))
         connection.execute("UPDATE project_environment_settings SET revision=revision+1,updated_at=? WHERE project_id=?", (utc_now(), project_id))
     await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
     return environment.settings(project_id)
+
+
+@app.post("/api/projects/{project_id}/environment/time-phases", status_code=201)
+async def create_time_phase(project_id: str, request: TimePhaseItem) -> dict[str, Any]:
+    require_project(project_id); phase_id = new_id()
+    position = int((db.fetch_one("SELECT COALESCE(MAX(position),-1)+1 position FROM time_phases WHERE project_id=?", (project_id,)) or {"position": 0})["position"])
+    db.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, request.name.strip(), request.duration_minutes, request.description, request.imagegen_description, position, int(request.enabled)))
+    await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
+    return next(item for item in environment.settings(project_id)["time_phases"] if item["id"] == phase_id)
+
+
+@app.put("/api/projects/{project_id}/environment/time-phases/{phase_id}")
+async def update_time_phase(project_id: str, phase_id: str, request: TimePhaseItem) -> dict[str, Any]:
+    require_project(project_id)
+    if not db.fetch_one("SELECT id FROM time_phases WHERE id=? AND project_id=?", (phase_id, project_id)): raise HTTPException(404, "Time phase not found")
+    if not request.enabled and (db.fetch_one("SELECT COUNT(*) n FROM time_phases WHERE project_id=? AND enabled=1 AND id<>?", (project_id, phase_id)) or {"n": 0})["n"] == 0: raise HTTPException(422, "At least one time phase must be enabled")
+    db.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,enabled=? WHERE id=? AND project_id=?", (request.name.strip(), request.duration_minutes, request.description, request.imagegen_description, int(request.enabled), phase_id, project_id))
+    await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
+    return next(item for item in environment.settings(project_id)["time_phases"] if item["id"] == phase_id)
+
+
+@app.delete("/api/projects/{project_id}/environment/time-phases/{phase_id}", status_code=204)
+async def delete_time_phase(project_id: str, phase_id: str) -> None:
+    require_project(project_id)
+    if (db.fetch_one("SELECT COUNT(*) n FROM time_phases WHERE project_id=?", (project_id,)) or {"n": 0})["n"] <= 1: raise HTTPException(422, "At least one time phase must remain")
+    db.execute("DELETE FROM time_phases WHERE id=? AND project_id=?", (phase_id, project_id))
+    await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
+
+
+@app.put("/api/projects/{project_id}/environment/time-phase-order")
+async def reorder_time_phases(project_id: str, request: TimePhaseOrderUpdate) -> dict[str, Any]:
+    require_project(project_id)
+    existing = {row["id"] for row in db.fetch_all("SELECT id FROM time_phases WHERE project_id=?", (project_id,))}
+    if len(request.phase_ids) != len(set(request.phase_ids)) or set(request.phase_ids) != existing: raise HTTPException(422, "Order must contain every time phase exactly once")
+    with db._lock, db.connect() as connection:
+        connection.execute("UPDATE time_phases SET position=position+1000 WHERE project_id=?", (project_id,))
+        for position, phase_id in enumerate(request.phase_ids): connection.execute("UPDATE time_phases SET position=? WHERE id=?", (position, phase_id))
+    await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
+    return environment.settings(project_id)
+
+
+def _location_state(request: EnvironmentLocationUpdate) -> dict[str, Any]:
+    return {
+        "parent_location_id": request.parent_location_id, "exposure": request.exposure,
+        "description": request.description, "imagegen_description": request.imagegen_description,
+        "image_tags": request.image_tags, "enabled": request.enabled,
+        "random_encounter": request.random_encounter, "discovered": request.discovered,
+        "x": request.x, "y": request.y,
+    }
+
+
+@app.post("/api/projects/{project_id}/environment/locations", status_code=201)
+async def create_environment_location(project_id: str, request: EnvironmentLocationUpdate) -> dict[str, Any]:
+    project = require_project(project_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), [{"tool": "createEntity", "arguments": {"kind": "location", "name": request.name, "aliases": [], "tags": request.tags, "state": _location_state(request)}}], provenance="author")
+        if project.get("active_node_id"):
+            transaction = scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="author", summary=f"Created {request.name}")
+        else:
+            transaction = scheduler.world.commit_root(project_id, mutations, provenance="author", summary=f"Created {request.name}")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    await events.publish("environment", {"project_id": project_id, "action": "location_changed"})
+    return scheduler.world.entity_card(project_id, mutations[0].arguments["entity_id"])
+
+
+@app.put("/api/projects/{project_id}/environment/locations/{location_id}")
+async def update_environment_location(project_id: str, location_id: str, request: EnvironmentLocationUpdate) -> dict[str, Any]:
+    project = require_project(project_id)
+    current = scheduler.world.projection(project_id).get("entities", {}).get(location_id)
+    if not current or current.get("kind") != "location": raise HTTPException(404, "Location not found")
+    try:
+        mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), [{"tool": "updateEntity", "arguments": {"entity_id": location_id, "name": request.name, "tags": request.tags, "patch": _location_state(request)}}], provenance="author")
+        if project.get("active_node_id"):
+            transaction = scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="author", summary=f"Updated {request.name}")
+        else:
+            transaction = scheduler.world.commit_root(project_id, mutations, provenance="author", summary=f"Updated {request.name}")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    await events.publish("environment", {"project_id": project_id, "action": "location_changed"})
+    return scheduler.world.entity_card(project_id, location_id)
 
 
 @app.put("/api/projects/{project_id}/environment/scene")
@@ -1371,6 +1482,17 @@ async def create_ambient_assignment(project_id: str, request: AmbientAssignmentC
 async def delete_ambient_assignment(project_id: str, assignment_id: str) -> None:
     require_project(project_id); db.execute("DELETE FROM ambient_assignments WHERE id=? AND project_id=?", (assignment_id, project_id))
     await events.publish("environment", {"project_id": project_id, "action": "ambient_changed"})
+
+
+@app.put("/api/projects/{project_id}/environment/ambient/assignments/{owner_type}/{owner_id}")
+async def replace_ambient_assignments(project_id: str, owner_type: str, owner_id: str, request: AmbientSoundSetsUpdate) -> list[dict[str, Any]]:
+    require_project(project_id)
+    try:
+        result = environment.replace_ambient_sets(project_id, owner_type, owner_id, [item.model_dump() for item in request.sets])
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("environment", {"project_id": project_id, "action": "ambient_changed"})
+    return result
 
 
 @app.get("/api/projects/{project_id}/environment/weather-proposals")
@@ -2036,6 +2158,35 @@ async def create_planning_session(project_id: str, request: PlanningSessionCreat
     return scheduler.planning.create_session(project_id, request.model_dump())
 
 
+@app.post("/api/projects/{project_id}/planning/random-direction", status_code=202)
+async def generate_random_planning_direction(project_id: str, request: RandomPlanningDirectionRequest) -> dict[str, Any]:
+    require_project(project_id)
+    user = current_user()
+    job = db.create_job(
+        project_id, "planning", {"action": "random_direction", "temperature": 1.25, "theme": request.theme.strip()},
+        requested_by_user_id=user.id, requester_name_snapshot=user.username,
+    )
+    await scheduler.enqueue(job["id"])
+    return job
+
+
+@app.get("/api/projects/{project_id}/story-defaults")
+async def get_project_story_defaults(project_id: str) -> dict[str, Any]:
+    require_project(project_id)
+    return db.fetch_one("SELECT * FROM project_story_defaults WHERE project_id=?", (project_id,)) or {}
+
+
+@app.put("/api/projects/{project_id}/story-defaults")
+async def update_project_story_defaults(project_id: str, request: ProjectStoryDefaultsUpdate) -> dict[str, Any]:
+    require_project(project_id)
+    if request.pov_character_id:
+        entity = scheduler.world.projection(project_id)["entities"].get(request.pov_character_id)
+        if not entity or entity.get("kind") != "character" or not entity.get("state", {}).get("player_controlled"):
+            raise HTTPException(422, "Default POV must be a playable character")
+    db.execute("INSERT INTO project_story_defaults(project_id,narration_mode,pov_strategy,pov_character_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET narration_mode=excluded.narration_mode,pov_strategy=excluded.pov_strategy,pov_character_id=excluded.pov_character_id,updated_at=excluded.updated_at", (project_id, request.narration_mode, request.pov_strategy, request.pov_character_id, utc_now()))
+    return await get_project_story_defaults(project_id)
+
+
 @app.get("/api/projects/{project_id}/planning")
 async def get_planning_session(project_id: str) -> dict[str, Any] | None:
     require_project(project_id)
@@ -2057,19 +2208,30 @@ async def generate_planning_stage(
     session_id: str, stage_number: int, request: PlanningGenerateRequest | None = None
 ) -> dict[str, Any]:
     session, stage, _ = scheduler.planning.stage_for_generation(session_id, stage_number)
+    if stage_number == 8:
+        result = scheduler.planning.prepare_image_stage(session_id)
+        await events.publish("planning", {"session_id": session_id, "stage_number": 8, "status": "ready"})
+        return {"stage": result["stages"][7], "image_plans": result.get("image_plans", []), "deterministic": True}
     if stage.get("active_job_id") and stage["status"] in {"queued", "generating"}:
         active = db.get_job(stage["active_job_id"])
         if active and active["status"] in {"queued", "running"}:
             return {"job": active, "stage": stage, "duplicate": True}
     human_prompt = request.prompt.strip() if request else ""
     repair = bool(request and request.repair)
+    append = bool(request and request.append)
+    focus = request.focus.strip() if request and request.focus else None
+    if append and (stage_number == 1 or not focus):
+        raise HTTPException(422, "Incremental generation requires a section in stages 2 through 7")
+    if append and repair:
+        raise HTTPException(422, "Repair and incremental generation cannot run together")
     if repair and not stage.get("raw_draft_text"):
         raise HTTPException(409, "There is no malformed draft to repair")
     automate = bool(request and request.automate)
     automation_prompt = (request.automation_prompt.strip() if request else "") or human_prompt
     job = db.create_job(session["project_id"], "planning", {
         "session_id": session_id, "stage_number": stage_number, "human_prompt": human_prompt,
-        "repair": repair, "automate": automate, "automation_prompt": automation_prompt,
+        "repair": repair, "append": append, "focus": focus,
+        "automate": automate, "automation_prompt": automation_prompt,
     })
     now, revision_id = utc_now(), new_id()
     db.execute(
@@ -2110,6 +2272,20 @@ async def approve_planning_stage(session_id: str, stage_number: int, request: Pl
     return result
 
 
+@app.post("/api/planning/{session_id}/stages/{stage_number}/accept-batch")
+async def accept_planning_stage_batch(session_id: str, stage_number: int, request: PlanningBatchAcceptRequest) -> dict[str, Any]:
+    try:
+        _, stage, _ = scheduler.planning.stage_for_generation(session_id, stage_number)
+        if stage["status"] in {"queued", "generating"}:
+            raise HTTPException(409, "Wait for or cancel the active generation before accepting this set")
+        result = scheduler.planning.accept_stage_batch(session_id, stage_number, request.focus, request.draft)
+    except WorldValidationError as exc:
+        raise HTTPException(422, {"message": str(exc), "recovery_actions": ["edit_current_set"]}) from exc
+    await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "ready", "accepted_focus": request.focus})
+    await events.publish("memory_changed", {"transaction_id": result["transaction"]["id"]})
+    return result
+
+
 @app.post("/api/planning/{session_id}/stages/{stage_number}/reopen")
 async def reopen_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
     try:
@@ -2118,6 +2294,28 @@ async def reopen_planning_stage(session_id: str, stage_number: int) -> dict[str,
         raise HTTPException(422, str(exc)) from exc
     await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "ready"})
     return result
+
+
+@app.post("/api/planning/{session_id}/stages/{stage_number}/skip")
+async def skip_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
+    try: result = scheduler.planning.skip_stage(session_id, stage_number)
+    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
+    await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "skipped"})
+    return result
+
+
+@app.post("/api/planning/{session_id}/stages/{stage_number}/revalidate")
+async def revalidate_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
+    try: result = scheduler.planning.revalidate_stage(session_id, stage_number)
+    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
+    await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "approved"})
+    return result
+
+
+@app.get("/api/planning/{session_id}/stages/{stage_number}/dependency-impact")
+async def planning_dependency_impact(session_id: str, stage_number: int) -> dict[str, Any]:
+    try: return scheduler.planning.dependency_impact(session_id, stage_number)
+    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
 
 
 @app.get("/api/planning/{session_id}/revisions")
@@ -2130,6 +2328,72 @@ async def planning_revision_history(session_id: str) -> list[dict[str, Any]]:
     for row in rows:
         row["draft"] = json.loads(row.pop("draft_json")) if row.get("draft_json") else None
     return rows
+
+
+@app.patch("/api/planning/image-plans/{plan_id}")
+async def update_planning_image_plan(plan_id: str, request: PlanningImagePlanUpdate) -> dict[str, Any]:
+    plan = db.fetch_one("SELECT * FROM planning_image_plans WHERE id=?", (plan_id,))
+    if not plan: raise HTTPException(404, "Planning image not found")
+    if plan["status"] == "queued": raise HTTPException(409, "Wait for or cancel the active image job")
+    workflow = db.fetch_one("SELECT id,validation_status FROM workflow_presets WHERE id=?", (request.workflow_preset_id,)) if request.workflow_preset_id else None
+    status = "ready" if workflow and workflow["validation_status"] == "valid" else "draft"
+    revision = hashlib.sha256(json.dumps(request.model_dump(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    db.execute("UPDATE planning_image_plans SET prompt=?,negative_prompt=?,workflow_preset_id=?,width=?,height=?,prompt_revision=?,status=?,generation_job_id=NULL,error=NULL,updated_at=? WHERE id=?", (request.prompt, request.negative_prompt, request.workflow_preset_id, request.width, request.height, revision, status, utc_now(), plan_id))
+    return db.fetch_one("SELECT * FROM planning_image_plans WHERE id=?", (plan_id,)) or {}
+
+
+@app.delete("/api/planning/image-plans/{plan_id}", status_code=204)
+async def delete_planning_image_plan(plan_id: str) -> None:
+    plan = db.fetch_one("SELECT status FROM planning_image_plans WHERE id=?", (plan_id,))
+    if not plan: raise HTTPException(404, "Planning image not found")
+    if plan["status"] == "queued": raise HTTPException(409, "Wait for or cancel the active image job")
+    db.execute("DELETE FROM planning_image_plans WHERE id=?", (plan_id,))
+
+
+async def _queue_planning_image(plan_id: str) -> dict[str, Any]:
+    plan = db.fetch_one("SELECT * FROM planning_image_plans WHERE id=?", (plan_id,))
+    if not plan: raise HTTPException(404, "Planning image not found")
+    if plan["status"] == "queued" and plan.get("generation_job_id"):
+        job = db.get_job(plan["generation_job_id"])
+        if job and job["status"] in {"queued", "running", "switching"}: return job
+    if plan["status"] == "generated" and plan.get("generation_job_id"):
+        job = db.get_job(plan["generation_job_id"])
+        if job and job["status"] == "succeeded":
+            return {**job, "duplicate": True}
+    workflow = db.fetch_one("SELECT id,validation_status FROM workflow_presets WHERE id=?", (plan.get("workflow_preset_id"),))
+    if not workflow or workflow["validation_status"] != "valid": raise HTTPException(422, "Select a valid workflow before generating")
+    asset = db.fetch_one("SELECT * FROM entity_media_assets WHERE entity_id=? AND kind=? AND COALESCE(outfit_id,'')=COALESCE(?, '') AND featured=1", (plan["entity_id"], plan["kind"], plan.get("outfit_id")))
+    now = utc_now()
+    if asset:
+        asset_id = asset["id"]; db.execute("UPDATE entity_media_assets SET prompt=?,negative_prompt=?,status='suggested',updated_at=? WHERE id=?", (plan["prompt"], plan["negative_prompt"], now, asset_id))
+    else:
+        asset_id = new_id(); db.execute("INSERT INTO entity_media_assets(id,project_id,entity_id,outfit_id,kind,source,status,prompt,negative_prompt,featured,created_at,updated_at) VALUES(?,?,?,?,?,'suggested','suggested',?,?,1,?,?)", (asset_id, plan["project_id"], plan["entity_id"], plan.get("outfit_id"), plan["kind"], plan["prompt"], plan["negative_prompt"], now, now))
+        if plan["kind"] == "location": db.execute("INSERT OR IGNORE INTO location_backgrounds(id,project_id,location_id,media_asset_id,position,created_at) VALUES(?,?,?,?,0,?)", (new_id(), plan["project_id"], plan["entity_id"], asset_id, now))
+    job = await generate_entity_media(asset_id, ImageGenerateRequest(workflow_preset_id=plan["workflow_preset_id"], prompt=plan["prompt"], negative_prompt=plan["negative_prompt"], width=plan.get("width"), height=plan.get("height")))
+    payload = job.get("payload") or {}
+    payload["planning_image_plan_id"] = plan_id
+    db.execute("UPDATE generation_jobs SET payload_json=? WHERE id=?", (json.dumps(payload), job["id"]))
+    db.execute("UPDATE planning_image_plans SET status='queued',media_asset_id=?,generation_job_id=?,error=NULL,updated_at=? WHERE id=?", (asset_id, job["id"], now, plan_id))
+    return job
+
+
+@app.post("/api/planning/image-plans/{plan_id}/generate", status_code=202)
+async def generate_planning_image_plan(plan_id: str) -> dict[str, Any]:
+    return await _queue_planning_image(plan_id)
+
+
+@app.post("/api/planning/{session_id}/images/generate", status_code=202)
+async def generate_planning_images(session_id: str, request: PlanningImageGenerateBatch) -> dict[str, Any]:
+    session = db.fetch_one("SELECT id FROM planning_sessions WHERE id=?", (session_id,))
+    if not session: raise HTTPException(404, "Planning session not found")
+    ids = request.plan_ids or [row["id"] for row in db.fetch_all("SELECT id FROM planning_image_plans WHERE session_id=? AND status='ready'", (session_id,))]
+    known = {row["id"] for row in db.fetch_all("SELECT id FROM planning_image_plans WHERE session_id=?", (session_id,))}
+    if not set(ids) <= known: raise HTTPException(422, "Image selection contains a plan from another workshop")
+    jobs, failures = [], []
+    for plan_id in dict.fromkeys(ids):
+        try: jobs.append(await _queue_planning_image(plan_id))
+        except HTTPException as exc: failures.append({"plan_id": plan_id, "error": str(exc.detail)})
+    return {"jobs": jobs, "failures": failures}
 
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/reset")
@@ -2625,6 +2889,8 @@ async def factory_reset(request: DataResetRequest) -> dict[str, Any]:
         await supervisor.shutdown()
         scheduler.llama = scheduler.comfy = None
         scheduler.gpu_owner = None
+        scheduler.llama_runtime_mode = "normal"
+        scheduler.llama_requested_context_tokens = None
         scheduler.transition_reason = "factory reset"
         return lifecycle.factory_reset()
     except LifecycleConflict as exc:
@@ -2634,6 +2900,7 @@ async def factory_reset(request: DataResetRequest) -> dict[str, Any]:
 @app.get("/api/runtime")
 async def runtime_status() -> dict[str, Any]:
     model_status = await scheduler.llama.model_status() if scheduler.llama and hasattr(scheduler.llama, "model_status") else None
+    properties = await scheduler.llama.runtime_properties() if scheduler.llama and hasattr(scheduler.llama, "runtime_properties") else None
     return {
         "state": scheduler.state,
         "current_job_id": scheduler.current_job_id,
@@ -2644,6 +2911,10 @@ async def runtime_status() -> dict[str, Any]:
         "transition_reason": scheduler.transition_reason,
         "load_count": scheduler.load_count,
         "unload_count": scheduler.unload_count,
+        "effective_context_tokens": (properties or {}).get("effective_context_tokens"),
+        "requested_context_tokens": scheduler.llama_requested_context_tokens,
+        "runtime_mode": scheduler.llama_runtime_mode,
+        "managed_by_storystudio": supervisor.manages_llama,
     }
 
 
@@ -2665,6 +2936,8 @@ async def update_settings(request: RuntimeSettingsUpdate) -> dict[str, Any]:
     await supervisor.shutdown()
     scheduler.llama = scheduler.comfy = None
     scheduler.gpu_owner = None
+    scheduler.llama_runtime_mode = "normal"
+    scheduler.llama_requested_context_tokens = None
     scheduler.transition_reason = "runtime settings changed"
     requested_data_dir = Path(values["data_dir"]) if values["data_dir"] else db.data_dir
     try:
@@ -2674,7 +2947,7 @@ async def update_settings(request: RuntimeSettingsUpdate) -> dict[str, Any]:
     db.execute(
         "UPDATE runtime_settings SET llama_executable = ?, storyteller_model_path = ?, "
         "storyteller_model_id = ?, llama_url = ?, llama_extra_args_json = ?, comfy_command_json = ?, "
-        "comfy_workdir = ?, comfy_url = ?, context_tokens = ?, memory_provider = ?, updated_at = ? WHERE id = 1",
+        "comfy_workdir = ?, comfy_url = ?, context_tokens = ?, planning_context_tokens = ?, memory_provider = ?, updated_at = ? WHERE id = 1",
         (
             values["llama_executable"],
             values["storyteller_model_path"],
@@ -2685,6 +2958,7 @@ async def update_settings(request: RuntimeSettingsUpdate) -> dict[str, Any]:
             values["comfy_workdir"],
             values["comfy_url"],
             values["context_tokens"],
+            values["planning_context_tokens"],
             values["memory_provider"],
             utc_now(),
         ),
@@ -2719,7 +2993,20 @@ async def validate_settings(request: RuntimeSettingsUpdate) -> dict[str, Any]:
     if not cuda_available:
         issues.append("NVIDIA CUDA was not detected through nvidia-smi")
     model_id = values["storyteller_model_id"] or Path(values["storyteller_model_path"]).stem
-    llama_online = await LlamaClient(values["llama_url"], model_id).health()
+    llama_client = LlamaClient(values["llama_url"], model_id)
+    llama_online = await llama_client.health()
+    llama_capabilities = await llama_client.planning_capabilities() if llama_online else {
+        "apply_template": False, "completion": False, "props": False, "effective_context_tokens": None,
+    }
+    if llama_online:
+        missing = [name for name in ("apply_template", "completion", "props") if not llama_capabilities.get(name)]
+        if missing:
+            issues.append("llama.cpp must be updated for planning autocomplete; missing endpoints: " + ", ".join(missing))
+        effective = llama_capabilities.get("effective_context_tokens")
+        if effective and not supervisor.manages_llama and int(effective) < values["planning_context_tokens"]:
+            issues.append(
+                f"External llama.cpp provides {int(effective):,} context tokens, but planning requests {values['planning_context_tokens']:,}"
+            )
     comfy_online = await ComfyClient(values["comfy_url"]).health()
     return {
         "valid": not issues,
@@ -2727,6 +3014,7 @@ async def validate_settings(request: RuntimeSettingsUpdate) -> dict[str, Any]:
         "cuda_available": cuda_available,
         "llama_online": llama_online,
         "comfy_online": comfy_online,
+        "llama_capabilities": llama_capabilities,
     }
 
 

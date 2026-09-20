@@ -72,3 +72,23 @@ def test_isolated_location_uses_only_location_ambient(tmp_path: Path) -> None:
     db.execute("INSERT INTO ambient_assignments(id,project_id,owner_type,owner_id,selector_type,variant_id) VALUES(?,?, 'location',?,'default',?)", (new_id(), project["id"], place, variants[1]))
     resolved = environment.scene(project["id"], world.projection(project["id"]))["ambient"]
     assert [item["id"] for item in resolved] == [variants[1]]
+
+
+def test_environment_form_fields_conditional_sets_and_disabled_filters(tmp_path: Path) -> None:
+    db, project, world, environment = setup(tmp_path); now = utc_now()
+    settings = environment.settings(project["id"])
+    assert settings["weather"][0]["imagegen_description"] == ""
+    assert settings["time_phases"][0]["description"] == ""
+    place = create(world, project["id"], kind="location", name="Garden", state={"enabled": True, "exposure": "outdoor"})
+    hidden = create(world, project["id"], kind="location", name="Closed wing", state={"enabled": False})
+    hero = create(world, project["id"], kind="character", name="Hero", state={"player_controlled": True, "current_location_id": place})
+    mutation = world.normalize_mutations(project["id"], None, [{"tool": "setSceneEnvironment", "arguments": {"focused_character_id": hero, "player_action": "standing"}}])
+    world.commit_root(project["id"], mutation, provenance="test", summary="scene")
+    variant = new_id()
+    db.execute("INSERT INTO ambient_variants(id,project_id,source_path,label,tags_json,available,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)", (variant, project["id"], "birds.ogg", "Birds", "[]", now, now))
+    weather_id, phase_id = settings["initial_weather_id"], settings["time_phases"][0]["id"]
+    environment.replace_ambient_sets(project["id"], "location", place, [{"selector_type": "outdoor", "weather_id": weather_id, "time_phase_id": phase_id, "variant_ids": [variant, variant]}])
+    assert [item["id"] for item in environment.scene(project["id"], world.projection(project["id"]))["ambient"]] == [variant]
+    assert hidden not in {item["id"] for item in environment.map_layer(project["id"], world.projection(project["id"]), None, admin=False)["locations"]}
+    db.execute("UPDATE time_phases SET position=99 WHERE id=?", (phase_id,))
+    assert environment.ambient_sets(project["id"], "location", place)[0]["variant_ids"] == [variant]

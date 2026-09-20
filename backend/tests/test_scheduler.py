@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -9,7 +10,7 @@ import pytest
 
 from app.database import Database, new_id, utc_now
 from app.services.events import EventHub
-from app.services.scheduler import GenerationScheduler
+from app.services.scheduler import GenerationScheduler, _looks_like_token_truncation, _planning_json_error
 from app.services.minigames import VIRTUAL_PLAYER_ID
 from app.services.world import WorldEngine
 
@@ -20,6 +21,8 @@ class FakeLlama:
         self.unloads = 0
         self.chat_calls = 0
         self.complete_calls = 0
+        self.last_temperature = None
+        self.last_messages = None
 
     async def health(self) -> bool: return True
     async def load(self) -> None: self.loads += 1
@@ -30,11 +33,26 @@ class FakeLlama:
         yield "A bright "
         yield "beginning."
 
-    async def complete(self, messages: list[dict[str, str]], *, json_mode: bool = False) -> str:
+    async def complete(self, messages: list[dict[str, str]], *, json_mode: bool = False, max_tokens: int = 1000, temperature: float | None = None) -> str:
         self.complete_calls += 1
+        self.last_temperature = temperature
+        self.last_messages = messages
         if json_mode:
             return '{"title":"Dawn","prompt":"A bright dawn","negative_prompt":"fog"}'
         return "A concise summary."
+
+    async def apply_template(self, messages: list[dict[str, str]]) -> str:
+        return "<prompt>" + json.dumps(messages, separators=(",", ":")) + "</prompt>"
+
+    async def count_prompt_tokens(self, prompt: str) -> int:
+        return max(1, len(prompt) // 4)
+
+    async def raw_complete_stream(
+        self, prompt: str, *, n_predict: int, cache_prompt=True, id_slot=0,
+        progress=None, cancel_event=None, temperature=None, stop_when=None,
+    ) -> dict[str, Any]:
+        content = '{"summary":"Draft","notes":[],"foundation":{"premise":"A premise","genres":[],"themes":[],"tone":"","style":"","world_description":"","character_description":"","narration_mode":"third_limited","pov_strategy":"first_player"}}'
+        return {"content": content, "stop_type": "eos", "truncated": False, "tokens_predicted": 40, "n_ctx": 8192}
 
 
 class FakeComfy:
@@ -69,6 +87,169 @@ def setup_db(path: Path) -> tuple[Database, dict[str, Any]]:
     db = Database(path)
     db.initialize()
     return db, db.create_project("Scheduler")
+
+
+def test_planning_context_migration_defaults_to_story_context(tmp_path: Path) -> None:
+    database_path = tmp_path / "migration.db"
+    with sqlite3.connect(database_path) as connection:
+        connection.execute("CREATE TABLE runtime_settings(id INTEGER PRIMARY KEY, context_tokens INTEGER NOT NULL)")
+        connection.execute("INSERT INTO runtime_settings(id,context_tokens) VALUES(1,16384)")
+        migration = Path(__file__).resolve().parents[1] / "migrations" / "025_planning_context.sql"
+        connection.executescript(migration.read_text(encoding="utf-8"))
+        settings = connection.execute(
+            "SELECT context_tokens,planning_context_tokens FROM runtime_settings WHERE id=1"
+        ).fetchone()
+    assert settings == (16384, 16384)
+
+
+def test_nested_json_cut_after_inner_closing_brace_is_still_truncation() -> None:
+    raw = '{"outer":{"value":1}'
+    error = _planning_json_error(raw)
+    assert error and _looks_like_token_truncation(raw, error)
+
+
+@pytest.mark.asyncio
+async def test_random_planning_direction_uses_one_high_temperature_request(tmp_path: Path) -> None:
+    db, project = setup_db(tmp_path)
+    llama = FakeLlama()
+    scheduler = GenerationScheduler(db, EventHub(), FakeSupervisor(llama, FakeComfy()))
+    job = db.create_job(project["id"], "planning", {"action": "random_direction", "theme": "medieval fantasy"})
+    await scheduler.start(); await scheduler.enqueue(job["id"])
+    await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
+
+    saved = db.get_job(job["id"])
+    assert saved and saved["status"] == "completed"
+    assert saved["result"]["direction"] == "A concise summary."
+    assert llama.complete_calls == 1 and llama.last_temperature == 1.25
+    prompt = " ".join(message["content"] for message in llama.last_messages)
+    assert all(term in prompt for term in ("theme", "age", "systems", "cast", "locations", "setting"))
+    assert '"medieval fantasy"' in prompt
+
+
+@pytest.mark.asyncio
+async def test_planning_generation_continues_token_truncated_json(tmp_path: Path) -> None:
+    db, project = setup_db(tmp_path)
+
+    class TruncatedPlanningLlama(FakeLlama):
+        def __init__(self) -> None:
+            super().__init__()
+            self.stream_calls: list[tuple[float | None, bool]] = []
+            self.prompts: list[str] = []
+
+        async def raw_complete_stream(self, prompt, *, n_predict, cache_prompt=True, id_slot=0, progress=None, cancel_event=None, temperature=None, stop_when=None):
+            self.stream_calls.append((temperature, cache_prompt))
+            self.prompts.append(prompt)
+            if len(self.stream_calls) == 1:
+                return {"content": '{"summary":"A cut', "stop_type": "limit", "truncated": False, "tokens_predicted": 5, "n_ctx": 8192}
+            result = ' story","notes":[],"foundation":{"premise":"A premise","genres":[],"themes":[],"tone":"","style":"","world_description":"","character_description":"","narration_mode":"third_limited","pov_strategy":"first_player"}}'
+            assert not stop_when or stop_when(result)
+            return {"content": result, "stop_type": "eos", "truncated": False, "tokens_predicted": 40, "n_ctx": 8192}
+
+    llama = TruncatedPlanningLlama()
+    scheduler = GenerationScheduler(db, EventHub(), FakeSupervisor(llama, FakeComfy()))
+    session = scheduler.planning.create_session(project["id"], {})
+    stage = db.fetch_one("SELECT id FROM planning_stages WHERE session_id=? AND stage_number=1", (session["id"],))
+    job = db.create_job(project["id"], "planning", {"session_id": session["id"], "stage_number": 1})
+    db.execute("UPDATE planning_stages SET status='queued',active_job_id=? WHERE id=?", (job["id"], stage["id"]))
+
+    await scheduler.start(); await scheduler.enqueue(job["id"])
+    await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
+
+    saved = db.get_job(job["id"])
+    planned = scheduler.planning.get_session(session["id"])["stages"][0]
+    assert saved and saved["status"] == "completed"
+    assert planned["draft"]["summary"] == "A cut story"
+    assert llama.stream_calls == [(None, True), (0.0, True)]
+    assert llama.prompts[1] == llama.prompts[0] + '{"summary":"A cut'
+    assert "Continue." not in llama.prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_empty_raw_completion_retries_once_without_cache(tmp_path: Path) -> None:
+    db, project = setup_db(tmp_path)
+
+    class EmptyRawLlama(FakeLlama):
+        def __init__(self) -> None:
+            super().__init__(); self.cache_flags: list[bool] = []
+
+        async def raw_complete_stream(self, prompt, *, n_predict, cache_prompt=True, id_slot=0, progress=None, cancel_event=None, temperature=None, stop_when=None):
+            self.cache_flags.append(cache_prompt)
+            return {"content": "", "stop_type": "eos", "truncated": False, "tokens_predicted": 0, "n_ctx": 8192}
+
+    llama = EmptyRawLlama()
+    scheduler = GenerationScheduler(db, EventHub(), FakeSupervisor(llama, FakeComfy()))
+    job = db.create_job(project["id"], "planning", {"action": "test"})
+    with pytest.raises(Exception, match="cache-free retry"):
+        await scheduler._generate_planning_json_raw(
+            job, llama, [{"role": "user", "content": "Return JSON"}], 8192,
+            asyncio.Event(), "Test stage", None,
+        )
+    assert llama.cache_flags == [True, False]
+
+
+@pytest.mark.asyncio
+async def test_planning_context_stays_loaded_until_story_generation(tmp_path: Path) -> None:
+    db, project = setup_db(tmp_path)
+    db.execute("UPDATE runtime_settings SET planning_context_tokens=16384 WHERE id=1")
+    llama, comfy = FakeLlama(), FakeComfy()
+
+    class SwitchingSupervisor:
+        def __init__(self) -> None:
+            self.current: int | None = None
+            self.requested: list[int] = []
+            self.restarts = 0
+
+        @property
+        def manages_llama(self) -> bool: return True
+
+        async def ensure_llama(self, settings, context_tokens):
+            self.requested.append(context_tokens)
+            if self.current != context_tokens:
+                self.current = context_tokens; self.restarts += 1
+            return llama
+
+        async def ensure_started(self, settings): return llama, comfy
+        async def shutdown(self): pass
+
+    supervisor = SwitchingSupervisor()
+    scheduler = GenerationScheduler(db, EventHub(), supervisor)
+    await scheduler.start()
+    for _ in range(2):
+        planning_job = db.create_job(project["id"], "planning", {"action": "random_direction", "theme": "fantasy"})
+        await scheduler.enqueue(planning_job["id"]); await asyncio.wait_for(scheduler.queue.join(), 2)
+        assert db.get_job(planning_job["id"])["status"] == "completed"
+    user = db.create_story_node(project["id"], None, "user", "Begin")
+    story_job = db.create_job(project["id"], "story", {"user_node_id": user["id"]})
+    await scheduler.enqueue(story_job["id"]); await asyncio.wait_for(scheduler.queue.join(), 2)
+    await scheduler.stop()
+
+    assert supervisor.requested == [16384, 16384, 8192]
+    assert supervisor.restarts == 2
+    assert scheduler.llama_runtime_mode == "normal"
+
+
+@pytest.mark.asyncio
+async def test_external_llama_rejects_insufficient_planning_context(tmp_path: Path) -> None:
+    db, project = setup_db(tmp_path)
+    db.execute("UPDATE runtime_settings SET planning_context_tokens=16384 WHERE id=1")
+
+    class ExternalLlama(FakeLlama):
+        async def runtime_properties(self, *, autoload=False): return {"effective_context_tokens": 8192}
+
+    llama = ExternalLlama()
+
+    class ExternalSupervisor:
+        manages_llama = False
+        async def ensure_llama(self, settings, context_tokens): return llama
+        async def shutdown(self): pass
+
+    scheduler = GenerationScheduler(db, EventHub(), ExternalSupervisor())
+    job = db.create_job(project["id"], "planning", {"action": "random_direction"})
+    await scheduler.start(); await scheduler.enqueue(job["id"])
+    await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
+    saved = db.get_job(job["id"])
+    assert saved["status"] == "failed"
+    assert "provides 8,192 context tokens" in saved["error"]
 
 
 @pytest.mark.asyncio

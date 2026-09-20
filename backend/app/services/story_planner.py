@@ -308,9 +308,13 @@ def narrative_messages(
     }
     if context_package.get("environment"):
         context["environment"] = context_package["environment"]
+    if context_package.get("narrative_secrets"):
+        context["narrative_secrets"] = context_package["narrative_secrets"]
     system = SYSTEM_PROMPT + (
         "\nUse only the supplied canonical context. Approved state changes must occur naturally in this scene. "
-        "Do not expose narrator-only information in limited POV. Return story prose plus only the hidden inline envelopes described below.\n\n# Scene context\n" + json.dumps(context)
+        "Do not expose narrator-only information in limited POV. Treat narrative_secrets as guarded dramatic truths: never blurt them out, "
+        "never present them as a character's knowledge when known_to_character is false, and reveal them only through earned evidence, discovery, "
+        "or an appropriate plot turn. Return story prose plus only the hidden inline envelopes described below.\n\n# Scene context\n" + json.dumps(context)
     )
     if summary:
         system += "\n\n# Earlier branch summary\n" + summary["content"]

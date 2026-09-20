@@ -144,7 +144,7 @@ class EnvironmentService:
             owner_type, owner_id = rule["owner_type"], str(rule["owner_id"])
             if owner_type == "location":
                 owner_match = owner_id == location["id"]
-            elif exposure == "isolated":
+            elif exposure == "isolated" and owner_type in {"weather", "time"}:
                 owner_match = False
             elif owner_type == "weather":
                 owner_match = bool(weather and owner_id == weather["id"])
@@ -165,6 +165,89 @@ class EnvironmentService:
             row["url"] = "/sounds/" + row["source_path"]
             row["tags"] = _json(row.pop("tags_json"))
         return rows
+
+    def ambient_sets(self, project_id: str, owner_type: str, owner_id: str) -> list[dict[str, Any]]:
+        rows = self.db.fetch_all(
+            "SELECT selector_type,selector_value,weather_id,time_phase_id,variant_id FROM ambient_assignments "
+            "WHERE project_id=? AND owner_type=? AND owner_id=? ORDER BY id",
+            (project_id, owner_type, owner_id),
+        )
+        grouped: dict[tuple[str, str | None, str | None, str | None], list[str]] = {}
+        for row in rows:
+            key = (row["selector_type"], row.get("selector_value"), row.get("weather_id"), row.get("time_phase_id"))
+            grouped.setdefault(key, []).append(row["variant_id"])
+        return [
+            {"selector_type": key[0], "selector_value": key[1], "weather_id": key[2], "time_phase_id": key[3], "variant_ids": list(dict.fromkeys(values))}
+            for key, values in grouped.items()
+        ]
+
+    def replace_ambient_sets(self, project_id: str, owner_type: str, owner_id: str, sets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if owner_type not in {"weather", "time", "location", "action"}:
+            raise ValueError("Unsupported ambient owner")
+        if owner_type == "weather":
+            owner = self.db.fetch_one("SELECT id FROM weather_definitions WHERE id=? AND project_id=?", (owner_id, project_id))
+        elif owner_type == "time":
+            owner = self.db.fetch_one("SELECT id FROM time_phases WHERE id=? AND project_id=?", (owner_id, project_id))
+        elif owner_type == "location":
+            owner = self.db.fetch_one("SELECT id FROM world_entities WHERE id=? AND project_id=? AND kind='location'", (owner_id, project_id))
+        else:
+            owner = {"id": owner_id} if owner_id.strip() else None
+        if not owner:
+            raise ValueError("Ambient owner not found")
+        variants = {row["id"] for row in self.db.fetch_all("SELECT id FROM ambient_variants WHERE project_id=?", (project_id,))}
+        weather = {row["id"] for row in self.db.fetch_all("SELECT id FROM weather_definitions WHERE project_id=?", (project_id,))}
+        phases = {row["id"] for row in self.db.fetch_all("SELECT id FROM time_phases WHERE project_id=?", (project_id,))}
+        normalized: dict[tuple[str, str | None, str | None, str | None], set[str]] = {}
+        for sound_set in sets:
+            selector = str(sound_set.get("selector_type") or "default")
+            selector_value = str(sound_set.get("selector_value") or "").strip() or None
+            weather_id, phase_id = sound_set.get("weather_id"), sound_set.get("time_phase_id")
+            if selector not in {"default", "indoor", "outdoor", "isolated", "tag"}:
+                raise ValueError("Invalid ambient selector")
+            if selector == "tag" and not selector_value:
+                raise ValueError("Tag selectors require a tag")
+            if selector != "tag":
+                selector_value = None
+            if weather_id and weather_id not in weather:
+                raise ValueError("Weather condition not found")
+            if phase_id and phase_id not in phases:
+                raise ValueError("Time condition not found")
+            selected = set(sound_set.get("variant_ids") or [])
+            if not selected <= variants:
+                raise ValueError("Ambient variant not found")
+            normalized.setdefault((selector, selector_value, weather_id, phase_id), set()).update(selected)
+        with self.db._lock, self.db.connect() as connection:
+            connection.execute("DELETE FROM ambient_assignments WHERE project_id=? AND owner_type=? AND owner_id=?", (project_id, owner_type, owner_id))
+            for key, variant_ids in normalized.items():
+                for variant_id in sorted(variant_ids):
+                    connection.execute(
+                        "INSERT INTO ambient_assignments(id,project_id,owner_type,owner_id,selector_type,selector_value,weather_id,time_phase_id,variant_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                        (new_id(), project_id, owner_type, owner_id, key[0], key[1], key[2], key[3], variant_id),
+                    )
+        return self.ambient_sets(project_id, owner_type, owner_id)
+
+    @staticmethod
+    def location_enabled(projection: dict[str, Any], location_id: str | None) -> bool:
+        seen: set[str] = set()
+        current = projection.get("entities", {}).get(location_id)
+        while current and current.get("kind") == "location" and current["id"] not in seen:
+            seen.add(current["id"])
+            if not current.get("state", {}).get("enabled", True):
+                return False
+            current = projection["entities"].get(current.get("state", {}).get("parent_location_id"))
+        return True
+
+    def composed_background_prompt(self, project_id: str, location: dict[str, Any], weather_id: str | None, phase_id: str | None) -> str:
+        state = location.get("state", {})
+        weather = self.db.fetch_one("SELECT description,imagegen_description,image_tags_json FROM weather_definitions WHERE id=? AND project_id=?", (weather_id, project_id)) if weather_id else None
+        phase = self.db.fetch_one("SELECT description,imagegen_description FROM time_phases WHERE id=? AND project_id=?", (phase_id, project_id)) if phase_id else None
+        pieces = [
+            location.get("name", ""), state.get("imagegen_description") or state.get("description") or "environment background",
+            (weather or {}).get("imagegen_description") or (weather or {}).get("description"),
+            (phase or {}).get("imagegen_description") or (phase or {}).get("description"),
+            *map(str, state.get("image_tags", [])), *map(str, _json((weather or {}).get("image_tags_json"))),
+        ]
+        return ", ".join(str(value).strip() for value in pieces if value and str(value).strip())
 
     def background(self, project_id: str, location_id: str | None, weather_id: str | None, phase_id: str | None) -> dict[str, Any] | None:
         if not location_id:
@@ -217,9 +300,10 @@ class EnvironmentService:
             state = item.get("state", {})
             if state.get("parent_location_id") != parent_id:
                 continue
-            if not admin and not state.get("discovered", not state.get("random_encounter", False)):
+            effectively_enabled = self.location_enabled(projection, item["id"])
+            if not admin and (not effectively_enabled or not state.get("discovered", not state.get("random_encounter", False))):
                 continue
-            locations.append({"id": item["id"], "name": item["name"], "x": state.get("x"), "y": state.get("y"), "has_children": any(child.get("kind") == "location" and child.get("state", {}).get("parent_location_id") == item["id"] for child in projection["entities"].values()), "exposure": state.get("exposure", "outdoor")})
+            locations.append({"id": item["id"], "name": item["name"], "x": state.get("x"), "y": state.get("y"), "has_children": any(child.get("kind") == "location" and child.get("state", {}).get("parent_location_id") == item["id"] for child in projection["entities"].values()), "exposure": state.get("exposure", "outdoor"), "enabled": bool(state.get("enabled", True)), "effectively_enabled": effectively_enabled})
         locations.sort(key=lambda item: item["name"].casefold())
         occupied: set[tuple[int, int]] = set()
         for index, item in enumerate(locations):

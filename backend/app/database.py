@@ -47,9 +47,14 @@ class Database:
         self.images_dir = self.data_dir / "images"
         self.music_dir = self.data_dir / "music"
         self._lock = threading.RLock()
+        self._transaction_state = threading.local()
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
+        active = getattr(self._transaction_state, "connection", None)
+        if active is not None:
+            yield active
+            return
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.images_dir.mkdir(parents=True, exist_ok=True)
         self.music_dir.mkdir(parents=True, exist_ok=True)
@@ -65,6 +70,28 @@ class Database:
             raise
         finally:
             connection.close()
+
+    def begin_transaction(self) -> None:
+        if getattr(self._transaction_state, "connection", None) is not None:
+            raise RuntimeError("A database transaction is already active on this thread")
+        self._lock.acquire()
+        connection = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA journal_mode = WAL")
+        connection.execute("BEGIN IMMEDIATE")
+        self._transaction_state.connection = connection
+
+    def finish_transaction(self, *, commit: bool) -> None:
+        connection = getattr(self._transaction_state, "connection", None)
+        if connection is None:
+            return
+        try:
+            connection.commit() if commit else connection.rollback()
+        finally:
+            self._transaction_state.connection = None
+            connection.close()
+            self._lock.release()
 
     def initialize(self) -> None:
         migration_dir = Path(__file__).resolve().parents[1] / "migrations"
@@ -113,7 +140,7 @@ class Database:
         now = utc_now()
         connection.execute(
             "UPDATE planning_stages SET status='approved', active_job_id=NULL, updated_at=? "
-            "WHERE approved_json IS NOT NULL AND status!='approved'", (now,),
+            "WHERE approved_json IS NOT NULL AND status NOT IN ('approved','stale','skipped')", (now,),
         )
         connection.execute("UPDATE planning_stages SET status='ready', updated_at=? WHERE status='draft'", (now,))
         connection.execute(
@@ -121,12 +148,12 @@ class Database:
             "WHERE status IN ('queued','generating') AND (active_job_id IS NULL OR active_job_id IN "
             "(SELECT id FROM generation_jobs WHERE status NOT IN ('queued','running','switching')))", (now,),
         )
-        connection.execute("DELETE FROM planning_approval_claims WHERE stage_id IN (SELECT id FROM planning_stages WHERE status!='approved')")
+        connection.execute("DELETE FROM planning_approval_claims WHERE stage_id IN (SELECT id FROM planning_stages WHERE status NOT IN ('approved','stale'))")
         sessions = connection.execute("SELECT id, project_id, created_at FROM planning_sessions").fetchall()
         for session in sessions:
             warnings: list[dict[str, str]] = []
             stages = connection.execute(
-                "SELECT id, stage_number, transaction_id FROM planning_stages WHERE session_id=? AND status='approved' ORDER BY stage_number",
+                "SELECT id, stage_number, transaction_id FROM planning_stages WHERE session_id=? AND status IN ('approved','stale') ORDER BY stage_number",
                 (session["id"],),
             ).fetchall()
             missing = [stage for stage in stages if not stage["transaction_id"]]
@@ -155,9 +182,9 @@ class Database:
                     (linked["stage_number"], session["id"], linked["transaction_id"]),
                 )
             unresolved = connection.execute(
-                "SELECT MIN(stage_number) n FROM planning_stages WHERE session_id=? AND status!='approved'", (session["id"],)
+                "SELECT MIN(stage_number) n FROM planning_stages WHERE session_id=? AND status NOT IN ('approved','skipped')", (session["id"],)
             ).fetchone()["n"]
-            current = int(unresolved or 6)
+            current = int(unresolved or 8)
             status = "completed" if unresolved is None else "active"
             connection.execute(
                 "UPDATE planning_sessions SET current_stage=?, status=?, recovery_warnings_json=?, updated_at=? WHERE id=?",
@@ -217,6 +244,10 @@ class Database:
             connection.execute(
                 "INSERT INTO project_story_settings(project_id, default_generation_mode, response_max_tokens, updated_at) "
                 "VALUES (?, 'low', 300, ?)", (project_id, now),
+            )
+            connection.execute(
+                "INSERT INTO project_story_defaults(project_id,narration_mode,pov_strategy,updated_at) "
+                "VALUES (?, 'third_limited', 'first_player', ?)", (project_id, now),
             )
             sunny_id = new_id()
             connection.execute(

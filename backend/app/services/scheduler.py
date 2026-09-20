@@ -14,7 +14,8 @@ from app.services.context import (
     summary_prompt,
 )
 from app.services.events import EventHub
-from app.services.planning import PlanningService, stage_prompt
+from app.services.planning import PlanningService, random_direction_messages, stage_prompt
+from app.services.planning_v2 import generated_stage_has_content, merge_generated_batch, normalize_generated_defaults
 from app.services.memory import provider_for
 from app.services.minigames import MinigameService
 from app.services.npc import NpcDirector
@@ -45,6 +46,48 @@ RUNTIME_STATES = {
 }
 
 
+def _planning_json_error(raw: str) -> json.JSONDecodeError | None:
+    text = raw.strip()
+    if text.startswith("```"):
+        first_break = text.find("\n")
+        text = text[first_break + 1:] if first_break >= 0 else text[3:]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as exc:
+        return exc
+    return None
+
+
+def _looks_like_token_truncation(raw: str, error: json.JSONDecodeError) -> bool:
+    text = raw.rstrip()
+    near_end = error.pos >= max(0, len(text) - 48)
+    stack, in_string = _open_json_containers(text)
+    return "Unterminated string" in error.msg or (near_end and (in_string or bool(stack)))
+
+
+def _open_json_containers(text: str) -> tuple[list[tuple[str, int]], bool]:
+    stack: list[tuple[str, int]] = []
+    in_string, escaped = False, False
+    for position, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "[{":
+            stack.append((character, position))
+        elif character in "]}":
+            if stack:
+                stack.pop()
+    return stack, in_string
+
+
 def read_settings(db: Database) -> dict[str, Any]:
     row = db.fetch_one("SELECT * FROM runtime_settings WHERE id = 1") or {}
     row["llama_extra_args"] = json.loads(row.pop("llama_extra_args_json", "[]"))
@@ -67,6 +110,8 @@ class GenerationScheduler:
         self.comfy: ComfyClient | None = None
         self.gpu_owner: str | None = None
         self.transition_reason: str | None = None
+        self.llama_runtime_mode: str = "normal"
+        self.llama_requested_context_tokens: int | None = None
         self.load_count = 0
         self.unload_count = 0
         self._job_metrics: dict[str, dict[str, Any]] = {}
@@ -182,20 +227,41 @@ class GenerationScheduler:
     async def _ensure_runtimes(self) -> tuple[LlamaClient, ComfyClient]:
         # Runtime health is independent: a broken ComfyUI connection must not
         # erase knowledge that llama.cpp still owns the GPU.
-        llama = await self._ensure_llama_runtime()
+        llama = await self._ensure_llama_runtime("normal")
         comfy = await self._ensure_comfy_runtime()
         return llama, comfy
 
-    async def _ensure_llama_runtime(self) -> LlamaClient:
+    async def _ensure_llama_runtime(self, runtime_mode: str = "normal") -> LlamaClient:
         async with self._runtime_lock:
-            if self.llama and await self.llama.health():
-                return self.llama
             settings = read_settings(self.db)
+            requested_context = int(
+                settings.get("planning_context_tokens", settings.get("context_tokens", 8192))
+                if runtime_mode == "planning" else settings.get("context_tokens", 8192)
+            )
             if hasattr(self.supervisor, "ensure_llama"):
-                self.llama = await self.supervisor.ensure_llama(settings)
+                self.llama = await self.supervisor.ensure_llama(settings, requested_context)
+            elif self.llama and await self.llama.health():
+                pass
             else:  # compatibility with integrations using the original supervisor contract
                 self.llama, discovered_comfy = await self.supervisor.ensure_started(settings)
                 self.comfy = self.comfy or discovered_comfy
+            properties = await self.llama.runtime_properties(autoload=True) if hasattr(self.llama, "runtime_properties") else None
+            effective_context = (properties or {}).get("effective_context_tokens")
+            if effective_context is not None and int(effective_context) < requested_context:
+                ownership = "StoryStudio-managed" if getattr(self.supervisor, "manages_llama", False) else "external"
+                raise RuntimeFailure(
+                    f"The {ownership} llama.cpp server provides {int(effective_context):,} context tokens, "
+                    f"but {runtime_mode} generation requests {requested_context:,}. "
+                    "Increase the server context or lower the corresponding Runtime Settings value."
+                )
+            ownership_known = hasattr(self.supervisor, "manages_llama")
+            if runtime_mode == "planning" and ownership_known and not self.supervisor.manages_llama and effective_context is None:
+                raise RuntimeFailure(
+                    "The external llama.cpp server did not report its effective context through /props. "
+                    "Update llama.cpp before using raw planning autocomplete."
+                )
+            self.llama_runtime_mode = runtime_mode
+            self.llama_requested_context_tokens = requested_context
             return self.llama
 
     async def _ensure_comfy_runtime(self) -> ComfyClient:
@@ -233,8 +299,10 @@ class GenerationScheduler:
                 await self._set_state("runtime_error", detail=message)
             await self.events.publish("error", {"source": "storyteller_startup", "message": message})
 
-    async def _ensure_storyteller(self, job_id: str | None = None) -> tuple[LlamaClient, ComfyClient | None]:
-        llama = await self._ensure_llama_runtime()
+    async def _ensure_storyteller(
+        self, job_id: str | None = None, runtime_mode: str = "normal"
+    ) -> tuple[LlamaClient, ComfyClient | None]:
+        llama = await self._ensure_llama_runtime(runtime_mode)
         status = await llama.model_status() if hasattr(llama, "model_status") else None
         ready = status in {"loaded", "running", "ready"}
         should_load = not ready if status is not None else self.gpu_owner != "storyteller"
@@ -321,6 +389,13 @@ class GenerationScheduler:
         asset_id = job.get("payload", {}).get("media_asset_id")
         if asset_id:
             self.db.execute("UPDATE entity_media_assets SET status = ?, updated_at = ? WHERE id = ?", (status, utc_now(), asset_id))
+        plan_id = job.get("payload", {}).get("planning_image_plan_id")
+        if not plan_id and asset_id:
+            plan = self.db.fetch_one("SELECT id FROM planning_image_plans WHERE media_asset_id=? AND generation_job_id=?", (asset_id, job["id"]))
+            plan_id = plan.get("id") if plan else None
+        if plan_id:
+            planning_status = "failed" if status in {"failed", "cancelled", "interrupted"} else status
+            self.db.execute("UPDATE planning_image_plans SET status=?,error=?,updated_at=? WHERE id=?", (planning_status, job.get("error") or ("Image generation was cancelled" if status == "cancelled" else None), utc_now(), plan_id))
 
     def _finish_planning_stage(self, job: dict[str, Any], status: str) -> None:
         if job["kind"] != "planning":
@@ -384,7 +459,7 @@ class GenerationScheduler:
     async def _story(self, job: dict[str, Any], cancel_event: asyncio.Event) -> None:
         if await self._materialize_story_action(job):
             return
-        llama, _ = await self._ensure_storyteller(job["id"])
+        llama, _ = await self._ensure_storyteller(job["id"], "normal")
         started = time.monotonic()
         self._job_metrics[job["id"]] = {
             "model_request_count": 0, "phase_durations_ms": {},
@@ -708,10 +783,7 @@ class GenerationScheduler:
             location = projection["entities"].get(location_id)
             if not location:
                 continue
-            weather_name = (scene.get("weather") or {}).get("name") if weather_id else None
-            phase_name = (scene.get("time_phase") or {}).get("name") if phase_id else None
-            state = location.get("state", {})
-            prompt = ", ".join(value for value in [location["name"], str(state.get("description") or "environment background"), weather_name, phase_name, *map(str, state.get("image_tags", []))] if value)
+            prompt = environment.composed_background_prompt(project_id, location, weather_id, phase_id)
             asset_id, background_id, now = new_id(), new_id(), utc_now()
             self.db.execute(
                 "INSERT INTO entity_media_assets(id,project_id,entity_id,kind,source,status,prompt,featured,source_story_node_id,created_at,updated_at) VALUES(?,?,?,'location','suggested','queued',?,0,?,?,?)",
@@ -1004,14 +1076,113 @@ class GenerationScheduler:
         return {"id": review_id, "job_id": job["id"], "story_node_id": story_node_id, "phase": phase,
                 "status": "pending", "mutations": serialized, "reason": reasons}
 
+    async def _generate_planning_json_raw(
+        self, job: dict[str, Any], llama: Any, messages: list[dict[str, str]], context_tokens: int,
+        cancel_event: asyncio.Event, stage_label: str, progress: Any,
+    ) -> tuple[str, str | None, int, int]:
+        """Generate one JSON object and extend token-limited output as a raw prompt prefix."""
+        apply_template = getattr(llama, "apply_template", None)
+        raw_complete = getattr(llama, "raw_complete_stream", None)
+        if not apply_template or not raw_complete:
+            raise RuntimeFailure(
+                "The configured llama.cpp runtime does not support raw planning autocomplete. "
+                "Update llama.cpp so /apply-template, /completion, and /props are available."
+            )
+        formatted_prompt = await apply_template(messages)
+        count_prompt = getattr(llama, "count_prompt_tokens", None)
+        prompt_tokens = int(await count_prompt(formatted_prompt)) if count_prompt else max(1, len(formatted_prompt) // 3)
+        combined = ""
+        last_allowance = 0
+        for attempt in range(4):
+            if cancel_event.is_set():
+                raise asyncio.CancelledError
+            full_prompt = formatted_prompt + combined
+            used_tokens = int(await count_prompt(full_prompt)) if count_prompt else max(1, len(full_prompt) // 3)
+            allowance = context_tokens - used_tokens - 128
+            last_allowance = max(0, allowance)
+            if allowance < 64:
+                self.db.update_job_partial_output(job["id"], combined)
+                return combined, (
+                    f"{stage_label} exhausted its {context_tokens:,}-token planning context while autocomplete "
+                    "was still incomplete. The partial JSON was preserved; use a larger planning context or generate a smaller set."
+                ), prompt_tokens, last_allowance
+            if attempt:
+                await self._job_phase(
+                    job["id"], "planning_generating",
+                    f"{stage_label}: autocompleting unfinished JSON ({attempt}/3)",
+                )
+            self._model_request(job["id"])
+            result = await raw_complete(
+                full_prompt, n_predict=allowance, cache_prompt=True, id_slot=0,
+                temperature=0.0 if attempt else None, cancel_event=cancel_event, progress=progress,
+                stop_when=lambda suffix: _planning_json_error(combined + suffix) is None,
+            )
+            suffix = str(result.get("content") or "")
+            if not suffix:
+                # Clear prompt reuse for one retry so a stale slot or immediate
+                # stop token cannot silently produce an empty planning draft.
+                self._model_request(job["id"])
+                result = await raw_complete(
+                    full_prompt, n_predict=allowance, cache_prompt=False, id_slot=0,
+                    temperature=0.0 if attempt else None, cancel_event=cancel_event, progress=progress,
+                    stop_when=lambda retry_suffix: _planning_json_error(combined + retry_suffix) is None,
+                )
+                suffix = str(result.get("content") or "")
+                if not suffix:
+                    details = ", ".join(
+                        f"{key}={result.get(key)!r}" for key in
+                        ("stop_type", "truncated", "tokens_cached", "tokens_evaluated", "tokens_predicted", "n_ctx")
+                    )
+                    raise RuntimeFailure(
+                        f"{stage_label} returned no raw completion after a cache-free retry ({details})"
+                    )
+            combined += suffix
+            self.db.update_job_partial_output(job["id"], combined)
+            metrics = self._job_metrics.setdefault(job["id"], {"model_request_count": 0, "phase_durations_ms": {}})
+            metrics["planning_raw_completion"] = {
+                "autocomplete_attempt": attempt,
+                "tokens_cached": result.get("tokens_cached"),
+                "tokens_evaluated": result.get("tokens_evaluated"),
+                "tokens_predicted": result.get("tokens_predicted"),
+                "effective_context_tokens": result.get("n_ctx") or context_tokens,
+                "stop_type": result.get("stop_type"),
+                "truncated": bool(result.get("truncated")),
+            }
+            self._save_metrics(job["id"])
+            error = _planning_json_error(combined)
+            if error is None:
+                return combined, None, prompt_tokens, last_allowance
+            stopped_for_limit = bool(result.get("truncated")) or result.get("stop_type") == "limit"
+            if not stopped_for_limit and not _looks_like_token_truncation(combined, error):
+                return combined, None, prompt_tokens, last_allowance
+        return combined, (
+            f"{stage_label} remained incomplete after three raw autocomplete attempts. "
+            "The partial JSON was preserved for repair."
+        ), prompt_tokens, last_allowance
+
     async def _planning(self, job: dict[str, Any], cancel_event: asyncio.Event) -> None:
         await self._set_state("planning_world", job["id"])
-        llama, _ = await self._ensure_storyteller(job["id"])
+        llama, _ = await self._ensure_storyteller(job["id"], "planning")
         payload = job["payload"]
+        if payload.get("action") == "random_direction":
+            await self._job_phase(job["id"], "planning_generating", "Inventing a random story direction")
+            messages = random_direction_messages(str(payload.get("theme") or ""))
+            complete_stream = getattr(llama, "complete_stream", None)
+            if complete_stream:
+                raw = await complete_stream(messages, max_tokens=600, temperature=1.25, cancel_event=cancel_event)
+            else:
+                raw = await llama.complete(messages, max_tokens=600, temperature=1.25)
+            direction = str(raw or "").strip()
+            if not direction:
+                raise RuntimeFailure("The storyteller returned an empty random direction")
+            result = {"direction": direction, "temperature": 1.25}
+            self.db.update_job(job["id"], "completed", result=result)
+            await self.events.publish("job", {"job_id": job["id"], "project_id": job["project_id"], "status": "completed", "result": result})
+            return
         session, stage, approved = self.planning.stage_for_generation(payload["session_id"], int(payload["stage_number"]))
         stage_number = int(stage["stage_number"])
         stage_name = str(stage["kind"]).replace("_", " ").title()
-        stage_label = f"Stage {stage_number}/6 · {stage_name}"
+        stage_label = f"Stage {stage_number}/8 · {stage_name}"
         if stage.get("active_job_id") != job["id"]:
             self.db.update_job(job["id"], "cancelled", error="Superseded planning revision")
             return
@@ -1022,16 +1193,31 @@ class GenerationScheduler:
 
         async def planning_progress(update: dict[str, Any]) -> None:
             message = f"{stage_label}: generating structured draft"
+            if update.get("tokens_cached") is not None or update.get("tokens_evaluated") is not None:
+                message += (
+                    f"; cached {int(update.get('tokens_cached') or 0):,}, "
+                    f"evaluated {int(update.get('tokens_evaluated') or 0):,} prompt tokens"
+                )
             self.db.update_job_progress(job["id"], "planning_generating", message, update.get("value"), update.get("max"))
             await self.events.publish("job", {
                 "job_id": job["id"], "status": "running", "stage": "planning_generating",
                 "message": message, "value": update.get("value"), "max": update.get("max"),
             })
 
-        count_tokens = getattr(llama, "count_tokens", None)
-        context_tokens = int(read_settings(self.db)["context_tokens"])
-        desired_outputs = {1: 650, 2: 950, 3: 1100, 4: 1300, 5: 1400, 6: 900}
+        count_prompt_tokens = getattr(llama, "count_prompt_tokens", None)
+        apply_template = getattr(llama, "apply_template", None)
+        if not count_prompt_tokens or not apply_template:
+            raise RuntimeFailure(
+                "The configured llama.cpp runtime is missing raw planning autocomplete support. "
+                "Update llama.cpp before generating structured planning stages."
+            )
+        context_tokens = int(read_settings(self.db).get("planning_context_tokens", read_settings(self.db)["context_tokens"]))
+        desired_outputs = {1: 1000, 2: 2300, 3: 2400, 4: 1900, 5: 2200, 6: 2200, 7: 1800}
         desired_output = desired_outputs.get(stage_number, 900)
+        focus = str(payload.get("focus") or "") or None
+        append = bool(payload.get("append"))
+        if append:
+            desired_output = min(desired_output, 1200)
         if payload.get("repair"):
             desired_output = max(desired_output, 1200)
         if context_tokens < 2048:
@@ -1044,20 +1230,24 @@ class GenerationScheduler:
         # from discovering an oversized prompt only after dispatch.
         available_prompt = max(768, context_tokens - desired_output - 768)
         character_budget = max(3_500, available_prompt * 2)
-        inventory = self.planning.world_inventory(session["project_id"])
+        inventory = self.planning.world_inventory(session["project_id"], include_catalogs=stage_number == 7, session_id=session["id"])
         repair_text = str(stage.get("raw_draft_text") or "") if payload.get("repair") else ""
-        messages = stage_prompt(stage, session, approved, inventory, character_budget=character_budget, repair_text=repair_text)
+        existing_draft = json.loads(stage["draft_json"]) if append and stage.get("draft_json") else None
+        messages = stage_prompt(stage, session, approved, inventory, character_budget=character_budget, repair_text=repair_text,
+                                focus=focus, existing_draft=existing_draft)
         await self._job_phase(job["id"], "planning_budget", f"{stage_label}: checking context budget")
-        counted = await count_tokens(messages) if count_tokens else messages_tokens(messages)
-        message_chars = sum(len(str(message.get("content", ""))) for message in messages)
-        prompt_tokens = max(int(counted) + 384, (message_chars + 1) // 2)
+        formatted_prompt = await apply_template(messages)
+        prompt_tokens = int(await count_prompt_tokens(formatted_prompt))
         while prompt_tokens > available_prompt and character_budget > 3_500:
             character_budget = max(3_500, int(character_budget * 0.72))
-            messages = stage_prompt(stage, session, approved, inventory, character_budget=character_budget, repair_text=repair_text)
-            counted = await count_tokens(messages) if count_tokens else messages_tokens(messages)
-            message_chars = sum(len(str(message.get("content", ""))) for message in messages)
-            prompt_tokens = max(int(counted) + 384, (message_chars + 1) // 2)
-        max_tokens = min(desired_output, context_tokens - prompt_tokens - 768)
+            messages = stage_prompt(stage, session, approved, inventory, character_budget=character_budget, repair_text=repair_text,
+                                    focus=focus, existing_draft=existing_draft)
+            formatted_prompt = await apply_template(messages)
+            prompt_tokens = int(await count_prompt_tokens(formatted_prompt))
+        # max_tokens remains a required llama.cpp safety boundary, but no
+        # longer imposes an arbitrary per-stage output cap. Streaming ends as
+        # soon as the complete response parses as one JSON object.
+        max_tokens = context_tokens - prompt_tokens - 512
         if max_tokens < 256:
             raise RuntimeFailure(
                 f"{stage_label} needs about {prompt_tokens} prompt tokens, leaving too little of the "
@@ -1072,34 +1262,50 @@ class GenerationScheduler:
             "job_id": job["id"], "status": "running", "stage": "planning_budget",
             "message": f"{stage_label}: context {prompt_tokens:,}/{context_tokens:,} tokens; reserving up to {max_tokens:,} for the draft",
         })
-        complete_stream = getattr(llama, "complete_stream", None)
         await self._job_phase(job["id"], "planning_generating", f"{stage_label}: generating structured draft")
-        self._model_request(job["id"])
-        if complete_stream:
+        raw, generation_error, prompt_tokens, remaining_tokens = await self._generate_planning_json_raw(
+            job, llama, messages, context_tokens, cancel_event, stage_label, planning_progress,
+        )
+        validation_error: WorldValidationError | None = None
+        draft: dict[str, Any] = {}
+        for empty_attempt in range(3):
+            await self._job_phase(job["id"], "planning_validating", f"{stage_label}: validating generated structure")
+            batch_has_content = False
+            if generation_error:
+                validation_error = WorldValidationError(generation_error)
+                break
             try:
-                raw = await complete_stream(messages, json_mode=True, max_tokens=max_tokens, progress=planning_progress, cancel_event=cancel_event)
-            except RuntimeFailure as exc:
-                # Some llama.cpp chat templates add far more tokens than
-                # /tokenize reports. Retry once with a substantially smaller
-                # projection; the failed request is rejected before inference.
-                if "exceeds the available context size" not in str(exc):
-                    raise
-                await self._job_phase(job["id"], "planning_compacting", f"{stage_label}: model requested a smaller context; compacting and retrying")
-                messages = stage_prompt(stage, session, approved, inventory, character_budget=max(3_500, character_budget // 2), repair_text=repair_text)
-                retry_chars = sum(len(str(message.get("content", ""))) for message in messages)
-                retry_estimate = max((retry_chars + 1) // 2, 1)
-                retry_max = min(max_tokens, max(256, context_tokens - retry_estimate - 1024))
-                await self._job_phase(job["id"], "planning_generating", f"{stage_label}: generating from compacted context")
-                self._model_request(job["id"])
-                raw = await complete_stream(messages, json_mode=True, max_tokens=retry_max, progress=planning_progress, cancel_event=cancel_event)
-        else:
-            raw = await llama.complete(messages, json_mode=True, max_tokens=max_tokens)
-        await self._job_phase(job["id"], "planning_validating", f"{stage_label}: validating generated structure")
-        try:
-            draft = parse_json_object(raw)
-            self.planning.validate_draft(draft)
-        except WorldValidationError as exc:
-            error = str(exc)
+                draft = parse_json_object(raw)
+                normalize_generated_defaults(stage_number, draft)
+                if append:
+                    batch_has_content = generated_stage_has_content(stage_number, draft, focus)
+                    if batch_has_content:
+                        draft = merge_generated_batch(stage_number, existing_draft or {}, draft, str(focus))
+                self.planning.validate_draft(draft, stage_number, json.loads(session["settings_json"]))
+            except WorldValidationError as exc:
+                validation_error = exc
+                if not append or batch_has_content:
+                    break
+            if (batch_has_content if append else generated_stage_has_content(stage_number, draft)):
+                validation_error = None
+                break
+            if empty_attempt >= 2:
+                validation_error = WorldValidationError(f"{stage_label} returned no usable stage resources after three attempts")
+                break
+            await self._job_phase(job["id"], "planning_generating", f"{stage_label}: retrying an empty or incomplete stage ({empty_attempt + 2}/3)")
+            retry_messages = [*messages, {
+                "role": "user",
+                "content": (
+                    f"Your previous answer contained no usable {focus or 'stage resources'} or returned only one nested record. "
+                    "Generate the requested root object now, following the supplied JSON shape."
+                ),
+            }]
+            self._model_request(job["id"])
+            raw, generation_error, _, _ = await self._generate_planning_json_raw(
+                job, llama, retry_messages, context_tokens, cancel_event, stage_label, planning_progress,
+            )
+        if validation_error:
+            error = str(validation_error)
             if not self.planning.save_invalid_generated_draft(stage["id"], job["id"], raw, error):
                 self.db.update_job(job["id"], "cancelled", error="Superseded planning revision")
                 return
@@ -1149,16 +1355,24 @@ class GenerationScheduler:
             if conflict.get("recommended_resolution")
         }
         self.planning.approve_stage(session["id"], stage_number, draft, resolutions)
-        if stage_number >= 6:
-            await self.events.publish("notice", {"job_id": job["id"], "message": "Automatic preplanning completed all six stages."})
+        if stage_number >= 7:
+            self.planning.prepare_image_stage(session["id"])
+            await self.events.publish("notice", {"job_id": job["id"], "message": "Automatic preplanning prepared all eight stages. Images are waiting for review."})
             return {"status": "completed"}
 
-        next_number = stage_number + 1
         next_stage = self.db.fetch_one(
-            "SELECT * FROM planning_stages WHERE session_id=? AND stage_number=?", (session["id"], next_number)
+            "SELECT * FROM planning_stages WHERE session_id=? AND stage_number>? AND status NOT IN ('approved','skipped') ORDER BY stage_number LIMIT 1",
+            (session["id"], stage_number),
         )
         if not next_stage:
             return {"status": "completed"}
+        next_number = int(next_stage["stage_number"])
+        if next_stage["status"] == "stale":
+            await self.events.publish("notice", {"job_id": job["id"], "message": f"Automatic planning paused at stale stage {next_number}. Revalidate, repair, or regenerate it."})
+            return {"status": "paused_for_stale_dependency", "stage_number": next_number}
+        if next_number == 8:
+            self.planning.prepare_image_stage(session["id"])
+            return {"status": "completed", "stage_number": 8}
         shared_prompt = str(job.get("payload", {}).get("automation_prompt") or "")
         next_job = self.db.create_job(session["project_id"], "planning", {
             "session_id": session["id"], "stage_number": next_number, "human_prompt": shared_prompt,
@@ -1248,7 +1462,7 @@ class GenerationScheduler:
         )
         if mapping_errors:
             raise RuntimeFailure("Workflow validation failed: " + "; ".join(mapping_errors))
-        llama = await self._ensure_llama_runtime()
+        llama = await self._ensure_llama_runtime(self.llama_runtime_mode)
         await self._set_state("switching_to_image", job["id"])
         self.db.update_job(job["id"], "switching")
         self.transition_reason = "validated image job requires exclusive GPU ownership"
@@ -1291,6 +1505,12 @@ class GenerationScheduler:
                 )
             if payload.get("media_asset_id"):
                 self.db.execute("UPDATE entity_media_assets SET source = 'generated', status = 'generated', file_path = ?, mime_type = ?, updated_at = ? WHERE id = ?", (paths[0], "image/" + paths[0].rsplit(".", 1)[-1].replace("jpg", "jpeg"), utc_now(), payload["media_asset_id"]))
+                plan_id = payload.get("planning_image_plan_id")
+                if not plan_id:
+                    plan = self.db.fetch_one("SELECT id FROM planning_image_plans WHERE media_asset_id=? AND generation_job_id=?", (payload["media_asset_id"], job["id"]))
+                    plan_id = plan.get("id") if plan else None
+                if plan_id:
+                    self.db.execute("UPDATE planning_image_plans SET status='generated',media_asset_id=?,error=NULL,updated_at=? WHERE id=?", (payload["media_asset_id"], utc_now(), plan_id))
             result = {"image_paths": paths, "suggestion_id": payload.get("suggestion_id"), "media_asset_id": payload.get("media_asset_id"),
                       "prompt_references": payload.get("prompt_references", [])}
         except BaseException as exc:

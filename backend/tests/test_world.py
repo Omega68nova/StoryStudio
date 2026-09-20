@@ -66,6 +66,20 @@ def test_knowledge_scope_major_change_and_budget(tmp_path: Path) -> None:
     assert package["entities"] and package["tokens_estimated"] >= 1
 
 
+def test_character_secret_channels_are_scoped_by_narrator(tmp_path: Path) -> None:
+    _, project, world = setup_world(tmp_path)
+    pov = create(world, project["id"], kind="character", name="Mara", aliases=[], tags=[], state={
+        "player_controlled": True,
+        "character_secrets": ["Mara forged the letter"],
+        "secrets_to_character": ["Mara is the missing heir"],
+    })
+    limited = world.context_package(project["id"], None, "Mara", pov, "third_limited", 1800)
+    assert "forged the letter" not in str(limited)
+    assert "missing heir" in str(limited.get("narrative_secrets"))
+    omniscient = world.context_package(project["id"], None, "Mara", pov, "third_omniscient", 1800)
+    assert "forged the letter" in str(omniscient.get("narrative_secrets"))
+
+
 def test_illegal_movement_and_structured_tool_normalization(tmp_path: Path) -> None:
     _, project, world = setup_world(tmp_path)
     a = create(world, project["id"], kind="location", name="A", aliases=[], tags=[], state={})
@@ -132,3 +146,43 @@ def test_archive_releases_name_and_identity_edits_are_replayed(tmp_path: Path) -
     world.commit_root(project["id"], rename, provenance="author", summary="rename")
     assert world.projection(project["id"])["entities"][replacement]["name"] == "Mara the Younger"
     assert db.fetch_one("SELECT canonical_name FROM world_entities WHERE id = ?", (replacement,))["canonical_name"] == "Mara the Younger"
+
+
+def test_editor_invariants_and_atomic_relationship_replacement(tmp_path: Path) -> None:
+    _, project, world = setup_world(tmp_path)
+    with pytest.raises(WorldValidationError, match="Player-controlled characters"):
+        world.normalize_mutations(project["id"], None, [{"tool": "createEntity", "arguments": {
+            "kind": "character", "name": "Invalid hero",
+            "state": {"player_controlled": True, "autonomy_enabled": True},
+        }}], provenance="author")
+
+    hero = create(world, project["id"], kind="character", name="Hero", aliases=[], tags=[], state={
+        "player_controlled": True, "autonomy_enabled": False, "custom_plugin_state": {"rank": 7},
+    })
+    with pytest.raises(WorldValidationError, match="Player-controlled characters"):
+        world.normalize_mutations(project["id"], None, [{"tool": "updateEntity", "arguments": {
+            "entity_id": hero, "patch": {"autonomy_enabled": True},
+        }}], provenance="author")
+
+    update = world.normalize_mutations(project["id"], None, [{"tool": "updateEntity", "arguments": {
+        "entity_id": hero, "patch": {"description": "Still remembers custom data."},
+    }}], provenance="author")
+    world.commit_root(project["id"], update, provenance="author", summary="structured edit")
+    assert world.projection(project["id"])["entities"][hero]["state"]["custom_plugin_state"] == {"rank": 7}
+
+    target_a = create(world, project["id"], kind="faction", name="First faction", aliases=[], tags=[], state={})
+    target_b = create(world, project["id"], kind="faction", name="Second faction", aliases=[], tags=[], state={})
+    initial = world.normalize_mutations(project["id"], None, [{"tool": "setRelationship", "arguments": {
+        "id": "old-edge", "source_id": hero, "target_id": target_a, "relation": "member_of",
+    }}], provenance="author")
+    world.commit_root(project["id"], initial, provenance="author", summary="initial edge")
+    replacement = world.normalize_mutations(project["id"], None, [
+        {"tool": "removeRelationship", "arguments": {"relationship_id": "old-edge"}},
+        {"tool": "setRelationship", "arguments": {
+            "id": "new-edge", "source_id": hero, "target_id": target_b, "relation": "allied_with",
+        }},
+    ], provenance="author")
+    world.commit_root(project["id"], replacement, provenance="author", summary="replace edge")
+    relations = world.projection(project["id"])["relations"]
+    assert "old-edge" not in relations
+    assert relations["new-edge"]["target_id"] == target_b

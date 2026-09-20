@@ -49,12 +49,18 @@ async def test_npc_director_filters_and_batches_valid_attempts(tmp_path: Path) -
     _, project, world = setup(tmp_path)
     place = world.normalize_mutations(project["id"], None, [{"tool": "createEntity", "arguments": {"kind": "location", "name": "Hall", "entity_id": "hall", "state": {}}}], provenance="author"); world.commit_root(project["id"], place, provenance="author", summary="hall")
     player = entity(world, project["id"], "Player", {"player_controlled": True, "current_location_id": "hall"})
-    npc = entity(world, project["id"], "Nia", {"autonomy_enabled": True, "intervention_frequency": "high", "current_location_id": "hall"})
+    npc = entity(world, project["id"], "Nia", {"autonomy_enabled": True, "intervention_frequency": "high", "current_location_id": "hall", "character_secrets": ["Nia hid the map"], "secrets_to_character": ["Nia is being followed"]})
     user = world.db.create_story_node(project["id"], None, "user", "Enter", pov_character_id=player)
     class Llama:
-        async def complete(self, *_args, **_kwargs): return '{"interventions":[{"npc_id":"'+npc+'","dialogue":"Stop.","attempted_action":"I block the door.","cited_fact_ids":[]}]}'
-    interventions, mutations = await NpcDirector(world).generate(Llama(), project["id"], user["id"], player, "turn", "enter")
+        messages = []
+        async def complete(self, messages, **_kwargs):
+            self.messages = messages
+            return '{"interventions":[{"npc_id":"'+npc+'","dialogue":"Stop.","attempted_action":"I block the door.","cited_fact_ids":[]}]}'
+    llama = Llama()
+    interventions, mutations = await NpcDirector(world).generate(llama, project["id"], user["id"], player, "turn", "enter")
     assert interventions[0]["npc_id"] == npc and not mutations
+    assert "Nia hid the map" in str(llama.messages)
+    assert "Nia is being followed" not in str(llama.messages)
     assert all(item["id"] != player for item in NpcDirector(world).eligible(project["id"], user["id"], player, "turn"))
 
 

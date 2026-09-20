@@ -64,7 +64,7 @@ def make_lore_card(entity: dict[str, Any], projection: dict[str, Any]) -> dict[s
     kind, name = entity["kind"], entity["name"]
     pieces = [f"{name} ({kind.replace('_', ' ')})"]
     ordered_fields = (
-        "summary", "personality", "core_personality", "appearance", "wardrobe", "equipment", "inventory", "abilities",
+        "summary", "description", "personality", "core_personality", "appearance", "wardrobe", "equipment", "inventory", "abilities",
         "terrain", "culture", "rules", "status", "goals", "secrets", "current_location_id",
     )
     for field in ordered_fields:
@@ -256,6 +256,8 @@ class WorldEngine:
                 arguments["aliases"] = list(dict.fromkeys(arguments.get("aliases", [])))
                 arguments["tags"] = list(dict.fromkeys(arguments.get("tags", [])))
                 arguments["state"] = arguments.get("state") or {}
+                if kind == "character" and arguments["state"].get("player_controlled") and arguments["state"].get("autonomy_enabled"):
+                    raise WorldValidationError("Player-controlled characters cannot enable NPC autonomy")
                 if kind == "location":
                     settings = self.db.fetch_one("SELECT enabled,ai_create_locations FROM project_environment_settings WHERE project_id=?", (project_id,))
                     if provenance in {"ai", "storyteller_inline"} and settings and (not settings["enabled"] or not settings["ai_create_locations"]):
@@ -264,6 +266,8 @@ class WorldEngine:
                     location_state.setdefault("description", "")
                     location_state.setdefault("exposure", "outdoor")
                     location_state.setdefault("image_tags", [])
+                    location_state.setdefault("imagegen_description", "")
+                    location_state.setdefault("enabled", True)
                     location_state.setdefault("random_encounter", False)
                     location_state.setdefault("discovered", not location_state["random_encounter"])
                     if location_state["exposure"] not in {"indoor", "outdoor", "isolated"}:
@@ -291,6 +295,11 @@ class WorldEngine:
                     major, reason = True, "Changes " + ", ".join(sorted(changed))
                 if entity["kind"] == "character" and entity.get("state", {}).get("player_controlled") and {"personality", "core_personality", "goals"}.intersection(patch):
                     major, reason = True, "Changes a player-controlled character's agency or personality"
+                if entity["kind"] == "character" and {"player_controlled", "autonomy_enabled"}.intersection(patch):
+                    player_controlled = patch.get("player_controlled", entity.get("state", {}).get("player_controlled", False))
+                    autonomy_enabled = patch.get("autonomy_enabled", entity.get("state", {}).get("autonomy_enabled", False))
+                    if player_controlled and autonomy_enabled:
+                        raise WorldValidationError("Player-controlled characters cannot enable NPC autonomy")
                 if entity["kind"] == "lore_system" and {"rules", "limits", "costs"}.intersection(patch):
                     major, reason = True, "Changes established world-system rules"
             elif tool == "moveCharacter":
@@ -298,6 +307,8 @@ class WorldEngine:
                 destination = self._entity(projection, arguments.get("destination_id"), "location")
                 source_id = character.get("state", {}).get("current_location_id")
                 arguments["source_id"] = source_id
+                if source_id != destination["id"] and not self._location_enabled(projection, destination["id"]):
+                    raise WorldValidationError(f"Location '{destination['name']}' is disabled")
                 if source_id and source_id != destination["id"] and not arguments.get("bypass_reason"):
                     route = self._path(projection, source_id, destination["id"], arguments.get("mode"))
                     if not route:
@@ -517,6 +528,16 @@ class WorldEngine:
         return None
 
     @staticmethod
+    def _location_enabled(projection: dict[str, Any], location_id: str | None) -> bool:
+        current, seen = projection.get("entities", {}).get(location_id), set()
+        while current and current.get("kind") == "location" and current["id"] not in seen:
+            seen.add(current["id"])
+            if not current.get("state", {}).get("enabled", True):
+                return False
+            current = projection["entities"].get(current.get("state", {}).get("parent_location_id"))
+        return True
+
+    @staticmethod
     def _path(projection: dict[str, Any], source_id: str, target_id: str, mode: str | None = None) -> dict[str, Any] | None:
         adjacency: dict[str, list[tuple[str, int, dict[str, Any]]]] = {}
         for relation in projection["relations"].values():
@@ -526,6 +547,17 @@ class WorldEngine:
             weight = max(0, int(relation.get("travel_minutes", 0)))
             adjacency.setdefault(source, []).append((target, weight, relation))
             if relation.get("bidirectional", True): adjacency.setdefault(target, []).append((source, weight, relation))
+        if source_id != target_id and not WorldEngine._location_enabled(projection, target_id):
+            return None
+        allowed_disabled: set[str] = set()
+        if not WorldEngine._location_enabled(projection, source_id):
+            pending = [source_id]
+            while pending:
+                current = pending.pop()
+                if current in allowed_disabled:
+                    continue
+                allowed_disabled.add(current)
+                pending.extend(neighbor for neighbor, _, _ in adjacency.get(current, []) if not WorldEngine._location_enabled(projection, neighbor))
         heap: list[tuple[int, str, list[str], list[str]]] = [(0, source_id, [], [source_id])]
         visited: set[str] = set()
         while heap:
@@ -536,6 +568,8 @@ class WorldEngine:
                 return {"travel_minutes": total, "relation_ids": relation_ids, "location_ids": location_ids,
                         "locations": [{"id": value, "name": projection["entities"].get(value, {}).get("name", value)} for value in location_ids]}
             for neighbor, weight, relation in adjacency.get(current, []):
+                if not WorldEngine._location_enabled(projection, neighbor) and neighbor not in allowed_disabled:
+                    continue
                 if neighbor not in visited: heapq.heappush(heap, (total + weight, neighbor, [*relation_ids, relation["id"]], [*location_ids, neighbor]))
         return None
 
@@ -837,6 +871,8 @@ class WorldEngine:
         for entity in projection["entities"].values():
             if kinds and entity["kind"] not in kinds or not self.visible(entity, pov_character_id, narration_mode, projection):
                 continue
+            if entity.get("kind") == "location" and not self._location_enabled(projection, entity.get("id")):
+                continue
             card = make_lore_card(entity, projection)
             haystack = card["search_text"].casefold()
             score = sum(20 if term in entity["name"].casefold() else 5 for term in terms if term in haystack)
@@ -859,6 +895,8 @@ class WorldEngine:
         for entity in projection["entities"].values():
             state = entity.get("state", {})
             if entity["kind"] != "location" or entity["id"] == origin_id or state.get("parent_location_id") != parent:
+                continue
+            if not self._location_enabled(projection, entity["id"]):
                 continue
             dx, dy = float(state.get("x", 0)) - ox, float(state.get("y", 0)) - oy
             distance = math.hypot(dx, dy)
@@ -950,6 +988,33 @@ class WorldEngine:
             "pov_character_id": pov_character_id, "narration_mode": narration_mode,
             "entities": selected, "tokens_estimated": used,
         }
+        # Keep private character knowledge out of lore cards/search. The prose
+        # narrator receives only secrets it is explicitly allowed to know.
+        narrative_secrets = []
+        for entity in selected:
+            if entity.get("kind") != "character":
+                continue
+            state = entity.get("state", {})
+            for secret in state.get("secrets_to_character", []) if isinstance(state.get("secrets_to_character"), list) else []:
+                if str(secret).strip():
+                    narrative_secrets.append({"character_id": entity["id"], "character_name": entity["name"], "secret": str(secret), "known_to_character": False})
+            if narration_mode == "third_omniscient":
+                for secret in state.get("character_secrets", []) if isinstance(state.get("character_secrets"), list) else []:
+                    if str(secret).strip():
+                        narrative_secrets.append({"character_id": entity["id"], "character_name": entity["name"], "secret": str(secret), "known_to_character": True})
+        if narrative_secrets:
+            result["narrative_secrets"] = narrative_secrets[:40]
+        result["entities"] = [
+            {
+                **entity,
+                "state": {
+                    key: value for key, value in entity.get("state", {}).items()
+                    if key not in {"character_secrets", "secrets_to_character"}
+                },
+            }
+            if entity.get("kind") == "character" else entity
+            for entity in selected
+        ]
         settings = self.db.fetch_one("SELECT enabled FROM project_environment_settings WHERE project_id=?", (project_id,))
         if settings and settings["enabled"]:
             from app.services.environment import EnvironmentService
@@ -994,7 +1059,13 @@ class WorldEngine:
                     parent_id = location.get("state", {}).get("parent_location_id")
                 layer = environment.map_layer(project_id, projection, str(parent_id) if parent_id else None, admin=True)
                 current_parent = (location or {}).get("id")
-                layer["locations"] = [item for item in layer["locations"] if not projection["entities"][item["id"]].get("state", {}).get("random_encounter") or parent_id == current_parent]
+                layer["locations"] = [
+                    item for item in layer["locations"]
+                    if self._location_enabled(projection, item["id"])
+                    and (not projection["entities"][item["id"]].get("state", {}).get("random_encounter") or parent_id == current_parent)
+                ]
+                visible_ids = {item["id"] for item in layer["locations"]}
+                layer["routes"] = [edge for edge in layer["routes"] if edge["source_id"] in visible_ids and edge["target_id"] in visible_ids]
                 return layer
             query = str(arguments.get("query") or "").casefold()
             limit = min(20, max(1, int(arguments.get("limit", 8))))
@@ -1002,7 +1073,7 @@ class WorldEngine:
             _, current_location = environment._location(projection)
             matches = []
             for entity in projection["entities"].values():
-                if entity.get("kind") != "location" or entity.get("state", {}).get("archived"):
+                if entity.get("kind") != "location" or entity.get("state", {}).get("archived") or not self._location_enabled(projection, entity.get("id")):
                     continue
                 state = entity.get("state", {})
                 if state.get("random_encounter") and state.get("parent_location_id") != (current_location or {}).get("id"):

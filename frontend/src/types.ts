@@ -125,6 +125,7 @@ export type RuntimeSettings = {
   comfy_workdir: string;
   comfy_url: string;
   context_tokens: number;
+  planning_context_tokens: number;
   memory_provider: "builtin" | "cognee";
 };
 
@@ -159,11 +160,29 @@ export type WorldProjection = {
   transactions: Array<Record<string, unknown>>;
 };
 
+export type EntityEditorDraft = {
+  id?: string; kind: string; name: string; aliases: string[]; tags: string[];
+  state: Record<string, unknown>; advancedState: string;
+};
+export type CharacterEditorDraft = EntityEditorDraft & { kind: "character" };
+export type WorldRelationship = {
+  id?: string; source_id: string; target_id: string; relation: string;
+  bidirectional?: boolean; major?: boolean; blocked?: boolean; travel_minutes?: number;
+  direction?: string; modes?: string[]; [key: string]: unknown;
+};
+
+export type PlanningScalePreset = "intimate" | "local" | "regional" | "global";
+export type PlanningStageKind = "foundation" | "macro_world" | "detailed_locations" | "systems" | "cast" | "character_details" | "runtime_presentation" | "images";
+export type PlanningStageStatus = "pending" | "ready" | "queued" | "generating" | "approved" | "skipped" | "stale" | "cancelled";
+export type PlanningResourceReference = { resource_key: string; resource_type: string; resource_id: string; stage_number: number; fingerprint: string };
+export type PlanningDependencyImpact = { stage_number: number; changed_domains: string[]; affected_stages: Array<{ stage_number: number; kind: PlanningStageKind; status: PlanningStageStatus }> };
+export type PlanningAssetPlan = { id: string; session_id: string; resource_key: string; entity_id: string; outfit_id?: string | null; kind: "portrait" | "full_body" | "location"; prompt: string; negative_prompt: string; workflow_preset_id?: string | null; width?: number | null; height?: number | null; status: "draft" | "ready" | "queued" | "generated" | "failed"; media_asset_id?: string | null; generation_job_id?: string | null; error?: string | null };
+
 export type PlanningStage = {
   id: string;
   stage_number: number;
-  kind: string;
-  status: string;
+  kind: PlanningStageKind;
+  status: PlanningStageStatus;
   draft: Record<string, unknown> | null;
   approved: Record<string, unknown> | null;
   human_prompt: string;
@@ -183,6 +202,8 @@ export type PlanningStage = {
     created_at?: string;
     updated_at?: string;
   } | null;
+  dependency_snapshot?: Record<string, string>;
+  published_domains?: Record<string, string>;
 };
 
 export type PlanningSession = {
@@ -190,13 +211,15 @@ export type PlanningSession = {
   project_id: string;
   status: string;
   current_stage: number;
-  settings: Record<string, unknown>;
+  schema_version: number;
+  settings: { scale_preset: PlanningScalePreset; major_locations: number; minor_locations: number; rooms: number; characters: number; direction: string };
   stages: PlanningStage[];
+  image_plans: PlanningAssetPlan[];
   recovery_warnings?: RecoveryWarning[];
 };
 
 export type RecoveryWarning = { code: string; message: string };
-export type PlanningResolution = { action: "link" | "merge" | "rename" | "omit"; entity_id?: string; new_name?: string };
+export type PlanningResolution = { action: "link" | "merge" | "rename" | "omit" | "keep_manual" | "overwrite" | "unlink"; entity_id?: string; new_name?: string };
 export type PlanningConflict = { id: string; entity_key: string; proposed: Record<string, unknown>; candidates: Array<{ id: string; kind: string; name: string }>; recommended_resolution?: PlanningResolution | null; resolution?: PlanningResolution | null };
 export type DataSummary = { counts: Record<string, number>; managed_disk_bytes: number; active_jobs: Array<Record<string, unknown>>; trashed_story_nodes: number; orphan_files: string[]; dangling_fts_rows: number; file_failures: Array<{ path: string; error: string }> };
 export type DeletionImpact = { object_id?: string; project_id?: string; entity_id?: string; session_id?: string; name?: string; confirmation: string; counts: Record<string, number>; warnings?: string[] };
@@ -219,13 +242,16 @@ export type MediaAsset = { id: string; entity_id: string; outfit_id?: string | n
 export type MusicTrack = { id: string; title: string; file_path: string; mime_type: string; position: number };
 export type MusicTheme = { id: string; name: string; description: string; playback_mode: "shuffle" | "repeat_one" | "in_order"; tracks: MusicTrack[] };
 export type ProjectMusic = { project_id: string; mode: "disabled" | "player_managed" | "ai_managed"; manual_theme_id: string | null; current_theme_id: string | null; shared_theme_id?: string | null; current_track_id?: string | null; playback_revision?: number; playback_updated_by?: string | null; volume: number; enabled_theme_ids: string[] };
-export type WeatherDefinition = { id: string; name: string; description: string; tags: string[]; image_tags: string[]; enabled: boolean; transition_ids: string[] };
-export type TimePhase = { id: string; name: string; duration_minutes: number; position: number; enabled: boolean };
+export type WeatherDefinition = { id: string; name: string; description: string; imagegen_description: string; tags: string[]; image_tags: string[]; enabled: boolean; transition_ids: string[] };
+export type TimePhase = { id: string; name: string; duration_minutes: number; description: string; imagegen_description: string; position: number; enabled: boolean };
 export type AmbientVariant = { id: string; source_path: string; url: string; label: string; playback_rate: number; default_gain: number; tags: string[]; enabled: boolean; available: boolean; derived: boolean };
-export type AmbientAssignment = { id: string; owner_type: "weather" | "time" | "location" | "action"; owner_id: string; selector_type: "default" | "indoor" | "outdoor" | "tag"; selector_value?: string | null; weather_id?: string | null; time_phase_id?: string | null; variant_id: string };
+export type AmbientSelector = "default" | "indoor" | "outdoor" | "isolated" | "tag";
+export type AmbientAssignment = { id: string; owner_type: "weather" | "time" | "location" | "action"; owner_id: string; selector_type: AmbientSelector; selector_value?: string | null; weather_id?: string | null; time_phase_id?: string | null; variant_id: string };
+export type AmbientSoundSet = { selector_type: AmbientSelector; selector_value?: string | null; weather_id?: string | null; time_phase_id?: string | null; variant_ids: string[] };
+export type EnvironmentLocation = { id?: string; name: string; parent_location_id: string | null; exposure: "indoor" | "outdoor" | "isolated"; description: string; imagegen_description: string; tags: string[]; image_tags: string[]; enabled: boolean; random_encounter: boolean; discovered: boolean; x: number | null; y: number | null };
 export type EnvironmentSettings = { project_id: string; enabled: boolean; ai_create_locations: boolean; ai_propose_weather: boolean; auto_generate_backgrounds: boolean; background_workflow_id: string | null; initial_weather_id: string; revision: number; weather: WeatherDefinition[]; time_phases: TimePhase[] };
 export type SceneEnvironment = { enabled: boolean; revision: number; focused_character?: { id: string; name: string } | null; player_action?: string; location?: { id: string; name: string; description: string; tags: string[]; exposure: "indoor" | "outdoor" | "isolated"; parent_location_id?: string | null } | null; location_ancestry?: Array<{ id: string; name: string }>; weather?: WeatherDefinition | null; time_phase?: TimePhase | null; allowed_next_weather?: Array<{ id: string; name: string }>; background?: { id: string; url: string } | null; ambient: AmbientVariant[] };
-export type LocationMapLayer = { parent?: { id: string; name: string; parent_id?: string | null } | null; breadcrumbs: Array<{ id: string; name: string }>; locations: Array<{ id: string; name: string; x: number; y: number; has_children: boolean; exposure: string }>; routes: Array<{ id: string; source_id: string; target_id: string }> };
+export type LocationMapLayer = { parent?: { id: string; name: string; parent_id?: string | null } | null; breadcrumbs: Array<{ id: string; name: string }>; locations: Array<{ id: string; name: string; x: number; y: number; has_children: boolean; exposure: string; enabled: boolean; effectively_enabled: boolean }>; routes: Array<{ id: string; source_id: string; target_id: string }> };
 export type UserAmbientPreferences = { enabled: boolean; master_volume: number };
 export type StatDefinition = { id: string; stat_key: string; label: string; scope: "character" | "relationship"; default_value: number; minimum: number; maximum: number; integer_only: number; visibility: string };
 export type AbilityDefinition = { id: string; ability_key: string; name: string; description: string; target_type: "self" | "character" | "relationship"; requirements?: Record<string, unknown>; costs: Record<string, number>; effects: Array<Record<string, unknown>>; minigame_profile?: { timed_attack?: { line_count: number; damage_per_line: number }; bullethell_skill_ids?: string[] } };

@@ -1,5 +1,23 @@
 # StoryStudio remote access
 
+## Simple direct access on port 8765
+
+If public TCP 8765 is already forwarded to this computer, Caddy is not needed.
+From the StoryStudio directory, start and stop the directly exposed server with:
+
+```powershell
+.\start8765.ps1
+.\stop8765.ps1
+```
+
+`start8767.ps1` is also provided as a compatibility alias for the requested
+filename; it starts the same port 8765 service. Open
+`http://<your-public-ip>:8765/` from the remote device. This mode uses plain
+HTTP, so credentials, session cookies, story text, and media are not encrypted.
+It does not use or occupy port 443.
+
+## HTTPS access through Caddy
+
 StoryStudio itself remains bound to `127.0.0.1:8765`. Caddy is the only public process and proxies HTTPS/WebSocket traffic from `84.78.155.96:443`.
 
 The reverse proxy also carries the app's `/sounds/` ambient library and authenticated `/media/` backgrounds. Keep `public/sounds` inside the StoryStudio installation; no additional Caddy file-server route or public filesystem access is required.

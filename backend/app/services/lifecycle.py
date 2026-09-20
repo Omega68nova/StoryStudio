@@ -162,7 +162,7 @@ class DataLifecycle:
             connection.execute(
                 "UPDATE runtime_settings SET llama_executable='',storyteller_model_path='',storyteller_model_id='',"
                 "llama_url='http://127.0.0.1:8080',llama_extra_args_json='[]',comfy_command_json='[]',"
-                "comfy_workdir='',comfy_url='http://127.0.0.1:8188',context_tokens=8192,memory_provider='builtin',updated_at=? WHERE id=1",
+                "comfy_workdir='',comfy_url='http://127.0.0.1:8188',context_tokens=8192,planning_context_tokens=8192,memory_provider='builtin',updated_at=? WHERE id=1",
                 (now,),
             )
         result = self.release_paths(paths)

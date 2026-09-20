@@ -15,7 +15,9 @@
     "@mui/icons-material": "^7.3.11",
     "@mui/material": "^7.3.11",
     "@vitejs/plugin-react": "latest",
+    "bootstrap": "^5.3.8",
     "react": "latest",
+    "react-bootstrap": "^2.10.10",
     "react-dom": "latest",
     "react-rnd": "^10.5.3",
     "vite": "latest"
