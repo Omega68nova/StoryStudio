@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from app.database import utc_now
+from app.data.dataProvider import DataProvider
 
 
 @dataclass(slots=True, frozen=True)
@@ -24,8 +24,12 @@ class MusicManager:
         db: Any,
         world: Any,
         events: Any | None = None,
+        *,
+        data_provider: DataProvider | None = None,
     ) -> None:
         self.db = db
+        self.data = data_provider or DataProvider(db)
+        self.repo = self.data.music
         self.world = world
         self.events = events
 
@@ -35,210 +39,69 @@ class MusicManager:
         *,
         head_node_id: str | None = None,
     ) -> dict[str, Any]:
-        settings = (
-            self.db.fetch_one(
-                "SELECT * "
-                "FROM project_music_settings "
-                "WHERE project_id=?",
-                (project_id,),
-            )
-            or {
-                "project_id": project_id,
-                "mode": "disabled",
-                "volume": 0.7,
-                "manual_theme_id": None,
-            }
-        )
-
-        settings[
-            "enabled_theme_ids"
-        ] = [
-            row["theme_id"]
-            for row in self.db.fetch_all(
-                "SELECT theme_id "
-                "FROM project_music_themes "
-                "WHERE project_id=?",
-                (project_id,),
-            )
-        ]
-
-        projection = self.world.projection(
-            project_id,
-            head_node_id,
-        )
-        settings[
-            "current_theme_id"
-        ] = projection.get(
-            "current_theme_id"
-        )
-
-        playback = self.playback(
-            project_id
-        )
-        settings[
-            "shared_theme_id"
-        ] = playback.theme_id
-        settings[
-            "current_track_id"
-        ] = playback.track_id
-        settings[
-            "playback_revision"
-        ] = playback.revision
-        settings[
-            "playback_updated_by"
-        ] = playback.updated_by
-
+        settings = dict(self.repo.project_settings(project_id))
+        settings["enabled_theme_ids"] = self.repo.enabled_theme_ids(project_id)
+        projection = self.world.projection(project_id, head_node_id)
+        settings["current_theme_id"] = projection.get("current_theme_id")
+        playback = self.playback(project_id)
+        settings["shared_theme_id"] = playback.theme_id
+        settings["current_track_id"] = playback.track_id
+        settings["playback_revision"] = playback.revision
+        settings["playback_updated_by"] = playback.updated_by
         return settings
 
-    def playback(
-        self,
-        project_id: str,
-    ) -> MusicPlayback:
-        row = (
-            self.db.fetch_one(
-                "SELECT theme_id,track_id,"
-                "revision,"
-                "updated_by_name_snapshot,"
-                "updated_at "
-                "FROM project_music_playback "
-                "WHERE project_id=?",
-                (project_id,),
-            )
-            or {}
-        )
+    def playback(self, project_id: str) -> MusicPlayback:
+        row = self.repo.playback(project_id)
         return MusicPlayback(
             project_id=project_id,
             theme_id=row.get("theme_id"),
             track_id=row.get("track_id"),
-            revision=int(
-                row.get("revision")
-                or 0
-            ),
-            updated_by=row.get(
-                "updated_by_name_snapshot"
-            ),
-            updated_at=row.get(
-                "updated_at"
-            ),
+            revision=int(row.get("revision") or 0),
+            updated_by=row.get("updated_by_name_snapshot"),
+            updated_at=row.get("updated_at"),
         )
 
-    def available_themes(
-        self,
-        project_id: str,
-    ) -> list[dict[str, Any]]:
-        return self.db.fetch_all(
-            "SELECT t.id,t.name,t.description,"
-            "t.playback_mode "
-            "FROM music_themes t "
-            "JOIN project_music_themes p "
-            "ON p.theme_id=t.id "
-            "WHERE p.project_id=? "
-            "ORDER BY t.name",
-            (project_id,),
-        )
+    def available_themes(self, project_id: str) -> list[dict[str, Any]]:
+        return self.repo.available_themes(project_id)
 
-    def theme_tracks(
-        self,
-        theme_id: str,
-    ) -> list[dict[str, Any]]:
-        return self.db.fetch_all(
-            "SELECT * FROM music_tracks "
-            "WHERE theme_id=? "
-            "ORDER BY position,title",
-            (theme_id,),
-        )
+    def theme_tracks(self, theme_id: str) -> list[dict[str, Any]]:
+        return self.repo.theme_tracks(theme_id)
 
     async def apply_storyteller_theme(
         self,
         project_id: str,
         theme_id: str,
     ) -> MusicPlayback | None:
-        """Synchronize shared playback after a canonical selectTheme mutation."""
-        allowed = self.db.fetch_one(
-            "SELECT 1 FROM project_music_themes "
-            "WHERE project_id=? AND theme_id=?",
-            (
-                project_id,
-                theme_id,
-            ),
-        )
-        theme = self.db.fetch_one(
-            "SELECT id,name "
-            "FROM music_themes "
-            "WHERE id=?",
-            (theme_id,),
-        )
-        track = self.db.fetch_one(
-            "SELECT id,title "
-            "FROM music_tracks "
-            "WHERE theme_id=? "
-            "ORDER BY position,title LIMIT 1",
-            (theme_id,),
-        )
-
-        if (
-            not allowed
-            or not theme
-            or not track
-        ):
+        if not self.repo.theme_is_enabled(project_id, theme_id):
+            return None
+        theme = self.repo.theme(theme_id)
+        track = self.repo.first_track(theme_id)
+        if not theme or not track:
             return None
 
-        now = utc_now()
-        self.db.execute(
-            "INSERT INTO project_music_playback"
-            "(project_id,theme_id,track_id,revision,"
-            "updated_by_name_snapshot,updated_at) "
-            "VALUES(?,?,?,1,'Storyteller',?) "
-            "ON CONFLICT(project_id) DO UPDATE SET "
-            "theme_id=excluded.theme_id,"
-            "track_id=excluded.track_id,"
-            "revision="
-            "project_music_playback.revision+1,"
-            "updated_by_user_id=NULL,"
-            "updated_by_name_snapshot="
-            "'Storyteller',"
-            "updated_at=excluded.updated_at",
-            (
-                project_id,
-                theme_id,
-                track["id"],
-                now,
-            ),
+        self.repo.set_playback(
+            project_id=project_id,
+            theme_id=theme_id,
+            track_id=track["id"],
+            updated_by_user_id=None,
+            updated_by_name="Storyteller",
         )
-
-        playback = self.playback(
-            project_id
-        )
+        playback = self.playback(project_id)
 
         if self.events is not None:
             await self.events.publish(
                 "music",
                 {
                     "project_id": project_id,
-                    "action": (
-                        "playback_changed"
-                    ),
-                    "shared_theme_id": (
-                        theme_id
-                    ),
-                    "current_track_id": (
-                        track["id"]
-                    ),
-                    "playback_updated_by": (
-                        "Storyteller"
-                    ),
-                    "playback_revision": (
-                        playback.revision
-                    ),
-                    "theme_name": (
-                        theme["name"]
-                    ),
-                    "track_title": (
-                        track["title"]
-                    ),
+                    "action": "playback_changed",
+                    "shared_theme_id": theme_id,
+                    "current_track_id": track["id"],
+                    "playback_updated_by": "Storyteller",
+                    "playback_revision": playback.revision,
+                    "theme_name": theme["name"],
+                    "track_title": track["title"],
                 },
             )
-
         return playback
 
     async def apply_story_mutations(
@@ -247,28 +110,15 @@ class MusicManager:
         mutations: list[Any],
     ) -> MusicPlayback | None:
         cue = next(
-            (
-                mutation
-                for mutation
-                in reversed(mutations)
-                if mutation.tool
-                == "selectTheme"
-            ),
+            (m for m in reversed(mutations) if m.tool == "selectTheme"),
             None,
         )
         if not cue:
             return None
-
-        theme_id = cue.arguments.get(
-            "theme_id"
-        )
+        theme_id = cue.arguments.get("theme_id")
         if not theme_id:
             return None
-
-        return await self.apply_storyteller_theme(
-            project_id,
-            str(theme_id),
-        )
+        return await self.apply_storyteller_theme(project_id, str(theme_id))
 
     async def set_shared_playback(
         self,
@@ -279,99 +129,34 @@ class MusicManager:
         updated_by_user_id: str | None,
         updated_by_name: str,
     ) -> MusicPlayback:
-        allowed = self.db.fetch_one(
-            "SELECT 1 "
-            "FROM project_music_themes "
-            "WHERE project_id=? "
-            "AND theme_id=?",
-            (
-                project_id,
-                theme_id,
-            ),
-        )
-        track = self.db.fetch_one(
-            "SELECT id,title "
-            "FROM music_tracks "
-            "WHERE id=? AND theme_id=?",
-            (
-                track_id,
-                theme_id,
-            ),
-        )
-        theme = self.db.fetch_one(
-            "SELECT id,name "
-            "FROM music_themes "
-            "WHERE id=?",
-            (theme_id,),
-        )
+        if not self.repo.theme_is_enabled(project_id, theme_id):
+            raise ValueError("Select an enabled theme and one of its tracks")
+        track = self.repo.track(track_id, theme_id)
+        theme = self.repo.theme(theme_id)
+        if not track or not theme:
+            raise ValueError("Select an enabled theme and one of its tracks")
 
-        if (
-            not allowed
-            or not track
-            or not theme
-        ):
-            raise ValueError(
-                "Select an enabled theme and one of its tracks"
-            )
-
-        now = utc_now()
-        self.db.execute(
-            "INSERT INTO project_music_playback"
-            "(project_id,theme_id,track_id,revision,"
-            "updated_by_user_id,"
-            "updated_by_name_snapshot,updated_at) "
-            "VALUES(?,?,?,1,?,?,?) "
-            "ON CONFLICT(project_id) DO UPDATE SET "
-            "theme_id=excluded.theme_id,"
-            "track_id=excluded.track_id,"
-            "revision="
-            "project_music_playback.revision+1,"
-            "updated_by_user_id="
-            "excluded.updated_by_user_id,"
-            "updated_by_name_snapshot="
-            "excluded.updated_by_name_snapshot,"
-            "updated_at=excluded.updated_at",
-            (
-                project_id,
-                theme_id,
-                track_id,
-                updated_by_user_id,
-                updated_by_name,
-                now,
-            ),
+        self.repo.set_playback(
+            project_id=project_id,
+            theme_id=theme_id,
+            track_id=track_id,
+            updated_by_user_id=updated_by_user_id,
+            updated_by_name=updated_by_name,
         )
-
-        playback = self.playback(
-            project_id
-        )
+        playback = self.playback(project_id)
 
         if self.events is not None:
             await self.events.publish(
                 "music",
                 {
                     "project_id": project_id,
-                    "action": (
-                        "playback_changed"
-                    ),
-                    "shared_theme_id": (
-                        theme_id
-                    ),
-                    "current_track_id": (
-                        track_id
-                    ),
-                    "playback_revision": (
-                        playback.revision
-                    ),
-                    "playback_updated_by": (
-                        updated_by_name
-                    ),
-                    "theme_name": (
-                        theme["name"]
-                    ),
-                    "track_title": (
-                        track["title"]
-                    ),
+                    "action": "playback_changed",
+                    "shared_theme_id": theme_id,
+                    "current_track_id": track_id,
+                    "playback_revision": playback.revision,
+                    "playback_updated_by": updated_by_name,
+                    "theme_name": theme["name"],
+                    "track_title": track["title"],
                 },
             )
-
         return playback
