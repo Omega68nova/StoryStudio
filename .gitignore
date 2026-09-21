@@ -7,4 +7,5 @@ frontend/dist/
 data/
 .env
 *.log
+public/sounds/*
 

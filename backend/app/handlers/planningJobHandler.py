@@ -1,0 +1,1191 @@
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import Any, Awaitable, Callable
+
+from app.database import new_id, utc_now
+from app.services.job_handlers import BaseJobHandler, JobExecutionContext
+from app.services.planning import (
+    PlanningService,
+    random_direction_messages,
+    stage_prompt,
+)
+from app.services.planning_v2 import (
+    generated_stage_has_content,
+    merge_generated_batch,
+    normalize_generated_defaults,
+)
+from app.services.runtimes import RuntimeFailure
+from app.services.story_planner import parse_json_object
+from app.services.world import WorldEngine, WorldValidationError
+
+
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+def _planning_json_error(raw: str) -> json.JSONDecodeError | None:
+    text = raw.strip()
+    if text.startswith("```"):
+        first_break = text.find("\n")
+        text = text[first_break + 1:] if first_break >= 0 else text[3:]
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+    try:
+        json.loads(text)
+    except json.JSONDecodeError as exc:
+        return exc
+    return None
+
+
+def _open_json_containers(text: str) -> tuple[list[tuple[str, int]], bool]:
+    stack: list[tuple[str, int]] = []
+    in_string = False
+    escaped = False
+
+    for position, character in enumerate(text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        elif character in "[{":
+            stack.append((character, position))
+        elif character in "]}":
+            if stack:
+                stack.pop()
+
+    return stack, in_string
+
+
+def _looks_like_token_truncation(
+    raw: str,
+    error: json.JSONDecodeError,
+) -> bool:
+    text = raw.rstrip()
+    near_end = error.pos >= max(0, len(text) - 48)
+    stack, in_string = _open_json_containers(text)
+    return (
+        "Unterminated string" in error.msg
+        or (near_end and (in_string or bool(stack)))
+    )
+
+
+def _read_settings(context: JobExecutionContext) -> dict[str, Any]:
+    row = (
+        context.db.fetch_one(
+            "SELECT * FROM runtime_settings WHERE id=1"
+        )
+        or {}
+    )
+    row["llama_extra_args"] = json.loads(
+        row.pop("llama_extra_args_json", "[]")
+    )
+    row["comfy_command"] = json.loads(
+        row.pop("comfy_command_json", "[]")
+    )
+    row["data_dir"] = str(context.db.data_dir)
+    return row
+
+
+class PlanningJobHandler(BaseJobHandler):
+    """Handles legacy Planning v2 generation jobs outside the scheduler.
+
+    This intentionally preserves current behavior while the future
+    BatchGenerationManager is being designed.
+
+    Responsibilities:
+      * random planning directions
+      * raw llama.cpp structured planning autocomplete
+      * prompt/context budgeting
+      * append/repair flows
+      * stage validation
+      * preserving invalid structured output for repair
+      * planning automation / next-stage enqueue
+      * planning-stage cancellation/failure cleanup
+      * planning-specific model-request/diagnostic metrics
+    """
+
+    def __init__(self) -> None:
+        self._metrics: dict[str, dict[str, Any]] = {}
+
+    async def run(self, context: JobExecutionContext) -> None:
+        await context.state("planning_world")
+
+        llama = await context.ai.ensure_text_ready(
+            "planning",
+            reason="planning generation requested",
+        )
+
+        payload = context.payload
+        self._start_metrics(context)
+
+        if payload.get("action") == "random_direction":
+            await self._random_direction(context, llama)
+            return
+
+        world = WorldEngine(context.db)
+        planning = PlanningService(context.db, world)
+
+        session, stage, approved = planning.stage_for_generation(
+            payload["session_id"],
+            int(payload["stage_number"]),
+        )
+
+        stage_number = int(stage["stage_number"])
+        stage_name = str(stage["kind"]).replace("_", " ").title()
+        stage_label = f"Stage {stage_number}/8 · {stage_name}"
+
+        if stage.get("active_job_id") != context.job_id:
+            context.db.update_job(
+                context.job_id,
+                "cancelled",
+                error="Superseded planning revision",
+            )
+            return
+
+        context.db.execute(
+            "UPDATE planning_stages "
+            "SET status='generating', updated_at=? "
+            "WHERE id=? AND active_job_id=?",
+            (
+                utc_now(),
+                stage["id"],
+                context.job_id,
+            ),
+        )
+
+        await self._job_phase(
+            context,
+            "planning_context",
+            f"{stage_label}: preparing compact context",
+        )
+
+        if context.cancel_event.is_set():
+            raise asyncio.CancelledError
+
+        async def planning_progress(
+            update: dict[str, Any],
+        ) -> None:
+            message = (
+                f"{stage_label}: generating structured draft"
+            )
+            if (
+                update.get("tokens_cached") is not None
+                or update.get("tokens_evaluated") is not None
+            ):
+                message += (
+                    f"; cached "
+                    f"{int(update.get('tokens_cached') or 0):,}, "
+                    f"evaluated "
+                    f"{int(update.get('tokens_evaluated') or 0):,} "
+                    f"prompt tokens"
+                )
+
+            context.db.update_job_progress(
+                context.job_id,
+                "planning_generating",
+                message,
+                update.get("value"),
+                update.get("max"),
+            )
+            await context.events.publish(
+                "job",
+                {
+                    "job_id": context.job_id,
+                    "status": "running",
+                    "stage": "planning_generating",
+                    "message": message,
+                    "value": update.get("value"),
+                    "max": update.get("max"),
+                },
+            )
+
+        count_prompt_tokens = getattr(
+            llama,
+            "count_prompt_tokens",
+            None,
+        )
+        apply_template = getattr(
+            llama,
+            "apply_template",
+            None,
+        )
+        if not count_prompt_tokens or not apply_template:
+            raise RuntimeFailure(
+                "The configured llama.cpp runtime is missing raw planning "
+                "autocomplete support. Update llama.cpp before generating "
+                "structured planning stages."
+            )
+
+        settings = _read_settings(context)
+        context_tokens = int(
+            settings.get(
+                "planning_context_tokens",
+                settings.get("context_tokens", 8192),
+            )
+        )
+
+        desired_outputs = {
+            1: 1000,
+            2: 2300,
+            3: 2400,
+            4: 1900,
+            5: 2200,
+            6: 2200,
+            7: 1800,
+        }
+        desired_output = desired_outputs.get(
+            stage_number,
+            900,
+        )
+
+        focus = str(payload.get("focus") or "") or None
+        append = bool(payload.get("append"))
+
+        if append:
+            desired_output = min(desired_output, 1200)
+        if payload.get("repair"):
+            desired_output = max(desired_output, 1200)
+
+        if context_tokens < 2048:
+            raise RuntimeFailure(
+                f"The configured llama.cpp context "
+                f"({context_tokens} tokens) is too small for preplanning. "
+                "Use at least 2048 tokens in Runtime Settings."
+            )
+
+        available_prompt = max(
+            768,
+            context_tokens - desired_output - 768,
+        )
+        character_budget = max(
+            3_500,
+            available_prompt * 2,
+        )
+
+        inventory = planning.world_inventory(
+            session["project_id"],
+            include_catalogs=stage_number == 7,
+            session_id=session["id"],
+        )
+
+        repair_text = (
+            str(stage.get("raw_draft_text") or "")
+            if payload.get("repair")
+            else ""
+        )
+
+        existing_draft = (
+            json.loads(stage["draft_json"])
+            if append and stage.get("draft_json")
+            else None
+        )
+
+        messages = stage_prompt(
+            stage,
+            session,
+            approved,
+            inventory,
+            character_budget=character_budget,
+            repair_text=repair_text,
+            focus=focus,
+            existing_draft=existing_draft,
+        )
+
+        await self._job_phase(
+            context,
+            "planning_budget",
+            f"{stage_label}: checking context budget",
+        )
+
+        formatted_prompt = await apply_template(messages)
+        prompt_tokens = int(
+            await count_prompt_tokens(formatted_prompt)
+        )
+
+        while (
+            prompt_tokens > available_prompt
+            and character_budget > 3_500
+        ):
+            character_budget = max(
+                3_500,
+                int(character_budget * 0.72),
+            )
+            messages = stage_prompt(
+                stage,
+                session,
+                approved,
+                inventory,
+                character_budget=character_budget,
+                repair_text=repair_text,
+                focus=focus,
+                existing_draft=existing_draft,
+            )
+            formatted_prompt = await apply_template(messages)
+            prompt_tokens = int(
+                await count_prompt_tokens(formatted_prompt)
+            )
+
+        max_tokens = context_tokens - prompt_tokens - 512
+        if max_tokens < 256:
+            raise RuntimeFailure(
+                f"{stage_label} needs about {prompt_tokens} prompt "
+                f"tokens, leaving too little of the configured "
+                f"{context_tokens}-token context for a useful answer. "
+                "Shorten the workshop direction or stage notes, clear "
+                "unusually large approved drafts, or increase llama.cpp "
+                "context size."
+            )
+
+        budget_message = (
+            f"{stage_label}: context "
+            f"{prompt_tokens:,}/{context_tokens:,} tokens; "
+            f"reserving up to {max_tokens:,} for the draft"
+        )
+        context.db.update_job_progress(
+            context.job_id,
+            "planning_budget",
+            budget_message,
+        )
+        await context.events.publish(
+            "job",
+            {
+                "job_id": context.job_id,
+                "status": "running",
+                "stage": "planning_budget",
+                "message": budget_message,
+            },
+        )
+
+        await self._job_phase(
+            context,
+            "planning_generating",
+            f"{stage_label}: generating structured draft",
+        )
+
+        raw, generation_error, _, _ = (
+            await self._generate_planning_json_raw(
+                context,
+                llama,
+                messages,
+                context_tokens,
+                stage_label,
+                planning_progress,
+            )
+        )
+
+        validation_error: WorldValidationError | None = None
+        draft: dict[str, Any] = {}
+
+        for empty_attempt in range(3):
+            await self._job_phase(
+                context,
+                "planning_validating",
+                f"{stage_label}: validating generated structure",
+            )
+
+            batch_has_content = False
+
+            if generation_error:
+                validation_error = WorldValidationError(
+                    generation_error
+                )
+                break
+
+            try:
+                draft = parse_json_object(raw)
+                normalize_generated_defaults(
+                    stage_number,
+                    draft,
+                )
+
+                if append:
+                    batch_has_content = (
+                        generated_stage_has_content(
+                            stage_number,
+                            draft,
+                            focus,
+                        )
+                    )
+                    if batch_has_content:
+                        draft = merge_generated_batch(
+                            stage_number,
+                            existing_draft or {},
+                            draft,
+                            str(focus),
+                        )
+
+                planning.validate_draft(
+                    draft,
+                    stage_number,
+                    json.loads(session["settings_json"]),
+                )
+
+            except WorldValidationError as exc:
+                validation_error = exc
+                if not append or batch_has_content:
+                    break
+
+            usable = (
+                batch_has_content
+                if append
+                else generated_stage_has_content(
+                    stage_number,
+                    draft,
+                )
+            )
+            if usable:
+                validation_error = None
+                break
+
+            if empty_attempt >= 2:
+                validation_error = WorldValidationError(
+                    f"{stage_label} returned no usable stage "
+                    "resources after three attempts"
+                )
+                break
+
+            await self._job_phase(
+                context,
+                "planning_generating",
+                f"{stage_label}: retrying an empty or incomplete "
+                f"stage ({empty_attempt + 2}/3)",
+            )
+
+            retry_messages = [
+                *messages,
+                {
+                    "role": "user",
+                    "content": (
+                        "Your previous answer contained no usable "
+                        f"{focus or 'stage resources'} or returned only "
+                        "one nested record. Generate the requested root "
+                        "object now, following the supplied JSON shape."
+                    ),
+                },
+            ]
+
+            self._model_request(context)
+            raw, generation_error, _, _ = (
+                await self._generate_planning_json_raw(
+                    context,
+                    llama,
+                    retry_messages,
+                    context_tokens,
+                    stage_label,
+                    planning_progress,
+                )
+            )
+
+        if validation_error:
+            await self._preserve_invalid_output(
+                context,
+                planning,
+                stage,
+                stage_number,
+                raw,
+                validation_error,
+            )
+            return
+
+        current = context.db.fetch_one(
+            "SELECT active_job_id FROM planning_stages WHERE id=?",
+            (stage["id"],),
+        )
+        if (
+            not current
+            or current["active_job_id"] != context.job_id
+        ):
+            context.db.update_job(
+                context.job_id,
+                "cancelled",
+                error="Superseded planning revision",
+            )
+            return
+
+        if not planning.save_generated_draft(
+            stage["id"],
+            context.job_id,
+            draft,
+        ):
+            context.db.update_job(
+                context.job_id,
+                "cancelled",
+                error="Superseded planning revision",
+            )
+            return
+
+        await self._job_phase(
+            context,
+            "planning_saving",
+            f"{stage_label}: saving editable draft",
+        )
+
+        automation = None
+        if payload.get("automate"):
+            automation = await self._advance_automation(
+                context,
+                planning,
+                session,
+                stage_number,
+                draft,
+            )
+
+        result = {
+            "stage_id": stage["id"],
+            "automation": automation,
+        }
+        context.db.update_job(
+            context.job_id,
+            "completed",
+            result=result,
+        )
+
+        await context.events.publish(
+            "planning",
+            {
+                "job_id": context.job_id,
+                "session_id": payload["session_id"],
+                "stage_number": payload["stage_number"],
+                "draft": draft,
+            },
+        )
+        await context.events.publish(
+            "job",
+            {
+                "job_id": context.job_id,
+                "status": "completed",
+            },
+        )
+
+    async def cancel(
+        self,
+        context: JobExecutionContext,
+    ) -> None:
+        self._finish_planning_stage(
+            context,
+            "cancelled",
+        )
+
+    async def failed(
+        self,
+        context: JobExecutionContext,
+        error: BaseException,
+    ) -> None:
+        self._finish_planning_stage(
+            context,
+            "failed",
+        )
+
+    # ------------------------------------------------------------------
+    # Random direction
+    # ------------------------------------------------------------------
+
+    async def _random_direction(
+        self,
+        context: JobExecutionContext,
+        llama: Any,
+    ) -> None:
+        await self._job_phase(
+            context,
+            "planning_generating",
+            "Inventing a random story direction",
+        )
+
+        messages = random_direction_messages(
+            str(context.payload.get("theme") or "")
+        )
+
+        self._model_request(context)
+
+        complete_stream = getattr(
+            llama,
+            "complete_stream",
+            None,
+        )
+        if complete_stream:
+            raw = await complete_stream(
+                messages,
+                max_tokens=600,
+                temperature=1.25,
+                cancel_event=context.cancel_event,
+            )
+        else:
+            raw = await llama.complete(
+                messages,
+                max_tokens=600,
+                temperature=1.25,
+            )
+
+        direction = str(raw or "").strip()
+        if not direction:
+            raise RuntimeFailure(
+                "The storyteller returned an empty random direction"
+            )
+
+        result = {
+            "direction": direction,
+            "temperature": 1.25,
+        }
+        context.db.update_job(
+            context.job_id,
+            "completed",
+            result=result,
+        )
+        await context.events.publish(
+            "job",
+            {
+                "job_id": context.job_id,
+                "project_id": context.project_id,
+                "status": "completed",
+                "result": result,
+            },
+        )
+
+    # ------------------------------------------------------------------
+    # Raw planning generation
+    # ------------------------------------------------------------------
+
+    async def _generate_planning_json_raw(
+        self,
+        context: JobExecutionContext,
+        llama: Any,
+        messages: list[dict[str, str]],
+        context_tokens: int,
+        stage_label: str,
+        progress: ProgressCallback,
+    ) -> tuple[str, str | None, int, int]:
+        apply_template = getattr(
+            llama,
+            "apply_template",
+            None,
+        )
+        raw_complete = getattr(
+            llama,
+            "raw_complete_stream",
+            None,
+        )
+
+        if not apply_template or not raw_complete:
+            raise RuntimeFailure(
+                "The configured llama.cpp runtime does not support raw "
+                "planning autocomplete. Update llama.cpp so "
+                "/apply-template, /completion, and /props are available."
+            )
+
+        formatted_prompt = await apply_template(messages)
+        count_prompt = getattr(
+            llama,
+            "count_prompt_tokens",
+            None,
+        )
+        prompt_tokens = (
+            int(await count_prompt(formatted_prompt))
+            if count_prompt
+            else max(1, len(formatted_prompt) // 3)
+        )
+
+        combined = ""
+        last_allowance = 0
+
+        for attempt in range(4):
+            if context.cancel_event.is_set():
+                raise asyncio.CancelledError
+
+            full_prompt = formatted_prompt + combined
+            used_tokens = (
+                int(await count_prompt(full_prompt))
+                if count_prompt
+                else max(1, len(full_prompt) // 3)
+            )
+            allowance = context_tokens - used_tokens - 128
+            last_allowance = max(0, allowance)
+
+            if allowance < 64:
+                context.db.update_job_partial_output(
+                    context.job_id,
+                    combined,
+                )
+                return (
+                    combined,
+                    (
+                        f"{stage_label} exhausted its "
+                        f"{context_tokens:,}-token planning context while "
+                        "autocomplete was still incomplete. The partial "
+                        "JSON was preserved; use a larger planning context "
+                        "or generate a smaller set."
+                    ),
+                    prompt_tokens,
+                    last_allowance,
+                )
+
+            if attempt:
+                await self._job_phase(
+                    context,
+                    "planning_generating",
+                    f"{stage_label}: autocompleting unfinished JSON "
+                    f"({attempt}/3)",
+                )
+
+            self._model_request(context)
+
+            result = await raw_complete(
+                full_prompt,
+                n_predict=allowance,
+                cache_prompt=True,
+                id_slot=0,
+                temperature=0.0 if attempt else None,
+                cancel_event=context.cancel_event,
+                progress=progress,
+                stop_when=lambda suffix: (
+                    _planning_json_error(
+                        combined + suffix
+                    )
+                    is None
+                ),
+            )
+
+            suffix = str(result.get("content") or "")
+
+            if not suffix:
+                self._model_request(context)
+
+                result = await raw_complete(
+                    full_prompt,
+                    n_predict=allowance,
+                    cache_prompt=False,
+                    id_slot=0,
+                    temperature=0.0 if attempt else None,
+                    cancel_event=context.cancel_event,
+                    progress=progress,
+                    stop_when=lambda retry_suffix: (
+                        _planning_json_error(
+                            combined + retry_suffix
+                        )
+                        is None
+                    ),
+                )
+                suffix = str(result.get("content") or "")
+
+                if not suffix:
+                    details = ", ".join(
+                        f"{key}={result.get(key)!r}"
+                        for key in (
+                            "stop_type",
+                            "truncated",
+                            "tokens_cached",
+                            "tokens_evaluated",
+                            "tokens_predicted",
+                            "n_ctx",
+                        )
+                    )
+                    raise RuntimeFailure(
+                        f"{stage_label} returned no raw completion "
+                        "after a cache-free retry "
+                        f"({details})"
+                    )
+
+            combined += suffix
+            context.db.update_job_partial_output(
+                context.job_id,
+                combined,
+            )
+
+            metrics = self._metrics_for(context)
+            metrics["planning_raw_completion"] = {
+                "autocomplete_attempt": attempt,
+                "tokens_cached": result.get("tokens_cached"),
+                "tokens_evaluated": result.get(
+                    "tokens_evaluated"
+                ),
+                "tokens_predicted": result.get(
+                    "tokens_predicted"
+                ),
+                "effective_context_tokens": (
+                    result.get("n_ctx")
+                    or context_tokens
+                ),
+                "stop_type": result.get("stop_type"),
+                "truncated": bool(result.get("truncated")),
+            }
+            self._save_metrics(context)
+
+            error = _planning_json_error(combined)
+            if error is None:
+                return (
+                    combined,
+                    None,
+                    prompt_tokens,
+                    last_allowance,
+                )
+
+            stopped_for_limit = (
+                bool(result.get("truncated"))
+                or result.get("stop_type") == "limit"
+            )
+            if (
+                not stopped_for_limit
+                and not _looks_like_token_truncation(
+                    combined,
+                    error,
+                )
+            ):
+                return (
+                    combined,
+                    None,
+                    prompt_tokens,
+                    last_allowance,
+                )
+
+        return (
+            combined,
+            (
+                f"{stage_label} remained incomplete after three raw "
+                "autocomplete attempts. The partial JSON was preserved "
+                "for repair."
+            ),
+            prompt_tokens,
+            last_allowance,
+        )
+
+    # ------------------------------------------------------------------
+    # Validation / persistence
+    # ------------------------------------------------------------------
+
+    async def _preserve_invalid_output(
+        self,
+        context: JobExecutionContext,
+        planning: PlanningService,
+        stage: dict[str, Any],
+        stage_number: int,
+        raw: str,
+        validation_error: WorldValidationError,
+    ) -> None:
+        error = str(validation_error)
+
+        if not planning.save_invalid_generated_draft(
+            stage["id"],
+            context.job_id,
+            raw,
+            error,
+        ):
+            context.db.update_job(
+                context.job_id,
+                "cancelled",
+                error="Superseded planning revision",
+            )
+            return
+
+        context.db.update_job(
+            context.job_id,
+            "completed",
+            result={
+                "stage_id": stage["id"],
+                "invalid_structured_output": True,
+                "validation_error": error,
+            },
+        )
+
+        await context.events.publish(
+            "planning",
+            {
+                "job_id": context.job_id,
+                "session_id": context.payload["session_id"],
+                "stage_number": stage_number,
+                "status": "ready",
+                "raw_draft": raw,
+                "validation_error": error,
+            },
+        )
+        await context.events.publish(
+            "notice",
+            {
+                "job_id": context.job_id,
+                "message": (
+                    "The planning response was incomplete. It was "
+                    "preserved for manual editing or AI repair."
+                ),
+            },
+        )
+        await context.events.publish(
+            "job",
+            {
+                "job_id": context.job_id,
+                "status": "completed",
+            },
+        )
+
+    async def _advance_automation(
+        self,
+        context: JobExecutionContext,
+        planning: PlanningService,
+        session: dict[str, Any],
+        stage_number: int,
+        draft: dict[str, Any],
+    ) -> dict[str, Any]:
+        conflicts = planning.preflight(
+            session["id"],
+            stage_number,
+            draft,
+        )
+        unresolved = [
+            conflict
+            for conflict in conflicts
+            if not conflict.get("recommended_resolution")
+        ]
+
+        if unresolved:
+            await context.events.publish(
+                "notice",
+                {
+                    "job_id": context.job_id,
+                    "message": (
+                        "Automatic planning paused at stage "
+                        f"{stage_number}: resolve "
+                        f"{len(unresolved)} existing-world "
+                        "conflict(s)."
+                    ),
+                },
+            )
+            return {
+                "status": "paused_for_conflicts",
+                "count": len(unresolved),
+            }
+
+        resolutions = {
+            conflict["entity_key"]:
+                conflict["recommended_resolution"]
+            for conflict in conflicts
+            if conflict.get("recommended_resolution")
+        }
+
+        planning.approve_stage(
+            session["id"],
+            stage_number,
+            draft,
+            resolutions,
+        )
+
+        if stage_number >= 7:
+            planning.prepare_image_stage(session["id"])
+            await context.events.publish(
+                "notice",
+                {
+                    "job_id": context.job_id,
+                    "message": (
+                        "Automatic preplanning prepared all eight "
+                        "stages. Images are waiting for review."
+                    ),
+                },
+            )
+            return {"status": "completed"}
+
+        next_stage = context.db.fetch_one(
+            "SELECT * FROM planning_stages "
+            "WHERE session_id=? AND stage_number>? "
+            "AND status NOT IN ('approved','skipped') "
+            "ORDER BY stage_number LIMIT 1",
+            (
+                session["id"],
+                stage_number,
+            ),
+        )
+
+        if not next_stage:
+            return {"status": "completed"}
+
+        next_number = int(next_stage["stage_number"])
+
+        if next_stage["status"] == "stale":
+            await context.events.publish(
+                "notice",
+                {
+                    "job_id": context.job_id,
+                    "message": (
+                        "Automatic planning paused at stale stage "
+                        f"{next_number}. Revalidate, repair, or "
+                        "regenerate it."
+                    ),
+                },
+            )
+            return {
+                "status": "paused_for_stale_dependency",
+                "stage_number": next_number,
+            }
+
+        if next_number == 8:
+            planning.prepare_image_stage(session["id"])
+            return {
+                "status": "completed",
+                "stage_number": 8,
+            }
+
+        shared_prompt = str(
+            context.payload.get("automation_prompt") or ""
+        )
+
+        next_job = context.db.create_job(
+            session["project_id"],
+            "planning",
+            {
+                "session_id": session["id"],
+                "stage_number": next_number,
+                "human_prompt": shared_prompt,
+                "repair": False,
+                "automate": True,
+                "automation_prompt": shared_prompt,
+            },
+        )
+
+        now = utc_now()
+        context.db.execute(
+            "INSERT INTO planning_stage_revisions"
+            "(id,stage_id,job_id,prompt,status,created_at,updated_at) "
+            "VALUES(?,?,?,?, 'queued',?,?)",
+            (
+                new_id(),
+                next_stage["id"],
+                next_job["id"],
+                shared_prompt,
+                now,
+                now,
+            ),
+        )
+        context.db.execute(
+            "UPDATE planning_stages "
+            "SET human_prompt=?, status='queued', "
+            "active_job_id=?, updated_at=? WHERE id=?",
+            (
+                shared_prompt,
+                next_job["id"],
+                now,
+                next_stage["id"],
+            ),
+        )
+
+        await context.enqueue(next_job["id"])
+
+        return {
+            "status": "queued_next",
+            "stage_number": next_number,
+            "job_id": next_job["id"],
+        }
+
+    # ------------------------------------------------------------------
+    # Planning-specific cleanup
+    # ------------------------------------------------------------------
+
+    def _finish_planning_stage(
+        self,
+        context: JobExecutionContext,
+        status: str,
+    ) -> None:
+        payload = context.payload
+        session_id = payload.get("session_id")
+        stage_number = payload.get("stage_number")
+
+        if session_id is None or stage_number is None:
+            return
+
+        context.db.execute(
+            "UPDATE planning_stages "
+            "SET status=?, active_job_id=NULL, updated_at=? "
+            "WHERE session_id=? AND stage_number=? "
+            "AND active_job_id=?",
+            (
+                status,
+                utc_now(),
+                session_id,
+                stage_number,
+                context.job_id,
+            ),
+        )
+        context.db.execute(
+            "UPDATE planning_stage_revisions "
+            "SET status=?, updated_at=? WHERE job_id=?",
+            (
+                status,
+                utc_now(),
+                context.job_id,
+            ),
+        )
+
+    # ------------------------------------------------------------------
+    # Metrics
+    # ------------------------------------------------------------------
+
+    def _start_metrics(
+        self,
+        context: JobExecutionContext,
+    ) -> None:
+        existing = dict(
+            context.job.get("metrics")
+            or context.job.get("metrics_json")
+            or {}
+        )
+        existing.setdefault("model_request_count", 0)
+        existing.setdefault("phase_durations_ms", {})
+        self._metrics[context.job_id] = existing
+        self._save_metrics(context)
+
+    def _metrics_for(
+        self,
+        context: JobExecutionContext,
+    ) -> dict[str, Any]:
+        return self._metrics.setdefault(
+            context.job_id,
+            {
+                "model_request_count": 0,
+                "phase_durations_ms": {},
+            },
+        )
+
+    def _model_request(
+        self,
+        context: JobExecutionContext,
+    ) -> None:
+        metrics = self._metrics_for(context)
+        metrics["model_request_count"] = (
+            int(metrics.get("model_request_count", 0))
+            + 1
+        )
+        self._save_metrics(context)
+
+    def _save_metrics(
+        self,
+        context: JobExecutionContext,
+    ) -> None:
+        context.db.update_job_metrics(
+            context.job_id,
+            self._metrics_for(context),
+        )
+
+    # ------------------------------------------------------------------
+    # Progress helper
+    # ------------------------------------------------------------------
+
+    async def _job_phase(
+        self,
+        context: JobExecutionContext,
+        phase: str,
+        message: str,
+    ) -> None:
+        context.db.update_job_progress(
+            context.job_id,
+            phase,
+            message,
+        )
+        await context.events.publish(
+            "job",
+            {
+                "job_id": context.job_id,
+                "status": "running",
+                "stage": phase,
+                "message": message,
+            },
+        )

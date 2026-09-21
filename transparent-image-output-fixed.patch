@@ -1,0 +1,117 @@
+--- a/frontend/src/types.ts
++++ b/frontend/src/types.ts
+@@ -95,6 +95,7 @@
+ export type WorkflowMappings = {
+   positive_prompt: WorkflowMapping;
+   image_output: WorkflowMapping;
++  transparent_image_output?: WorkflowMapping | null;
+   negative_prompt?: WorkflowMapping | null;
+   seed?: WorkflowMapping | null;
+   width?: WorkflowMapping | null;
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -2430,10 +2430,12 @@
+   >({
+     positive_prompt: { node_id: "", input_name: "" },
+     image_output: { node_id: "", input_name: "" },
++    transparent_image_output: { node_id: "", input_name: "" },
+   });
+   const fields = [
+     "positive_prompt",
+     "image_output",
++    "transparent_image_output",
+     "negative_prompt",
+     "seed",
+     "width",
+@@ -2500,6 +2502,10 @@
+             node_id: String(outputs[0]?.id ?? ""),
+             input_name: "",
+           },
++          transparent_image_output: {
++            node_id: "",
++            input_name: "",
++          },
+           negative_prompt: {
+             node_id: String(negative?.id ?? ""),
+             input_name: "text",
+@@ -2540,7 +2546,9 @@
+         .filter(([, value]) => value.node_id)
+         .map(([key, value]) => [
+           key,
+-          key === "image_output" ? { node_id: value.node_id } : value,
++          ["image_output", "transparent_image_output"].includes(key)
++            ? { node_id: value.node_id }
++            : value,
+         ]),
+     ) as WorkflowMappings;
+ // filler line 2546
+@@ -2636,7 +2644,8 @@
+ // filler line 2636
+ // filler line 2637
+   function compatible(field: string, choice: MappingChoice) {
+-    if (field === "image_output") return choice.type === "OUTPUT";
++    if (["image_output", "transparent_image_output"].includes(field))
++      return choice.type === "OUTPUT";
+     if (choice.type === "OUTPUT") return false;
+     if (["positive_prompt", "negative_prompt"].includes(field))
+       return ["STRING", "UNKNOWN"].includes(choice.type);
+@@ -2654,7 +2663,7 @@
+     const value = mappings[field];
+     return !value?.node_id
+       ? ""
+-      : field === "image_output"
++      : ["image_output", "transparent_image_output"].includes(field)
+         ? value.node_id
+         : `${value.node_id}\u001f${value.input_name ?? ""}`;
+   }
+@@ -2760,8 +2769,10 @@
+ // filler line 2760
+ // filler line 2761
+               <p className="mapping-help">
+-                Image output is the terminal SaveImage/output node. ComfyUI
+-                history uses its node ID; no output socket number is needed.
++                Image output is the normal terminal SaveImage/output node.
++                Transparent image output is optional and should point to the
++                terminal node whose image already has its background removed.
++                ComfyUI history uses its node ID; no output socket number is needed.
+               </p>
+ // filler line 2766
+ // filler line 2767
+--- a/backend/app/schemas.py
++++ b/backend/app/schemas.py
+@@ -222,6 +222,7 @@
+ class WorkflowMappings(BaseModel):
+     positive_prompt: WorkflowMapping
+     image_output: WorkflowMapping
++    transparent_image_output: WorkflowMapping | None = None
+     negative_prompt: WorkflowMapping | None = None
+     seed: WorkflowMapping | None = None
+     width: WorkflowMapping | None = None
+@@ -241,6 +242,7 @@
+     workflow_preset_id: str
+     prompt: str = Field(min_length=1, max_length=20_000)
+     negative_prompt: str = Field(default="", max_length=20_000)
++    make_transparent: bool | None = None
+     seed: int | None = None
+     width: int | None = Field(default=None, ge=64, le=8192)
+     height: int | None = Field(default=None, ge=64, le=8192)
+--- a/backend/app/services/workflow.py
++++ b/backend/app/services/workflow.py
+@@ -188,7 +188,7 @@
+ // filler line 188
+ // filler line 189
+ // filler line 190
+-        if name == "image_output":
++        if name in {"image_output", "transparent_image_output"}:
+             if object_info is not None:
+                 metadata = object_info.get(node.get("class_type"))
+                 if metadata is None:
+@@ -236,7 +236,7 @@
+ // filler line 236
+     for name, value in values.items():
+         mapping = mapping_values.get(name)
+-        if mapping is None or value is None or name == "image_output":
++        if mapping is None or value is None or name in {"image_output", "transparent_image_output"}:
+             continue
+         rendered[mapping["node_id"]]["inputs"][mapping["input_name"]] = value
+ // filler line 242
