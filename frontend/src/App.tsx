@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
+import { useLiveEvents } from "./useLiveEvents";
 import { api } from "./api";
 import { PlanningStudio } from "./PlanningStudio";
 import { WorldStudio } from "./WorldStudio";
@@ -263,64 +264,38 @@ export default function App() {
       );
   }, []);
 
-  useEffect(() => {
-    if (!authUser) return;
-    let socket: WebSocket | undefined;
-    let closed = false;
-    const protocol = location.protocol === "https:" ? "wss" : "ws";
-    socket = new WebSocket(`${protocol}://${location.host}/api/events`);
-    if (closed) return;
-    socket.onmessage = (message) => {
-          const event = JSON.parse(message.data) as AppEvent;
-          if (event.type === "runtime") {
-            setRuntime(String(event.payload.state));
-            setCurrentJobId(
-              event.payload.job_id ? String(event.payload.job_id) : null,
-            );
-          }
-          if (event.type === "token")
-            setStreamText((text) => text + String(event.payload.text));
-          if (
-            [
-              "story",
-              "suggestion",
-              "image",
-              "memory_changed",
-              "world_head",
-              "approval_required",
-              "planning",
-              "npc",
-              "encounter",
-              "media",
-              "music",
-              "environment",
-              "stats",
-              "minigame",
-            ].includes(event.type) &&
-            project?.id
-          ) {
-            setStreamText("");
-            setRevision((value) => value + 1);
-            void loadProject(project.id);
-          }
-          if (event.type === "error") {
-            setError(String(event.payload.message));
-            setRevision((value) => value + 1);
-            if (project?.id) void loadProject(project.id);
-          }
-          if (event.type === "notice") setNotice(String(event.payload.message));
-          if (event.type === "music" && event.payload.action === "playback_changed") {
-            setNotice(`${String(event.payload.playback_updated_by ?? "A player")} switched music to ${String(event.payload.theme_name ?? "theme")} · ${String(event.payload.track_title ?? "track")}`);
-          }
-    };
-    socket.onclose = (event) => {
-      if (!closed && event.code === 1008) setAuthUser(null);
-    };
-    return () => {
-      closed = true;
-      socket?.close();
-    };
-  }, [authUser, loadProject, project?.id]);
+    useLiveEvents({
+      enabled: Boolean(authUser),
+      projectId: project?.id,
+      onRuntime: (state, jobId) => {
+        setRuntime(state);
+        setCurrentJobId(jobId);
+      },
+      onToken: (text) => {
+        if (text) setStreamText((current) => current + text);
+        else setStreamText("");
+      },
+      onRefresh: async () => {
+        if (!project?.id) return;
+        setStreamText("");
+        setRevision((value) => value + 1);
+        await loadProject(project.id);
+      },
+      onError: (message) => {
+        setError(message);
+        setRevision((value) => value + 1);
+      },
+      onNotice: setNotice,
+      onAuthLost: () => {
+        setAuthUser(null);
+        setAuthChecked(true);
+      },
+      onMusicChanged: (payload) => {
+        setNotice(
+          `${String(payload.playback_updated_by ?? "A player")} switched music to ${String(payload.theme_name ?? "theme")} · ${String(payload.track_title ?? "track")}`,
+        );
+      },
+    });
 
   async function logout() {
     try { await api("/auth/logout", { method: "POST" }); } catch { /* Clear the local session view even if the server already revoked it. */ }

@@ -539,8 +539,11 @@ class StoryJobHandler(BaseJobHandler):
             stream_result.stop_requested
             or context.cancel_event.is_set()
         ):
-            # Preserve exactly the prose already streamed to the user.
-            stopped_content = stream_result.content.strip()
+            stopped_content = (
+                self._complete_sentences(
+                    stream_result.content
+                )
+            )
             if not stopped_content:
                 raise asyncio.CancelledError
 
@@ -797,13 +800,9 @@ class StoryJobHandler(BaseJobHandler):
                 context.job_id,
             ),
         )
-        # Do not delete the materialized user turn here.
-        #
-        # scheduler.cancel() calls this hook while run() may still be
-        # unwinding the active text stream. The running coroutine decides
-        # whether the already-streamed prose should be committed. Deleting
-        # its parent here races with commit_stopped_story() and can cause
-        # SQLite "FOREIGN KEY constraint failed".
+        self._discard_materialized_input(
+            context
+        )
 
     async def failed(
         self,
