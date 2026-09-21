@@ -1,5 +1,4 @@
 
-import ast
 from pathlib import Path
 
 
@@ -17,7 +16,6 @@ def test_phase3_final_repository_boundaries() -> None:
         "planningRepository.py",
         "projectRepository.py",
         "reviewRepository.py",
-        "runtimeRepository.py",
         "soundRepository.py",
         "storyRepository.py",
         "workflowRepository.py",
@@ -28,48 +26,19 @@ def test_phase3_final_repository_boundaries() -> None:
 
 
 def test_managers_do_not_own_raw_sql() -> None:
-    managers = (
-        Path(__file__).resolve().parents[1]
-        / "app"
-        / "managers"
-    )
-    offenders: list[str] = []
-
+    managers = Path(__file__).resolve().parents[1] / "app" / "managers"
+    offenders = []
     for path in managers.glob("*.py"):
-        tree = ast.parse(
-            path.read_text(encoding="utf-8"),
-            filename=str(path),
-        )
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call):
-                continue
-            func = node.func
-            if not isinstance(func, ast.Attribute):
-                continue
-            if func.attr not in {
-                "fetch_one",
-                "fetch_all",
-                "execute",
-            }:
-                continue
-
-            owner = func.value
-            is_db_call = (
-                isinstance(owner, ast.Name)
-                and owner.id == "db"
-            ) or (
-                isinstance(owner, ast.Attribute)
-                and owner.attr == "db"
-            )
-            if is_db_call:
-                offenders.append(
-                    f"{path.name}:{getattr(node, 'lineno', '?')}"
-                )
-
-    assert not offenders, (
-        "Managers still perform direct database persistence: "
-        f"{offenders}"
-    )
+        text = path.read_text(encoding="utf-8")
+        upper = text.upper()
+        if any(token in upper for token in (
+            "SELECT ",
+            "INSERT INTO ",
+            "UPDATE ",
+            "DELETE FROM ",
+        )):
+            offenders.append(path.name)
+    assert not offenders, f"Managers still contain raw SQL: {offenders}"
 
 
 def test_auth_and_lifecycle_services_use_repositories() -> None:

@@ -4,7 +4,6 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
-from app.data.dataProvider import DataProvider
 from app.managers.contextBuilder import ContextBuilder, StoryContext
 from app.managers.environmentManager import EnvironmentManager
 from app.services.memory import provider_for
@@ -82,15 +81,9 @@ class StoryManager:
         db: Any,
         world: WorldEngine | None = None,
         environment: EnvironmentManager | None = None,
-        *,
-        data_provider: DataProvider | None = None,
     ) -> None:
         self.db = db
-        self.data = data_provider or DataProvider(db)
-        self.world = world or WorldEngine(
-            db,
-            data_provider=self.data,
-        )
+        self.world = world or WorldEngine(db)
         self.environment = (
             environment
             or EnvironmentManager(
@@ -222,7 +215,7 @@ class StoryManager:
         turn_key: str = "",
         skip_planning: bool = False,
     ) -> StoryTurnPlan:
-        path = self.data.stories.path(
+        path = self.db.story_path(
             request.head_node_id
         )
         summary = self._summary_for_path(
@@ -496,13 +489,48 @@ class StoryManager:
         project_id: str,
         path: list[dict[str, Any]],
     ) -> dict[str, Any] | None:
-        return self.data.stories.branch_summary_for_path(
-            project_id,
-            {node["id"] for node in path},
+        ids = {
+            node["id"]
+            for node in path
+        }
+        candidates = self.db.fetch_all(
+            "SELECT * FROM branch_summaries "
+            "WHERE project_id=? "
+            "ORDER BY created_at DESC",
+            (project_id,),
+        )
+        return next(
+            (
+                row
+                for row in candidates
+                if row["through_node_id"]
+                in ids
+            ),
+            None,
         )
 
     def _runtime_settings(
         self,
     ) -> dict[str, Any]:
-        return self.data.runtime.settings()
+        import json
 
+        row = (
+            self.db.fetch_one(
+                "SELECT * FROM runtime_settings WHERE id=1"
+            )
+            or {}
+        )
+        row["llama_extra_args"] = json.loads(
+            row.pop(
+                "llama_extra_args_json",
+                "[]",
+            )
+        )
+        row["comfy_command"] = json.loads(
+            row.pop(
+                "comfy_command_json",
+                "[]",
+            )
+        )
+        row["data_dir"] = str(self.db.data_dir)
+        return row
