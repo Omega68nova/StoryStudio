@@ -222,7 +222,6 @@ class WorkflowMapping(BaseModel):
 class WorkflowMappings(BaseModel):
     positive_prompt: WorkflowMapping
     image_output: WorkflowMapping
-    transparent_image_output: WorkflowMapping | None = None
     negative_prompt: WorkflowMapping | None = None
     seed: WorkflowMapping | None = None
     width: WorkflowMapping | None = None

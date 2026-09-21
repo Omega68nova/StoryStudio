@@ -10,12 +10,6 @@ class WorkflowValidationError(ValueError):
     pass
 
 
-OUTPUT_MAPPING_NAMES = {
-    "image_output",
-    "transparent_image_output",
-}
-
-
 def _expand_ui_subgraphs(source: dict[str, Any]) -> dict[str, Any]:
     definitions = {
         str(item.get("id")): item
@@ -162,30 +156,9 @@ def normalize_workflow_graph(
     return converted, "ui"
 
 
-def workflow_output_node_ids(mappings: WorkflowMappings) -> list[str]:
-    output_ids = [mappings.image_output.node_id]
-    if mappings.transparent_image_output is not None:
-        output_ids.append(mappings.transparent_image_output.node_id)
-    return list(dict.fromkeys(output_ids))
-
-
-def prune_workflow_graph(
-    graph: dict[str, Any],
-    outputs: WorkflowMappings | str | list[str] | tuple[str, ...],
-) -> dict[str, Any]:
-    """Keep every node required by all configured terminal outputs.
-
-    Accepting a string preserves compatibility with existing callers/tests.
-    Passing WorkflowMappings preserves both the normal and transparent output
-    branches.
-    """
-    if isinstance(outputs, WorkflowMappings):
-        output_node_ids = workflow_output_node_ids(outputs)
-    elif isinstance(outputs, str):
-        output_node_ids = [outputs]
-    else:
-        output_node_ids = list(outputs)
-
+def prune_workflow_graph(graph: dict[str, Any], output_node_id: str) -> dict[str, Any]:
+    if output_node_id not in graph:
+        return graph
     required: set[str] = set()
 
     def visit(node_id: str) -> None:
@@ -196,12 +169,7 @@ def prune_workflow_graph(
             if isinstance(value, list) and len(value) == 2 and str(value[0]) in graph:
                 visit(str(value[0]))
 
-    for output_node_id in output_node_ids:
-        visit(output_node_id)
-
-    if not required:
-        return graph
-
+    visit(output_node_id)
     return {node_id: node for node_id, node in graph.items() if node_id in required}
 
 
@@ -225,7 +193,7 @@ def validate_workflow(
         if not isinstance(node, dict):
             errors.append(f"{name}: node '{node_id}' does not exist")
             continue
-        if name in OUTPUT_MAPPING_NAMES:
+        if name == "image_output":
             if object_info is not None:
                 metadata = object_info.get(node.get("class_type"))
                 if metadata is None:
@@ -272,7 +240,7 @@ def inject_workflow(
     mapping_values = mappings.model_dump()
     for name, value in values.items():
         mapping = mapping_values.get(name)
-        if mapping is None or value is None or name in OUTPUT_MAPPING_NAMES:
+        if mapping is None or value is None or name == "image_output":
             continue
         rendered[mapping["node_id"]]["inputs"][mapping["input_name"]] = value
     return rendered

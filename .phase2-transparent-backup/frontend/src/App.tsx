@@ -2431,12 +2431,10 @@ function WorkflowStudio({
   >({
     positive_prompt: { node_id: "", input_name: "" },
     image_output: { node_id: "", input_name: "" },
-    transparent_image_output: { node_id: "", input_name: "" },
   });
   const fields = [
     "positive_prompt",
     "image_output",
-    "transparent_image_output",
     "negative_prompt",
     "seed",
     "width",
@@ -2487,10 +2485,6 @@ function WorkflowStudio({
             node_id: String(outputs[0]?.id ?? ""),
             input_name: "",
           },
-          transparent_image_output: {
-            node_id: "",
-            input_name: "",
-          },
           negative_prompt: {
             node_id: String(negative?.id ?? ""),
             input_name: "text",
@@ -2526,9 +2520,7 @@ function WorkflowStudio({
         .filter(([, value]) => value.node_id)
         .map(([key, value]) => [
           key,
-          ["image_output", "transparent_image_output"].includes(key)
-            ? { node_id: value.node_id }
-            : value,
+          key === "image_output" ? { node_id: value.node_id } : value,
         ]),
     ) as WorkflowMappings;
     try {
@@ -2645,8 +2637,7 @@ function WorkflowStudio({
     return choices;
   }, [graph, metadata, uiFormat]);
   function compatible(field: string, choice: MappingChoice) {
-    if (["image_output", "transparent_image_output"].includes(field))
-      return choice.type === "OUTPUT";
+    if (field === "image_output") return choice.type === "OUTPUT";
     if (choice.type === "OUTPUT") return false;
     if (["positive_prompt", "negative_prompt"].includes(field))
       return ["STRING", "UNKNOWN"].includes(choice.type);
@@ -2664,7 +2655,7 @@ function WorkflowStudio({
     const value = mappings[field];
     return !value?.node_id
       ? ""
-      : ["image_output", "transparent_image_output"].includes(field)
+      : field === "image_output"
         ? value.node_id
         : `${value.node_id}\u001f${value.input_name ?? ""}`;
   }
@@ -2770,10 +2761,8 @@ function WorkflowStudio({
                   : "API format"}
               </p>
               <p className="mapping-help">
-                Image output is the normal terminal SaveImage/output node.
-                Transparent image output is optional and should point to the
-                terminal node whose image already has its background removed.
-                ComfyUI history uses its node ID; no output socket number is needed.
+                Image output is the terminal SaveImage/output node. ComfyUI
+                history uses its node ID; no output socket number is needed.
               </p>
               {fields.map((field) => {
                 const choices = mappingChoices.filter((choice) =>

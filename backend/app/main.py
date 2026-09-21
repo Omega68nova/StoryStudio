@@ -2693,7 +2693,7 @@ async def create_workflow(request: WorkflowPresetCreate) -> dict[str, Any]:
         graph, source_format = normalize_workflow_graph(request.graph, object_info)
     except WorkflowValidationError as exc:
         raise HTTPException(422, {"message": "Invalid workflow file", "errors": [str(exc)]}) from exc
-    graph = prune_workflow_graph(graph, request.mappings.image_output.node_id)
+    graph = prune_workflow_graph(graph, request.mappings)
     errors = validate_workflow(graph, request.mappings, object_info)
     if errors:
         raise HTTPException(422, {"message": "Invalid workflow mapping", "errors": errors})
@@ -2737,7 +2737,7 @@ async def update_workflow(workflow_id: str, request: WorkflowPresetCreate) -> di
         graph, source_format = normalize_workflow_graph(request.graph, object_info)
     except WorkflowValidationError as exc:
         raise HTTPException(422, {"message": "Invalid workflow file", "errors": [str(exc)]}) from exc
-    graph = prune_workflow_graph(graph, request.mappings.image_output.node_id)
+    graph = prune_workflow_graph(graph, request.mappings)
     errors = validate_workflow(graph, request.mappings, object_info)
     if errors:
         raise HTTPException(422, {"message": "Invalid workflow mapping", "errors": errors})
