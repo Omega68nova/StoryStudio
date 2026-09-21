@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 from app.database import Database, new_id, utc_now
-from app.data.dataProvider import DataProvider
 from app.services.lifecycle import DataLifecycle, LifecycleConflict
 import pytest
 from app.services.planning import PlanningService
@@ -143,7 +142,6 @@ def test_restart_repairs_orphaned_queued_image_status(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_workflow_deletion_ignores_terminal_history_but_blocks_active_jobs(tmp_path: Path, monkeypatch) -> None:
     db, project, _, _ = setup(tmp_path); now = utc_now(); monkeypatch.setattr(app_main, "db", db)
-    monkeypatch.setattr(app_main, "data", DataProvider(db))
     workflow_id = new_id()
     db.execute(
         "INSERT INTO workflow_presets(id,name,graph_json,mappings_json,created_at,updated_at) VALUES(?,'Old workflow','{}','{}',?,?)",

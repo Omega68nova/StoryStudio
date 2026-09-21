@@ -9,7 +9,6 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from app.database import Database, new_id, utc_now
-from app.data.dataProvider import DataProvider
 
 
 ENTITY_KINDS = {"character", "location", "faction", "item", "lore_system", "fact", "relationship", "plot_beat"}
@@ -96,15 +95,8 @@ def make_lore_card(entity: dict[str, Any], projection: dict[str, Any]) -> dict[s
 
 
 class WorldEngine:
-    def __init__(
-        self,
-        db: Database,
-        *,
-        data_provider: DataProvider | None = None,
-    ) -> None:
+    def __init__(self, db: Database) -> None:
         self.db = db
-        self.data = data_provider or DataProvider(db)
-        self.repo = self.data.world
 
     def projection(self, project_id: str, head_node_id: str | None = None, *, use_cache: bool = True) -> dict[str, Any]:
         if head_node_id is None:
@@ -112,11 +104,15 @@ class WorldEngine:
             head_node_id = project.get("active_node_id")
         cache_key = f"{project_id}:{head_node_id or 'root'}"
         if use_cache:
-            cached = self.repo.cached_projection(cache_key)
+            cached = self.db.fetch_one("SELECT projection_json FROM world_projection_cache WHERE cache_key = ?", (cache_key,))
             if cached:
-                return cached
+                return json.loads(cached["projection_json"])
         ancestry = {node["id"] for node in self.db.story_path(head_node_id)} if head_node_id else set()
-        transactions = self.repo.committed_transactions(project_id)
+        transactions = self.db.fetch_all(
+            "SELECT * FROM world_transactions WHERE project_id = ? AND status = 'committed' "
+            "AND id NOT IN (SELECT transaction_id FROM inactive_world_transactions) ORDER BY branch_sequence, created_at",
+            (project_id,),
+        )
         visible = [tx for tx in transactions if tx["story_node_id"] is None or tx["story_node_id"] in ancestry]
         projection: dict[str, Any] = {
             "project_id": project_id,
@@ -132,7 +128,9 @@ class WorldEngine:
             "transactions": [],
         }
         for transaction in visible:
-            events = self.repo.transaction_events(transaction["id"])
+            events = self.db.fetch_all(
+                "SELECT * FROM world_events WHERE transaction_id = ? ORDER BY ordinal", (transaction["id"],)
+            )
             for event in events:
                 self.apply_event(projection, event["event_type"], json.loads(event["payload_json"]), event.get("entity_id"))
                 if event.get("entity_id") in projection["entities"]:
@@ -144,11 +142,9 @@ class WorldEngine:
             })
             projection["branch_sequence"] = transaction["branch_sequence"]
             self._expire_effects(projection)
-        self.repo.store_projection(
-            cache_key=cache_key,
-            project_id=project_id,
-            head_node_id=head_node_id,
-            projection=projection,
+        self.db.execute(
+            "INSERT OR REPLACE INTO world_projection_cache(cache_key, project_id, head_node_id, projection_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (cache_key, project_id, head_node_id, json.dumps(projection), utc_now()),
         )
         return projection
 
@@ -702,49 +698,97 @@ class WorldEngine:
                 if event_type == "entity.created":
                     new_entities[entity_id or ""] = payload["entity"]
         for minigame_session_id in (assistant or {}).get("minigame_session_ids", []):
-            minigame = self.repo.resolved_minigame(minigame_session_id)
-            if not minigame or minigame.get("result") is None:
+            minigame = self.db.fetch_one(
+                "SELECT game_key,game_version,invocation_json,result_json FROM minigame_sessions WHERE id=?",
+                (minigame_session_id,),
+            )
+            if not minigame or not minigame.get("result_json"):
                 raise WorldValidationError("Resolved minigame result is missing")
             event_rows.append((new_id(), None, "minigame.completed", {
-                "session_id": minigame_session_id,
-                "game_key": minigame["game_key"],
-                "game_version": minigame["game_version"],
-                "invocation": minigame["invocation"],
-                "result": minigame["result"],
+                "session_id": minigame_session_id, "game_key": minigame["game_key"],
+                "game_version": minigame["game_version"], "invocation": json.loads(minigame["invocation_json"]),
+                "result": json.loads(minigame["result_json"]),
             }, ordinal))
             ordinal += 1
         self._validate_projection(final)
-        transaction_id = new_id()
-        branch_sequence = len(self.db.story_path(parent_node_id)) + (
-            1 if story_node_id else 0
-        )
+        transaction_id, now = new_id(), utc_now()
+        branch_sequence = len(self.db.story_path(parent_node_id)) + (1 if story_node_id else 0)
         elapsed = final["elapsed_minutes"] - base["elapsed_minutes"]
-
-        affected_entities: list[
-            tuple[dict[str, Any], dict[str, Any]]
-        ] = []
-        for entity_id in affected:
-            entity = final["entities"].get(entity_id)
-            if entity:
-                affected_entities.append(
-                    (entity, make_lore_card(entity, final))
+        with self.db._lock, self.db.connect() as connection:
+            # Same-turn encounters and NPC records may reference an entity that
+            # was just created by an inline action, so establish entity rows first.
+            for entity in new_entities.values():
+                connection.execute(
+                    "INSERT INTO world_entities(id, project_id, kind, canonical_name, aliases_json, tags_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (entity["id"], project_id, entity["kind"], entity["name"], json.dumps(entity["aliases"]), json.dumps(entity["tags"]), now),
                 )
-
-        return self.repo.persist_commit(
-            project_id=project_id,
-            story_node_id=story_node_id,
-            parent_node_id=parent_node_id,
-            branch_sequence=branch_sequence,
-            elapsed_minutes=elapsed,
-            display_time=final.get("display_time"),
-            provenance=provenance,
-            summary=summary,
-            transaction_id=transaction_id,
-            event_rows=event_rows,
-            new_entities=list(new_entities.values()),
-            affected_entities=affected_entities,
-            assistant=assistant,
-        )
+            if assistant:
+                connection.execute(
+                    "INSERT INTO story_nodes(id, project_id, parent_id, role, content, status, created_at, pov_character_id, narration_mode) "
+                    "VALUES (?, ?, ?, 'assistant', ?, ?, ?, ?, ?)",
+                    (assistant["id"], project_id, parent_node_id, assistant["content"], assistant["status"], now,
+                     assistant["pov_character_id"], assistant["narration_mode"]),
+                )
+                for intervention in assistant.get("interventions", []):
+                    connection.execute(
+                        "INSERT INTO npc_interventions(id, story_node_id, npc_id, dialogue, attempted_action, cited_fact_ids_json, ability_key, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (new_id(), assistant["id"], intervention["npc_id"], intervention.get("dialogue", ""),
+                         intervention.get("attempted_action", ""), json.dumps(intervention.get("cited_fact_ids", [])),
+                         intervention.get("ability_key"), now),
+                    )
+                for appearance in assistant.get("appearances", []):
+                    connection.execute(
+                        "INSERT INTO scene_appearances(id, story_node_id, entity_id, outfit_id, encounter_kind, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (new_id(), assistant["id"], appearance["entity_id"], appearance.get("outfit_id"), appearance["encounter_kind"], now),
+                    )
+            connection.execute(
+                "INSERT INTO world_transactions(id, project_id, story_node_id, parent_node_id, branch_sequence, elapsed_minutes, display_time, provenance, status, summary, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'committed', ?, ?)",
+                (transaction_id, project_id, story_node_id, parent_node_id, branch_sequence, elapsed,
+                 final.get("display_time"), provenance, summary, now),
+            )
+            for event_id, entity_id, event_type, payload, event_ordinal in event_rows:
+                connection.execute(
+                    "INSERT INTO world_events(id, transaction_id, entity_id, event_type, ordinal, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (event_id, transaction_id, entity_id, event_type, event_ordinal, json.dumps(payload), now),
+                )
+                if event_type == "weather.proposed":
+                    connection.execute(
+                        "INSERT OR IGNORE INTO weather_proposals(id,project_id,name,description,tags_json,image_tags_json,transitions_json,source_story_node_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                        (payload["proposal_id"], project_id, payload["name"], payload.get("description", ""), json.dumps(payload.get("tags", [])), json.dumps(payload.get("image_tags", [])), json.dumps(payload.get("transition_ids", [])), story_node_id, now, now),
+                    )
+            for entity_id in affected:
+                entity = final["entities"].get(entity_id)
+                if not entity:
+                    continue
+                connection.execute(
+                    "UPDATE world_entities SET canonical_name = ?, aliases_json = ?, tags_json = ? WHERE id = ?",
+                    (entity["name"], json.dumps(entity.get("aliases", [])), json.dumps(entity.get("tags", [])), entity_id),
+                )
+                card, version_id = make_lore_card(entity, final), new_id()
+                connection.execute(
+                    "INSERT INTO lore_card_versions(id, entity_id, transaction_id, state_json, compact_text, visual_description, image_tags_json, search_text, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (version_id, entity_id, transaction_id, json.dumps(entity["state"]), card["compact_text"],
+                     card["visual_description"], json.dumps(card["image_tags"]), card["search_text"], now),
+                )
+                connection.execute(
+                    "INSERT INTO lore_card_search(entity_id, project_id, version_id, search_text) VALUES (?, ?, ?, ?)",
+                    (entity_id, project_id, version_id, card["search_text"]),
+                )
+            if story_node_id:
+                connection.execute("UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?", (story_node_id, now, project_id))
+                for minigame_session_id in (assistant or {}).get("minigame_session_ids", []):
+                    connection.execute(
+                        "UPDATE minigame_sessions SET status='committed',story_node_id=?,committed_at=?,updated_at=? WHERE id=? AND status IN ('resolved','committed')",
+                        (story_node_id, now, now, minigame_session_id),
+                    )
+            else:
+                connection.execute("UPDATE projects SET updated_at = ? WHERE id = ?", (now, project_id))
+            connection.execute("DELETE FROM world_projection_cache WHERE project_id = ?", (project_id,))
+        node = self.db.fetch_one("SELECT * FROM story_nodes WHERE id = ?", (story_node_id,)) if story_node_id else {}
+        transaction = self.db.fetch_one("SELECT * FROM world_transactions WHERE id = ?", (transaction_id,)) or {}
+        return node or {}, transaction
 
     def effective_stats(self, project_id: str, container: dict[str, Any], scope: str = "character") -> dict[str, float]:
         definitions = self.db.fetch_all("SELECT * FROM stat_definitions WHERE project_id = ? AND scope = ?", (project_id, scope))

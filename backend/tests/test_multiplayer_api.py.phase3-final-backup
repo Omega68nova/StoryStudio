@@ -6,8 +6,6 @@ from fastapi.testclient import TestClient
 
 from app import main
 from app.database import Database, new_id, utc_now
-from app.data.dataProvider import DataProvider
-from app.services.routeDataService import RouteDataService
 from app.services.auth import AuthService
 from app.services.environment import EnvironmentService
 from app.services.world import WorldEngine
@@ -32,9 +30,6 @@ def test_member_assignment_default_deny_and_shared_music(tmp_path: Path, monkeyp
     db.execute("INSERT INTO project_music_themes(project_id,theme_id) VALUES(?,?)", (assigned["id"], theme_id))
 
     monkeypatch.setattr(main, "db", db)
-    data = DataProvider(db)
-    monkeypatch.setattr(main, "data", data)
-    monkeypatch.setattr(main, "route_data", RouteDataService(data))
     monkeypatch.setattr(main, "auth", auth)
     client = TestClient(main.app)
     login = client.post("/api/auth/login", json={"username": "reader", "password": "temporary-member-password"})

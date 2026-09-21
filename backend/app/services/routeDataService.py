@@ -5,14 +5,15 @@ from typing import Any, Callable
 
 from app.data.dataProvider import DataProvider
 
+_MEMBER_JOB_FIELDS = {
+    "id", "project_id", "kind", "status", "phase",
+    "progress_current", "progress_total", "progress_message",
+    "error", "created_at", "updated_at", "requested_by_user_id",
+    "requester_name_snapshot", "partial_output", "metrics",
+}
+
 
 class RouteDataService:
-    """Application-facing data assembly for HTTP routes.
-
-    This service contains no SQL. It composes typed repositories into the
-    payloads required by the existing API.
-    """
-
     def __init__(
         self,
         data: DataProvider,
@@ -21,6 +22,14 @@ class RouteDataService:
     ) -> None:
         self.data = data
         self.minigame_loader = minigame_loader
+
+    @staticmethod
+    def member_job_view(job: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in job.items()
+            if key in _MEMBER_JOB_FIELDS
+        }
 
     def list_projects(
         self,
@@ -65,23 +74,19 @@ class RouteDataService:
         }
         if not admin:
             story_nodes = [
-                node
-                for node in story_nodes
+                node for node in story_nodes
                 if node["id"] in visible_story_ids
             ]
         project["story_nodes"] = story_nodes
-
         project["trashed_story_nodes"] = (
             self.data.stories.nodes(project_id, trashed=True)
-            if admin
-            else []
+            if admin else []
         )
 
         suggestions = self.data.stories.suggestions(project_id)
         if not admin:
             suggestions = [
-                item
-                for item in suggestions
+                item for item in suggestions
                 if item["story_node_id"] in visible_story_ids
             ]
         project["suggestions"] = suggestions
@@ -92,8 +97,7 @@ class RouteDataService:
             item["cited_fact_ids"] = json.loads(raw or "[]")
         if not admin:
             interventions = [
-                item
-                for item in interventions
+                item for item in interventions
                 if item["story_node_id"] in visible_story_ids
             ]
         project["npc_interventions"] = interventions
@@ -101,8 +105,7 @@ class RouteDataService:
         appearances = self.data.stories.scene_appearances(project_id)
         if not admin:
             appearances = [
-                item
-                for item in appearances
+                item for item in appearances
                 if item["story_node_id"] in visible_story_ids
             ]
         project["scene_appearances"] = appearances
@@ -124,23 +127,15 @@ class RouteDataService:
             payload = json.loads(active_job.pop("payload_json") or "{}")
             pending = payload.get("pending_action") or {}
             active_job["queue_position"] = position
-            active_job["action_type"] = (
-                pending.get("action")
-                or payload.get("action")
-            )
+            active_job["action_type"] = pending.get("action") or payload.get("action")
             active_job["input_preview"] = str(
-                pending.get("content")
-                or payload.get("guidance")
-                or ""
+                pending.get("content") or payload.get("guidance") or ""
             )[:500]
             active_job["can_cancel"] = (
                 admin
                 or active_job.get("requested_by_user_id") == user_id
             )
         project["active_jobs"] = active_jobs
-
-        # Minigame session assembly stays with the minigame domain. Slice 3A
-        # deliberately does not duplicate its persistence rules here.
         return project
 
     def list_jobs(
@@ -152,21 +147,39 @@ class RouteDataService:
     ) -> list[dict[str, Any]]:
         if admin:
             return self.data.jobs.list(
-                project_ids=[requested_project_id]
-                if requested_project_id
-                else None,
+                project_ids=[requested_project_id] if requested_project_id else None,
                 limit=None if requested_project_id else 100,
             )
 
         if not assigned_project_ids:
             return []
 
+        if (
+            requested_project_id
+            and requested_project_id not in assigned_project_ids
+        ):
+            raise PermissionError("Story is not assigned to this account")
+
         selected = (
             [requested_project_id]
             if requested_project_id
             else assigned_project_ids
         )
-        return self.data.jobs.list(
-            project_ids=selected,
-            limit=100,
-        )
+        return [
+            self.member_job_view(job)
+            for job in self.data.jobs.list(
+                project_ids=selected,
+                limit=100,
+            )
+        ]
+
+    def get_job(
+        self,
+        job_id: str,
+        *,
+        admin: bool,
+    ) -> dict[str, Any] | None:
+        job = self.data.jobs.get(job_id)
+        if not job:
+            return None
+        return job if admin else self.member_job_view(job)

@@ -1,0 +1,5984 @@
+{
+  "backend": "C:\\Users\\Pavoi\\Documents\\GitHub\\StoryStudio\\backend",
+  "scan": {
+    "raw_sql": [
+      {
+        "file": "app/bootstrap_admin.py",
+        "line": 30,
+        "preview": "UPDATE story_nodes SET author_user_id=?,author_name_snapshot=? WHERE (role='user' OR action_kind='manual_story') AND author_user_id IS NULL"
+      },
+      {
+        "file": "app/bootstrap_admin.py",
+        "line": 31,
+        "preview": "UPDATE generation_jobs SET requested_by_user_id=?,requester_name_snapshot=? WHERE requested_by_user_id IS NULL"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 237,
+        "preview": "SELECT * FROM workflow_presets WHERE id = ?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 260,
+        "preview": "UPDATE workflow_presets SET validation_status = ?, validation_error = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 336,
+        "preview": "SELECT kind FROM entity_media_assets WHERE id=?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 436,
+        "preview": "UPDATE entity_media_assets SET source='generated', status='generated', file_path=?, mime_type=?, updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 421,
+        "preview": "UPDATE image_suggestions SET status='generated', image_path=?, updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 451,
+        "preview": "SELECT id FROM planning_image_plans WHERE media_asset_id=? AND generation_job_id=?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 462,
+        "preview": "UPDATE planning_image_plans SET status='generated', media_asset_id=?, error=NULL, updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 500,
+        "preview": "UPDATE image_suggestions SET status=?, updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 512,
+        "preview": "UPDATE entity_media_assets SET status=?, updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 524,
+        "preview": "SELECT id FROM planning_image_plans WHERE media_asset_id=? AND generation_job_id=?"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 535,
+        "preview": "UPDATE planning_image_plans SET status=?, error=?, updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 82,
+        "preview": "SELECT * FROM runtime_settings WHERE id=1"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 989,
+        "preview": "SELECT * FROM planning_stages WHERE session_id=? AND stage_number>? AND status NOT IN ('approved','skipped') ORDER BY stage_number LIMIT 1"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 227,
+        "preview": "The configured llama.cpp runtime is missing raw planning autocomplete support. Update llama.cpp before generating structured planning stages."
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 676,
+        "preview": "The configured llama.cpp runtime does not support raw planning autocomplete. Update llama.cpp so /apply-template, /completion, and /props are available."
+      },
+      {
+        "file": "app/handlers/storyInlineActions.py",
+        "line": 138,
+        "preview": "SELECT id FROM minigame_sessions WHERE job_id=? AND status='awaiting_input'"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 39,
+        "preview": "SELECT * FROM runtime_settings WHERE id=1"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 791,
+        "preview": "UPDATE minigame_sessions SET status='cancelled',updated_at=? WHERE job_id=? AND status IN ('awaiting_input','resolved')"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1019,
+        "preview": "SELECT id,parent_id FROM story_nodes WHERE id=?"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1024,
+        "preview": "SELECT active_node_id FROM projects WHERE id=?"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1039,
+        "preview": "UPDATE projects SET active_node_id=?,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1049,
+        "preview": "DELETE FROM story_nodes WHERE id=?"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 929,
+        "preview": "UPDATE projects SET active_node_id=?,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 944,
+        "preview": "UPDATE generation_jobs SET payload_json=?,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 161,
+        "preview": "SELECT * FROM story_nodes WHERE id=?"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 865,
+        "preview": "INSERT INTO story_nodes(id,project_id,parent_id,role,content,status,created_at,pov_character_id,narration_mode,action_kind,author_user_id,author_name_snapshot) VALUES(?,?,?,'assist"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 897,
+        "preview": "INSERT INTO story_nodes(id,project_id,parent_id,role,content,status,created_at,pov_character_id,narration_mode,action_kind,author_user_id,author_name_snapshot) VALUES(?,?,?,'user',"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 835,
+        "preview": "SELECT active_node_id FROM projects WHERE id=?"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 957,
+        "preview": "SELECT * FROM story_nodes WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 221,
+        "preview": "SELECT n.project_id FROM image_suggestions s JOIN story_nodes n ON n.id=s.story_node_id WHERE s.image_path=? UNION SELECT project_id FROM entity_media_assets WHERE file_path=? UNIO"
+      },
+      {
+        "file": "app/main.py",
+        "line": 264,
+        "preview": "SELECT * FROM story_nodes WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 279,
+        "preview": "SELECT id FROM generation_jobs WHERE project_id=? AND kind='story' AND status IN ('queued','running','switching','awaiting_review','awaiting_minigame') LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 304,
+        "preview": "UPDATE generation_jobs SET payload_json=json_remove(payload_json,'$.guidance','$.replan_feedback') WHERE kind='story' AND status NOT IN ('queued','running','switching','awaiting_re"
+      },
+      {
+        "file": "app/main.py",
+        "line": 382,
+        "preview": "SELECT * FROM users ORDER BY username_normalized"
+      },
+      {
+        "file": "app/main.py",
+        "line": 405,
+        "preview": "SELECT * FROM users WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 416,
+        "preview": "UPDATE users SET enabled=COALESCE(?,enabled), role=COALESCE(?,role), updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 459,
+        "preview": "SELECT * FROM users WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 466,
+        "preview": "DELETE FROM users WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 544,
+        "preview": "SELECT * FROM bible_documents WHERE project_id = ? ORDER BY position"
+      },
+      {
+        "file": "app/main.py",
+        "line": 547,
+        "preview": "SELECT * FROM story_nodes WHERE project_id = ? AND trashed = 0 ORDER BY created_at"
+      },
+      {
+        "file": "app/main.py",
+        "line": 556,
+        "preview": "SELECT s.*,j.id image_job_id,j.status image_job_status,j.phase image_job_phase,j.progress_current image_progress_current,j.progress_total image_progress_total,j.progress_message im"
+      },
+      {
+        "file": "app/main.py",
+        "line": 566,
+        "preview": "SELECT i.* FROM npc_interventions i JOIN story_nodes n ON n.id = i.story_node_id WHERE n.project_id = ? AND n.trashed = 0 ORDER BY i.created_at"
+      },
+      {
+        "file": "app/main.py",
+        "line": 572,
+        "preview": "SELECT a.* FROM scene_appearances a JOIN story_nodes n ON n.id = a.story_node_id WHERE n.project_id = ? AND n.trashed = 0 ORDER BY a.created_at"
+      },
+      {
+        "file": "app/main.py",
+        "line": 588,
+        "preview": "SELECT id,kind,status,phase,progress_current,progress_total,progress_message,created_at,updated_at,requester_name_snapshot,requested_by_user_id,partial_output,payload_json FROM gen"
+      },
+      {
+        "file": "app/main.py",
+        "line": 602,
+        "preview": "SELECT s.id FROM minigame_sessions s LEFT JOIN generation_jobs j ON j.id=s.job_id WHERE s.project_id=? AND s.status IN ('awaiting_input','resolved') AND s.parent_node_id IS ? ORDER"
+      },
+      {
+        "file": "app/main.py",
+        "line": 607,
+        "preview": "SELECT id FROM minigame_sessions WHERE project_id=? AND status='committed' ORDER BY created_at"
+      },
+      {
+        "file": "app/main.py",
+        "line": 711,
+        "preview": "SELECT id FROM minigame_sessions WHERE project_id=? AND status IN ('awaiting_input','resolved') AND parent_node_id IS ? ORDER BY created_at DESC LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 781,
+        "preview": "INSERT INTO project_story_settings(project_id,default_generation_mode,response_max_tokens,ai_instructions,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET defau"
+      },
+      {
+        "file": "app/main.py",
+        "line": 793,
+        "preview": "UPDATE projects SET title = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 841,
+        "preview": "UPDATE bible_documents SET title = ?, content = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 851,
+        "preview": "UPDATE bible_documents SET content='', updated_at=? WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 944,
+        "preview": "UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 961,
+        "preview": "INSERT INTO story_node_revisions(id, story_node_id, previous_content, content, created_at) VALUES (?, ?, ?, ?, ?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 964,
+        "preview": "UPDATE story_nodes SET content = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 972,
+        "preview": "SELECT * FROM story_node_revisions WHERE story_node_id = ? ORDER BY created_at DESC"
+      },
+      {
+        "file": "app/main.py",
+        "line": 977,
+        "preview": "SELECT * FROM story_node_revisions WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 989,
+        "preview": "WITH RECURSIVE descendants(id) AS (SELECT ? UNION ALL SELECT n.id FROM story_nodes n JOIN descendants d ON n.parent_id=d.id) SELECT id FROM descendants"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1007,
+        "preview": "WITH RECURSIVE descendants(id) AS (SELECT ? UNION ALL SELECT n.id FROM story_nodes n JOIN descendants d ON n.parent_id=d.id) SELECT id FROM descendants"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1012,
+        "preview": "UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1045,
+        "preview": "DELETE FROM story_nodes WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1055,
+        "preview": "DELETE FROM story_node_revisions WHERE story_node_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1114,
+        "preview": "UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1123,
+        "preview": "SELECT job_id,parent_node_id FROM minigame_sessions WHERE project_id=? AND status IN ('awaiting_input','resolved') ORDER BY created_at DESC LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1132,
+        "preview": "UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1141,
+        "preview": "SELECT job_id FROM minigame_sessions WHERE project_id=? AND status IN ('awaiting_input','resolved') ORDER BY created_at DESC LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1151,
+        "preview": "UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1161,
+        "preview": "SELECT * FROM story_nodes WHERE project_id = ? AND parent_id IS ? AND status != 'rejected' AND trashed = 0 ORDER BY created_at DESC"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1174,
+        "preview": "UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1200,
+        "preview": "INSERT INTO user_ambient_preferences(user_id,enabled,master_volume,updated_at) VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET enabled=excluded.enabled,master_volume=excluded.ma"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1235,
+        "preview": "UPDATE project_environment_settings SET enabled=?,ai_create_locations=?,ai_propose_weather=?,auto_generate_backgrounds=?,background_workflow_id=?,initial_weather_id=?,revision=revi"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1261,
+        "preview": "UPDATE weather_definitions SET name=?,description=?,imagegen_description=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1284,
+        "preview": "DELETE FROM weather_definitions WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1327,
+        "preview": "INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled) VALUES(?,?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1337,
+        "preview": "UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,enabled=? WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1346,
+        "preview": "DELETE FROM time_phases WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1424,
+        "preview": "SELECT b.*,m.status,m.file_path,m.prompt,m.negative_prompt FROM location_backgrounds b JOIN entity_media_assets m ON m.id=b.media_asset_id WHERE b.project_id=? AND b.location_id=? "
+      },
+      {
+        "file": "app/main.py",
+        "line": 1429,
+        "preview": "SELECT id FROM world_entities WHERE id=? AND project_id=? AND kind='location'"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1434,
+        "preview": "INSERT INTO entity_media_assets(id,project_id,entity_id,kind,source,status,prompt,negative_prompt,featured,created_at,updated_at) VALUES(?,?,?,'location','suggested','suggested',?,"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1435,
+        "preview": "INSERT INTO location_backgrounds(id,project_id,location_id,media_asset_id,weather_id,time_phase_id,position,created_at) VALUES(?,?,?,?,?,?,0,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1442,
+        "preview": "SELECT * FROM ambient_variants WHERE project_id=? ORDER BY source_path,label"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1452,
+        "preview": "SELECT source_path,available FROM ambient_variants WHERE project_id=? AND source_path=? LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1456,
+        "preview": "INSERT INTO ambient_variants(id,project_id,source_path,label,playback_rate,default_gain,tags_json,enabled,available,derived,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,1,?,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1463,
+        "preview": "UPDATE ambient_variants SET label=?,playback_rate=?,default_gain=?,tags_json=?,enabled=?,updated_at=? WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1474,
+        "preview": "INSERT INTO ambient_assignments(id,project_id,owner_type,owner_id,selector_type,selector_value,weather_id,time_phase_id,variant_id) VALUES(?,?,?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1481,
+        "preview": "DELETE FROM ambient_assignments WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1499,
+        "preview": "SELECT * FROM weather_proposals WHERE project_id=? ORDER BY created_at DESC"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1507,
+        "preview": "SELECT * FROM weather_proposals WHERE id=? AND project_id=? AND status='pending'"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1516,
+        "preview": "UPDATE weather_proposals SET status=?,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1605,
+        "preview": "SELECT * FROM world_entities WHERE id = ? AND project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1610,
+        "preview": "SELECT DISTINCT t.id FROM world_transactions t JOIN world_events e ON e.transaction_id=t.id WHERE t.project_id=? AND (e.entity_id=? OR e.payload_json LIKE ?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1629,
+        "preview": "SELECT file_path FROM entity_media_assets WHERE entity_id=? AND file_path IS NOT NULL"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1632,
+        "preview": "SELECT DISTINCT t.id FROM world_transactions t JOIN world_events e ON e.transaction_id=t.id WHERE t.project_id=? AND (e.entity_id=? OR e.payload_json LIKE ?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1637,
+        "preview": "DELETE FROM lore_card_search WHERE entity_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1638,
+        "preview": "DELETE FROM world_entities WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1640,
+        "preview": "DELETE FROM world_projection_cache WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1679,
+        "preview": "SELECT e.*, t.story_node_id, t.provenance, t.summary, t.display_time, t.branch_sequence FROM world_events e JOIN world_transactions t ON t.id = e.transaction_id WHERE t.project_id "
+      },
+      {
+        "file": "app/main.py",
+        "line": 1704,
+        "preview": "SELECT * FROM entity_outfits WHERE entity_id = ? ORDER BY name"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1711,
+        "preview": "SELECT * FROM world_entities WHERE id = ? AND kind = 'character'"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1737,
+        "preview": "SELECT o.id,e.project_id FROM entity_outfits o JOIN world_entities e ON e.id=o.entity_id WHERE o.id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1741,
+        "preview": "SELECT 1 FROM scene_appearances WHERE outfit_id = ? UNION SELECT 1 FROM entity_media_assets WHERE outfit_id = ? UNION SELECT 1 FROM world_events WHERE json_extract(payload_json, '$"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1744,
+        "preview": "DELETE FROM entity_outfits WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1749,
+        "preview": "SELECT * FROM entity_outfits WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1762,
+        "preview": "SELECT e.project_id FROM entity_outfits o JOIN world_entities e ON e.id=o.entity_id WHERE o.id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1767,
+        "preview": "DELETE FROM entity_outfits WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1774,
+        "preview": "SELECT o.*, e.project_id FROM entity_outfits o JOIN world_entities e ON e.id = o.entity_id WHERE o.id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1785,
+        "preview": "SELECT * FROM entity_media_assets WHERE entity_id = ? ORDER BY created_at"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1791,
+        "preview": "UPDATE entity_media_assets SET prompt = ?, negative_prompt = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1797,
+        "preview": "SELECT * FROM entity_media_assets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1800,
+        "preview": "DELETE FROM entity_media_assets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1806,
+        "preview": "SELECT * FROM world_entities WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1840,
+        "preview": "SELECT * FROM entity_media_assets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1857,
+        "preview": "UPDATE entity_media_assets SET status = 'queued', updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1907,
+        "preview": "SELECT * FROM music_tracks WHERE sha256 = ? ORDER BY created_at LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1908,
+        "preview": "SELECT * FROM music_tracks WHERE sha256 = ? AND theme_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1913,
+        "preview": "INSERT INTO music_tracks(id, theme_id, title, file_path, mime_type, sha256, position, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1921,
+        "preview": "SELECT id, theme_id FROM music_tracks WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1924,
+        "preview": "UPDATE music_tracks SET title = ?, position = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1932,
+        "preview": "SELECT * FROM music_tracks WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1934,
+        "preview": "DELETE FROM music_tracks WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1941,
+        "preview": "SELECT 1 FROM project_music_themes WHERE theme_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1984,
+        "preview": "SELECT 1 FROM project_music_themes WHERE project_id=? AND theme_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1985,
+        "preview": "SELECT id,title FROM music_tracks WHERE id=? AND theme_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1986,
+        "preview": "SELECT id,name FROM music_themes WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1991,
+        "preview": "INSERT INTO project_music_playback(project_id,theme_id,track_id,revision,updated_by_user_id,updated_by_name_snapshot,updated_at) VALUES(?,?,?,1,?,?,?) ON CONFLICT(project_id) DO UP"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2017,
+        "preview": "SELECT * FROM stat_definitions WHERE project_id = ? ORDER BY label"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2018,
+        "preview": "SELECT * FROM ability_definitions WHERE project_id = ? ORDER BY name"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2091,
+        "preview": "SELECT * FROM stat_definitions WHERE id = ? AND project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2093,
+        "preview": "SELECT costs_json, effects_json FROM ability_definitions WHERE project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2096,
+        "preview": "DELETE FROM stat_definitions WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2102,
+        "preview": "DELETE FROM ability_definitions WHERE id = ? AND project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2128,
+        "preview": "SELECT * FROM bible_documents WHERE project_id = ? AND trim(content) != '' ORDER BY position"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2184,
+        "preview": "INSERT INTO project_story_defaults(project_id,narration_mode,pov_strategy,pov_character_id,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET narration_mode=exclud"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2372,
+        "preview": "SELECT * FROM planning_image_plans WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2381,
+        "preview": "SELECT id,validation_status FROM workflow_presets WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2383,
+        "preview": "SELECT * FROM entity_media_assets WHERE entity_id=? AND kind=? AND COALESCE(outfit_id,'')=COALESCE(?, '') AND featured=1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2393,
+        "preview": "UPDATE generation_jobs SET payload_json=? WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2440,
+        "preview": "SELECT * FROM planning_sessions WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2443,
+        "preview": "SELECT stage_number,transaction_id,legacy_link_state FROM planning_stages WHERE session_id=? AND transaction_id IS NOT NULL"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2501,
+        "preview": "SELECT r.* FROM pending_reviews r JOIN generation_jobs j ON j.id = r.job_id WHERE j.project_id = ? AND r.status = 'pending' ORDER BY r.created_at"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2511,
+        "preview": "SELECT * FROM pending_reviews WHERE id = ? AND status = 'pending'"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2569,
+        "preview": "UPDATE image_suggestions SET title = ?, prompt = ?, negative_prompt = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2578,
+        "preview": "SELECT s.*,n.project_id FROM image_suggestions s JOIN story_nodes n ON n.id=s.story_node_id WHERE s.id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2583,
+        "preview": "SELECT id FROM generation_jobs WHERE status IN ('queued','running','switching') AND json_extract(payload_json,'$.suggestion_id')=? LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2591,
+        "preview": "DELETE FROM image_suggestions WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2597,
+        "preview": "SELECT * FROM image_suggestions WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2605,
+        "preview": "SELECT id FROM generation_jobs WHERE status IN ('queued','running','switching') AND json_extract(payload_json,'$.suggestion_id')=? LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2621,
+        "preview": "SELECT id, validation_status FROM workflow_presets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2629,
+        "preview": "SELECT * FROM image_suggestions WHERE story_node_id = ? ORDER BY created_at DESC LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2656,
+        "preview": "UPDATE image_suggestions SET status = 'queued', updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2664,
+        "preview": "SELECT s.*, n.project_id FROM image_suggestions s JOIN story_nodes n ON n.id = s.story_node_id WHERE s.id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2671,
+        "preview": "SELECT id, validation_status FROM workflow_presets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2691,
+        "preview": "UPDATE image_suggestions SET status = 'queued', updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2731,
+        "preview": "INSERT INTO workflow_presets(id, name, graph_json, mappings_json, validation_status, validation_error, source_graph_json, source_format, created_at, updated_at) VALUES (?, ?, ?, ?,"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2747,
+        "preview": "SELECT * FROM workflow_presets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2771,
+        "preview": "UPDATE workflow_presets SET name = ?, graph_json = ?, mappings_json = ?, validation_status = ?, validation_error = NULL, source_graph_json = ?, source_format = ?, updated_at = ? WH"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2776,
+        "preview": "SELECT * FROM workflow_presets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2782,
+        "preview": "SELECT * FROM workflow_presets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2796,
+        "preview": "UPDATE workflow_presets SET validation_status = ?, validation_error = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2946,
+        "preview": "UPDATE runtime_settings SET llama_executable = ?, storyteller_model_path = ?, storyteller_model_id = ?, llama_url = ?, llama_extra_args_json = ?, comfy_command_json = ?, comfy_work"
+      },
+      {
+        "file": "app/main.py",
+        "line": 151,
+        "preview": "SELECT project_id FROM bible_documents WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 152,
+        "preview": "SELECT project_id FROM story_nodes WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 153,
+        "preview": "SELECT n.project_id FROM image_suggestions s JOIN story_nodes n ON n.id=s.story_node_id WHERE s.id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 154,
+        "preview": "SELECT project_id FROM minigame_sessions WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 155,
+        "preview": "SELECT project_id FROM generation_jobs WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 156,
+        "preview": "SELECT project_id FROM world_entities WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 373,
+        "preview": "SELECT COUNT(*) count FROM users WHERE role='admin' AND enabled=1 AND id<>?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 375,
+        "preview": "SELECT COUNT(*) count FROM users WHERE role='admin' AND enabled=1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 420,
+        "preview": "DELETE FROM auth_sessions WHERE user_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 427,
+        "preview": "SELECT 1 FROM users WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 439,
+        "preview": "SELECT 1 FROM users WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 448,
+        "preview": "DELETE FROM user_project_access WHERE user_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 450,
+        "preview": "INSERT INTO user_project_access(user_id,project_id,created_at) VALUES(?,?,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 534,
+        "preview": "INSERT INTO stat_definitions(id, project_id, stat_key, label, scope, default_value, minimum, maximum, integer_only, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?,"
+      },
+      {
+        "file": "app/main.py",
+        "line": 553,
+        "preview": "SELECT * FROM story_nodes WHERE project_id = ? AND trashed = 1 ORDER BY created_at"
+      },
+      {
+        "file": "app/main.py",
+        "line": 576,
+        "preview": "SELECT default_generation_mode, response_max_tokens, ai_instructions FROM project_story_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 773,
+        "preview": "SELECT default_generation_mode, response_max_tokens, ai_instructions FROM project_story_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 838,
+        "preview": "SELECT id FROM bible_documents WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 844,
+        "preview": "SELECT * FROM bible_documents WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 872,
+        "preview": "SELECT pov_character_id, narration_mode FROM story_nodes WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 994,
+        "preview": "UPDATE story_nodes SET trashed = 1 WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 997,
+        "preview": "UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1011,
+        "preview": "UPDATE story_nodes SET trashed = 0 WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1064,
+        "preview": "SELECT payload_json,result_json FROM generation_jobs WHERE kind='story' AND json_extract(result_json,'$.story_node_id')=? ORDER BY created_at DESC LIMIT 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1104,
+        "preview": "INSERT INTO minigame_sessions(id,project_id,job_id,parent_node_id,game_key,game_version,status,invocation_json,result_json,partial_prose,staged_mutations_json,interventions_json,su"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1153,
+        "preview": "SELECT * FROM story_nodes WHERE parent_id IS ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1169,
+        "preview": "SELECT * FROM story_nodes WHERE project_id = ? AND parent_id = ? AND status != 'rejected' AND trashed = 0 ORDER BY created_at DESC"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1228,
+        "preview": "SELECT id FROM weather_definitions WHERE id=? AND project_id=? AND enabled=1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1246,
+        "preview": "INSERT INTO weather_definitions(id,project_id,name,description,imagegen_description,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1256,
+        "preview": "SELECT id FROM weather_definitions WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1258,
+        "preview": "SELECT initial_weather_id FROM project_environment_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1282,
+        "preview": "SELECT initial_weather_id FROM project_environment_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1295,
+        "preview": "DELETE FROM weather_transitions WHERE project_id=? AND source_weather_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1296,
+        "preview": "INSERT INTO weather_transitions(project_id,source_weather_id,target_weather_id) VALUES(?,?,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1309,
+        "preview": "UPDATE time_phases SET position=position+1000 WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1318,
+        "preview": "UPDATE project_environment_settings SET revision=revision+1,updated_at=? WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1335,
+        "preview": "SELECT id FROM time_phases WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1356,
+        "preview": "UPDATE time_phases SET position=position+1000 WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1446,
+        "preview": "SELECT * FROM ambient_assignments WHERE project_id=? ORDER BY owner_type,owner_id"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1471,
+        "preview": "SELECT id FROM ambient_variants WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1511,
+        "preview": "INSERT INTO weather_definitions(id,project_id,name,description,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,1,?,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1636,
+        "preview": "DELETE FROM world_transactions WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1715,
+        "preview": "INSERT INTO entity_outfits(id, entity_id, name, description, equipment_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1724,
+        "preview": "SELECT id FROM entity_outfits WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1727,
+        "preview": "UPDATE entity_outfits SET name = ?, description = ?, equipment_json = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1730,
+        "preview": "SELECT * FROM entity_outfits WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1790,
+        "preview": "SELECT id FROM entity_media_assets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1792,
+        "preview": "SELECT * FROM entity_media_assets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1816,
+        "preview": "SELECT * FROM entity_media_assets WHERE entity_id = ? AND kind = ? AND COALESCE(outfit_id, '') = COALESCE(?, '') AND featured = 1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1820,
+        "preview": "UPDATE entity_media_assets SET source = 'upload', status = 'generated', file_path = ?, mime_type = ?, original_name = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1825,
+        "preview": "INSERT INTO entity_media_assets(id, project_id, entity_id, outfit_id, kind, source, status, file_path, mime_type, original_name, featured,created_at, updated_at) VALUES (?, ?, ?, ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1835,
+        "preview": "SELECT * FROM entity_media_assets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1842,
+        "preview": "SELECT id FROM workflow_presets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1866,
+        "preview": "SELECT * FROM music_themes ORDER BY name"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1869,
+        "preview": "SELECT DISTINCT t.* FROM music_themes t JOIN project_music_themes pmt ON pmt.theme_id=t.id JOIN user_project_access a ON a.project_id=pmt.project_id WHERE a.user_id=? ORDER BY t.na"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1873,
+        "preview": "SELECT * FROM music_tracks WHERE theme_id = ? ORDER BY position, title"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1880,
+        "preview": "INSERT INTO music_themes(id, name, description, playback_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1882,
+        "preview": "SELECT * FROM music_themes WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1889,
+        "preview": "SELECT id FROM music_themes WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1892,
+        "preview": "UPDATE music_themes SET name = ?, description = ?, playback_mode = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1895,
+        "preview": "SELECT * FROM music_themes WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1902,
+        "preview": "SELECT id FROM music_themes WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1914,
+        "preview": "SELECT * FROM music_tracks WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1925,
+        "preview": "SELECT * FROM music_tracks WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1948,
+        "preview": "DELETE FROM music_tracks WHERE theme_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1949,
+        "preview": "DELETE FROM music_themes WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1956,
+        "preview": "SELECT * FROM project_music_settings WHERE project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1959,
+        "preview": "SELECT theme_id,track_id,revision,updated_by_name_snapshot,updated_at FROM project_music_playback WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1977,
+        "preview": "SELECT mode FROM project_music_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1988,
+        "preview": "Select an enabled theme and one of its tracks"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1996,
+        "preview": "SELECT theme_id shared_theme_id,track_id current_track_id,revision playback_revision,updated_by_name_snapshot playback_updated_by,updated_at FROM project_music_playback WHERE proje"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2007,
+        "preview": "INSERT INTO project_music_settings(project_id, mode, manual_theme_id, volume) VALUES (?, ?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET mode=excluded.mode, manual_theme_id=excluded"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2008,
+        "preview": "DELETE FROM project_music_themes WHERE project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2009,
+        "preview": "INSERT INTO project_music_themes(project_id, theme_id) VALUES (?, ?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2027,
+        "preview": "INSERT INTO stat_definitions(id, project_id, stat_key, label, scope, default_value, minimum, maximum, integer_only, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?,"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2029,
+        "preview": "SELECT * FROM stat_definitions WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2046,
+        "preview": "SELECT id FROM stat_definitions WHERE id = ? AND project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2047,
+        "preview": "UPDATE stat_definitions SET stat_key=?, label=?, scope=?, default_value=?, minimum=?, maximum=?, integer_only=?, visibility=?, updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2049,
+        "preview": "SELECT * FROM stat_definitions WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2065,
+        "preview": "INSERT INTO ability_definitions(id, project_id, ability_key, name, description, target_type, requirements_json, costs_json, effects_json, minigame_profile_json, created_at, updated"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2072,
+        "preview": "SELECT id FROM ability_definitions WHERE id = ? AND project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2083,
+        "preview": "UPDATE ability_definitions SET ability_key=?, name=?, description=?, target_type=?, requirements_json=?, costs_json=?, effects_json=?, minigame_profile_json=?, updated_at=? WHERE i"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2174,
+        "preview": "SELECT * FROM project_story_defaults WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2382,
+        "preview": "Select a valid workflow before generating"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2386,
+        "preview": "UPDATE entity_media_assets SET prompt=?,negative_prompt=?,status='suggested',updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2388,
+        "preview": "INSERT INTO entity_media_assets(id,project_id,entity_id,outfit_id,kind,source,status,prompt,negative_prompt,featured,created_at,updated_at) VALUES(?,?,?,?,?,'suggested','suggested'"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2460,
+        "preview": "SELECT * FROM planning_sessions WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2477,
+        "preview": "DELETE FROM planning_sessions WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2478,
+        "preview": "DELETE FROM world_projection_cache WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2543,
+        "preview": "UPDATE story_nodes SET status = 'complete' WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2544,
+        "preview": "UPDATE pending_reviews SET status = 'approved', updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2551,
+        "preview": "UPDATE story_nodes SET status = 'rejected' WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2552,
+        "preview": "UPDATE projects SET active_node_id = ?, updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2553,
+        "preview": "UPDATE pending_reviews SET status = 'rejected', updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2566,
+        "preview": "SELECT id FROM image_suggestions WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2572,
+        "preview": "SELECT * FROM image_suggestions WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2636,
+        "preview": "INSERT INTO image_suggestions(id, story_node_id, title, prompt, negative_prompt, status, created_at, updated_at) VALUES (?, ?, 'Current scene', ?, ?, 'suggested', ?, ?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2643,
+        "preview": "UPDATE image_suggestions SET prompt = ?, negative_prompt = ?, status = 'suggested', updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2755,
+        "preview": "SELECT id FROM workflow_presets WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 197,
+        "preview": "SELECT n.id,p.active_node_id FROM story_nodes n JOIN projects p ON p.id=n.project_id WHERE n.id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 211,
+        "preview": "SELECT requested_by_user_id FROM generation_jobs WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 421,
+        "preview": "SELECT * FROM users WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 444,
+        "preview": "SELECT id FROM projects WHERE id IN ("
+      },
+      {
+        "file": "app/main.py",
+        "line": 813,
+        "preview": "SELECT COUNT(*) n FROM story_nodes WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 814,
+        "preview": "SELECT COUNT(*) n FROM world_entities WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 815,
+        "preview": "SELECT COUNT(*) n FROM planning_sessions WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 816,
+        "preview": "SELECT COUNT(*) n FROM generation_jobs WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 817,
+        "preview": "SELECT COUNT(*) n FROM entity_media_assets WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 818,
+        "preview": "SELECT COUNT(*) n FROM minigame_sessions WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1021,
+        "preview": "WITH RECURSIVE subtree(id) AS (SELECT ? UNION ALL SELECT n.id FROM story_nodes n JOIN subtree s ON n.parent_id=s.id) SELECT id FROM subtree"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1042,
+        "preview": "WITH RECURSIVE subtree(id) AS (SELECT ? UNION ALL SELECT n.id FROM story_nodes n JOIN subtree s ON n.parent_id=s.id) SELECT image_path FROM image_suggestions WHERE story_node_id IN"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1232,
+        "preview": "SELECT id FROM workflow_presets WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1291,
+        "preview": "SELECT id FROM weather_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1317,
+        "preview": "DELETE FROM time_phases WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1353,
+        "preview": "SELECT id FROM time_phases WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1357,
+        "preview": "UPDATE time_phases SET position=? WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1431,
+        "preview": "SELECT id FROM weather_definitions WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1432,
+        "preview": "SELECT id FROM time_phases WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1766,
+        "preview": "SELECT file_path FROM entity_media_assets WHERE outfit_id=? AND file_path IS NOT NULL"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1809,
+        "preview": "SELECT id FROM entity_outfits WHERE id = ? AND entity_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1814,
+        "preview": "SELECT id FROM weather_definitions WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1815,
+        "preview": "SELECT id FROM time_phases WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1832,
+        "preview": "UPDATE location_backgrounds SET weather_id=?,time_phase_id=? WHERE media_asset_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1912,
+        "preview": "SELECT COALESCE(MAX(position), -1) + 1 AS n FROM music_tracks WHERE theme_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1943,
+        "preview": "SELECT file_path FROM music_tracks WHERE theme_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1946,
+        "preview": "UPDATE project_music_settings SET manual_theme_id = NULL WHERE manual_theme_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1947,
+        "preview": "DELETE FROM project_music_themes WHERE theme_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1957,
+        "preview": "SELECT theme_id FROM project_music_themes WHERE project_id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2004,
+        "preview": "SELECT id FROM music_themes"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2064,
+        "preview": "SELECT id FROM stat_definitions WHERE project_id = ? AND stat_key = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2082,
+        "preview": "SELECT id FROM stat_definitions WHERE project_id = ? AND stat_key = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2476,
+        "preview": "DELETE FROM world_entities WHERE project_id=? AND id NOT IN (SELECT DISTINCT entity_id FROM world_events WHERE entity_id IS NOT NULL)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2525,
+        "preview": "UPDATE pending_reviews SET status = 'approved', updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2533,
+        "preview": "UPDATE pending_reviews SET status = 'rejected', updated_at = ? WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2640,
+        "preview": "SELECT * FROM image_suggestions WHERE id = ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 388,
+        "preview": "SELECT project_id FROM user_project_access WHERE user_id=? ORDER BY project_id"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1054,
+        "preview": "SELECT COUNT(*) n FROM story_node_revisions WHERE story_node_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1313,
+        "preview": "UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,position=?,enabled=? WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1315,
+        "preview": "INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled) VALUES(?,?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1326,
+        "preview": "SELECT COALESCE(MAX(position),-1)+1 position FROM time_phases WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1345,
+        "preview": "SELECT COUNT(*) n FROM time_phases WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1512,
+        "preview": "SELECT id FROM weather_definitions WHERE project_id=? AND enabled=1"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1615,
+        "preview": "SELECT COUNT(*) n FROM lore_card_versions WHERE entity_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1616,
+        "preview": "SELECT COUNT(*) n FROM scene_appearances WHERE entity_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1617,
+        "preview": "SELECT COUNT(*) n FROM entity_media_assets WHERE entity_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1618,
+        "preview": "SELECT COUNT(*) n FROM entity_outfits WHERE entity_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2475,
+        "preview": "DELETE FROM world_transactions WHERE id IN ("
+      },
+      {
+        "file": "app/main.py",
+        "line": 508,
+        "preview": "SELECT project_id FROM generation_jobs WHERE id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1024,
+        "preview": "SELECT COUNT(*) n FROM image_suggestions WHERE story_node_id IN ("
+      },
+      {
+        "file": "app/main.py",
+        "line": 1025,
+        "preview": "SELECT COUNT(*) n FROM story_node_revisions WHERE story_node_id IN ("
+      },
+      {
+        "file": "app/main.py",
+        "line": 1336,
+        "preview": "SELECT COUNT(*) n FROM time_phases WHERE project_id=? AND enabled=1 AND id<>?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2474,
+        "preview": "DELETE FROM lore_card_search WHERE version_id IN ("
+      },
+      {
+        "file": "app/main.py",
+        "line": 1307,
+        "preview": "SELECT id FROM time_phases WHERE project_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1753,
+        "preview": "SELECT COUNT(*) n FROM scene_appearances WHERE outfit_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1754,
+        "preview": "SELECT COUNT(*) n FROM entity_media_assets WHERE outfit_id=?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1755,
+        "preview": "SELECT COUNT(*) n FROM world_events WHERE payload_json LIKE ?"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2448,
+        "preview": "SELECT COUNT(DISTINCT entity_id) n FROM world_events WHERE transaction_id IN ("
+      },
+      {
+        "file": "app/main.py",
+        "line": 2449,
+        "preview": "SELECT COUNT(*) n FROM world_events WHERE transaction_id IN ("
+      },
+      {
+        "file": "app/main.py",
+        "line": 2450,
+        "preview": "SELECT COUNT(*) n FROM lore_card_versions WHERE transaction_id IN ("
+      },
+      {
+        "file": "app/main.py",
+        "line": 2471,
+        "preview": "SELECT id FROM lore_card_versions WHERE transaction_id IN ("
+      },
+      {
+        "file": "app/managers/aiManager.py",
+        "line": 143,
+        "preview": "The external llama.cpp server did not report its effective context through /props. Update llama.cpp before using raw planning autocomplete."
+      },
+      {
+        "file": "app/managers/musicManager.py",
+        "line": 133,
+        "preview": "Select an enabled theme and one of its tracks"
+      },
+      {
+        "file": "app/managers/musicManager.py",
+        "line": 137,
+        "preview": "Select an enabled theme and one of its tracks"
+      },
+      {
+        "file": "app/managers/storyManager.py",
+        "line": 497,
+        "preview": "SELECT * FROM branch_summaries WHERE project_id=? ORDER BY created_at DESC"
+      },
+      {
+        "file": "app/managers/storyManager.py",
+        "line": 519,
+        "preview": "SELECT * FROM runtime_settings WHERE id=1"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 104,
+        "preview": "SELECT * FROM users WHERE username_normalized=?"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 118,
+        "preview": "INSERT INTO auth_sessions(id,user_id,token_hash,expires_at,created_at,last_seen_at) VALUES(?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 121,
+        "preview": "UPDATE users SET last_login_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 132,
+        "preview": "SELECT u.* FROM auth_sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=? AND s.expires_at>? AND u.enabled=1"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 143,
+        "preview": "SELECT password_hash FROM users WHERE id=?"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 154,
+        "preview": "UPDATE users SET password_hash=?,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 155,
+        "preview": "DELETE FROM auth_sessions WHERE user_id=?"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 78,
+        "preview": "SELECT 1 FROM users LIMIT 1"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 88,
+        "preview": "INSERT INTO users(id,username,username_normalized,password_hash,role,enabled,created_at,updated_at) VALUES(?,?,?,?,?,1,?,?)"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 114,
+        "preview": "UPDATE users SET password_hash=?,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 139,
+        "preview": "DELETE FROM auth_sessions WHERE token_hash=?"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 158,
+        "preview": "SELECT 1 FROM user_project_access WHERE user_id=? AND project_id=?"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 95,
+        "preview": "SELECT * FROM users WHERE id=?"
+      },
+      {
+        "file": "app/services/image_prompt.py",
+        "line": 56,
+        "preview": "SELECT name,description,equipment_json FROM entity_outfits WHERE id=? AND entity_id=?"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 89,
+        "preview": "SELECT rowid, entity_id, version_id FROM lore_card_search WHERE version_id NOT IN (SELECT id FROM lore_card_versions)"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 125,
+        "preview": "SELECT s.image_path path FROM image_suggestions s JOIN story_nodes n ON n.id=s.story_node_id WHERE n.project_id=? AND s.image_path IS NOT NULL UNION ALL SELECT file_path path FROM "
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 25,
+        "preview": "SELECT id, project_id, kind, status, phase, created_at FROM generation_jobs"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 120,
+        "preview": "SELECT * FROM managed_file_failures ORDER BY last_attempt_at DESC"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 135,
+        "preview": "DELETE FROM lore_card_search WHERE project_id=?"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 136,
+        "preview": "DELETE FROM projects WHERE id=?"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 144,
+        "preview": "DELETE FROM lore_card_search"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 145,
+        "preview": "DELETE FROM projects"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 153,
+        "preview": "DELETE FROM lore_card_search"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 154,
+        "preview": "DELETE FROM projects"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 155,
+        "preview": "DELETE FROM workflow_presets"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 156,
+        "preview": "DELETE FROM music_tracks"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 157,
+        "preview": "DELETE FROM music_themes"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 158,
+        "preview": "DELETE FROM bullethell_attacks WHERE built_in=0"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 159,
+        "preview": "DELETE FROM bullethell_modes WHERE built_in=0"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 160,
+        "preview": "DELETE FROM bullethell_skills WHERE built_in=0"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 161,
+        "preview": "DELETE FROM managed_file_failures"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 163,
+        "preview": "UPDATE runtime_settings SET llama_executable='',storyteller_model_path='',storyteller_model_id='',llama_url='http://127.0.0.1:8080',llama_extra_args_json='[]',comfy_command_json='["
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 43,
+        "preview": "SELECT id,"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 65,
+        "preview": "DELETE FROM managed_file_failures WHERE path=?"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 93,
+        "preview": "DELETE FROM lore_card_search WHERE rowid=?"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 141,
+        "preview": "SELECT id FROM projects"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 69,
+        "preview": "INSERT INTO managed_file_failures(path,error,last_attempt_at) VALUES(?,?,?) ON CONFLICT(path) DO UPDATE SET error=excluded.error,last_attempt_at=excluded.last_attempt_at"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 111,
+        "preview": "SELECT COUNT(*) n FROM lore_card_search WHERE version_id NOT IN (SELECT id FROM lore_card_versions)"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 117,
+        "preview": "SELECT COUNT(*) n FROM story_nodes WHERE trashed=1"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 36,
+        "preview": "SELECT"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 105,
+        "preview": "SELECT COUNT(*) n FROM"
+      },
+      {
+        "file": "app/services/memory.py",
+        "line": 59,
+        "preview": "SELECT e.entity_id, e.event_type, e.payload_json FROM world_events e JOIN world_transactions t ON t.id = e.transaction_id WHERE t.project_id = ? AND t.status = 'committed' AND e.en"
+      },
+      {
+        "file": "app/services/memory.py",
+        "line": 72,
+        "preview": "SELECT id FROM lore_card_versions WHERE entity_id = ? ORDER BY created_at DESC LIMIT 1"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 212,
+        "preview": "SELECT ability_key,name,minigame_profile_json FROM ability_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 44,
+        "preview": "SELECT * FROM project_bullethell_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 68,
+        "preview": "INSERT INTO project_bullethell_settings(project_id,default_mode_id,updated_at) VALUES (?,?,?) ON CONFLICT(project_id) DO UPDATE SET default_mode_id=excluded.default_mode_id,updated"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 71,
+        "preview": "INSERT INTO project_bullethell_modes VALUES (?,?)"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 72,
+        "preview": "INSERT INTO project_bullethell_skills VALUES (?,?)"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 73,
+        "preview": "INSERT INTO project_bullethell_attacks VALUES (?,?)"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 80,
+        "preview": "SELECT * FROM"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 89,
+        "preview": "INSERT INTO"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 107,
+        "preview": "UPDATE bullethell_skills SET name=?,behavior=?,parameters_json=?,version=version+1,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 196,
+        "preview": "DELETE FROM"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 29,
+        "preview": "SELECT * FROM"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 46,
+        "preview": "SELECT"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 94,
+        "preview": "SELECT * FROM"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 116,
+        "preview": "UPDATE bullethell_modes SET name=?,movement_skill_id=?,allowed_skill_ids_json=?,parameters_json=?,version=version+1,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 122,
+        "preview": "UPDATE bullethell_attacks SET name=?,ai_description=?,tags_json=?,uses_enemy_forced_mode=?,hit_immunity_ms=?,phases_json=?,version=version+1,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 178,
+        "preview": "SELECT * FROM"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 70,
+        "preview": "DELETE FROM"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 192,
+        "preview": "SELECT COUNT(*) n FROM ability_definitions WHERE minigame_profile_json LIKE ?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 193,
+        "preview": "SELECT COUNT(*) n FROM world_events WHERE payload_json LIKE ?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 185,
+        "preview": "SELECT COUNT(*) n FROM project_bullethell_skills WHERE skill_id=?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 186,
+        "preview": "SELECT COUNT(*) n FROM bullethell_modes WHERE movement_skill_id=? OR allowed_skill_ids_json LIKE ?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 188,
+        "preview": "SELECT COUNT(*) n FROM project_bullethell_modes WHERE mode_id=?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 189,
+        "preview": "SELECT COUNT(*) n FROM project_bullethell_settings WHERE default_mode_id=?"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 191,
+        "preview": "SELECT COUNT(*) n FROM project_bullethell_attacks WHERE attack_id=?"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 420,
+        "preview": "SELECT * FROM project_minigame_configs WHERE project_id=? ORDER BY game_key"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 499,
+        "preview": "UPDATE project_minigame_configs SET enabled=?,ai_description=?,allowed_directions_json=?,allowed_actions_json=?,required_actor_tags_json=?,forbidden_actor_tags_json=?,required_targ"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 859,
+        "preview": "SELECT s.*,j.status job_status FROM minigame_sessions s LEFT JOIN generation_jobs j ON j.id=s.job_id WHERE s.id=?"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 878,
+        "preview": "UPDATE minigame_sessions SET attempt_started_at=?,updated_at=? WHERE id=? AND status='awaiting_input' AND attempt_started_at IS NULL"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 1024,
+        "preview": "UPDATE minigame_sessions SET status='resolved',result_json=?,staged_mutations_json=?,resolved_at=?,updated_at=? WHERE id=? AND status='awaiting_input'"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 413,
+        "preview": "UPDATE project_minigame_configs SET enabled=?,updated_at=? WHERE project_id=? AND game_key IN ("
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 854,
+        "preview": "INSERT INTO minigame_sessions(id,project_id,job_id,parent_node_id,game_key,game_version,status,invocation_json,partial_prose,staged_mutations_json,interventions_json,suggestion_jso"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 855,
+        "preview": "UPDATE generation_jobs SET status='awaiting_minigame',phase='awaiting_minigame',progress_message='Waiting for player',updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 481,
+        "preview": "SELECT ability_key,minigame_profile_json FROM ability_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 551,
+        "preview": "SELECT ability_key,name,minigame_profile_json FROM ability_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 783,
+        "preview": "SELECT ability_key,name,minigame_profile_json FROM ability_definitions WHERE project_id=? AND ability_key=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 308,
+        "preview": "SELECT * FROM planning_sessions WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 309,
+        "preview": "SELECT * FROM planning_stages WHERE session_id=? AND stage_number=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 419,
+        "preview": "SELECT * FROM planning_sessions WHERE id = ?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 420,
+        "preview": "SELECT * FROM planning_stages WHERE session_id = ? AND stage_number = ?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 537,
+        "preview": "SELECT * FROM planning_stages WHERE session_id=? AND stage_number<? ORDER BY stage_number"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 597,
+        "preview": "SELECT * FROM planning_stages WHERE session_id=? AND stage_number=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 671,
+        "preview": "SELECT * FROM planning_sessions WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 671,
+        "preview": "SELECT * FROM planning_stages WHERE session_id=? AND stage_number=8"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 676,
+        "preview": "UPDATE planning_stages SET draft_json=?,status='ready',raw_draft_text=NULL,validation_error=NULL,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 316,
+        "preview": "DELETE FROM planning_conflicts WHERE stage_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 482,
+        "preview": "UPDATE planning_conflicts SET resolution_json=?,status='resolved',updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 510,
+        "preview": "INSERT INTO planning_approval_claims(stage_id,revision_hash,created_at) VALUES(?,?,?)"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 564,
+        "preview": "UPDATE planning_stages SET status='approved',draft_json=?,raw_draft_text=NULL,validation_error=NULL,approved_json=?,transaction_id=?,approved_revision_hash=?,active_job_id=NULL,dep"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 575,
+        "preview": "UPDATE planning_sessions SET current_stage=?,status=?,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 576,
+        "preview": "DELETE FROM planning_approval_claims WHERE stage_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 293,
+        "preview": "SELECT id,name,tags_json FROM weather_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 294,
+        "preview": "SELECT stat_key,label,scope FROM stat_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 295,
+        "preview": "SELECT ability_key,name,target_type FROM ability_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 319,
+        "preview": "SELECT resource_id,fingerprint FROM planning_resource_keys WHERE session_id=? AND resource_key=? AND resource_type='entity'"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 342,
+        "preview": "INSERT INTO planning_conflicts(id,session_id,stage_id,entity_key,proposed_json,candidates_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'unresolved',?,?)"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 434,
+        "preview": "SELECT * FROM planning_resource_keys WHERE session_id=? AND resource_type='entity'"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 460,
+        "preview": "UPDATE planning_conflicts SET resolution_json=?,status='resolved',updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 464,
+        "preview": "UPDATE planning_conflicts SET resolution_json=?,status='resolved',updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 533,
+        "preview": "DELETE FROM planning_approval_claims WHERE stage_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 558,
+        "preview": "UPDATE planning_stages SET status='ready',draft_json=?,raw_draft_text=NULL,validation_error=NULL,active_job_id=NULL,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 561,
+        "preview": "DELETE FROM planning_approval_claims WHERE stage_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 282,
+        "preview": "SELECT resource_id,resource_key FROM planning_resource_keys WHERE session_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 297,
+        "preview": "SELECT game_key FROM project_minigame_configs WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 298,
+        "preview": "SELECT id,label,tags_json FROM ambient_variants WHERE project_id=? AND enabled=1 AND available=1"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 299,
+        "preview": "SELECT id,name FROM music_themes"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 428,
+        "preview": "SELECT * FROM world_transactions WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 436,
+        "preview": "SELECT * FROM planning_entity_keys WHERE session_id = ?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 458,
+        "preview": "DELETE FROM planning_resource_keys WHERE session_id=? AND resource_key=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 459,
+        "preview": "DELETE FROM planning_entity_keys WHERE session_id=? AND entity_key=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 549,
+        "preview": "INSERT INTO planning_resource_keys(session_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key)"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 554,
+        "preview": "INSERT INTO planning_resource_keys(session_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key)"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 328,
+        "preview": "INSERT INTO planning_conflicts(id,session_id,stage_id,entity_key,proposed_json,candidates_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'unresolved',?,?)"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 569,
+        "preview": "SELECT id,stage_number,status FROM planning_stages WHERE session_id=? AND stage_number>? ORDER BY stage_number"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 571,
+        "preview": "UPDATE planning_stages SET status='stale',updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 573,
+        "preview": "SELECT MIN(stage_number) n FROM planning_stages WHERE session_id=? AND status NOT IN ('approved','skipped')"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 301,
+        "preview": "SELECT id,name FROM"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 525,
+        "preview": "UPDATE project_story_defaults SET pov_character_id=?,updated_at=? WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 572,
+        "preview": "SELECT approved_json FROM planning_stages WHERE id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 442,
+        "preview": "SELECT resource_id,resource_type FROM planning_resource_keys WHERE session_id=? AND resource_key=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 450,
+        "preview": "INSERT INTO planning_resource_keys(session_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key)"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 468,
+        "preview": "INSERT INTO project_story_defaults(project_id,narration_mode,pov_strategy,updated_at) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET narration_mode=excluded.narration_mode,p"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 591,
+        "preview": "SELECT id,kind,canonical_name,tags_json FROM world_entities WHERE project_id=? AND kind IN ('character','location')"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 466,
+        "preview": "UPDATE bible_documents SET content=?,updated_at=? WHERE project_id=? AND kind=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 477,
+        "preview": "SELECT resource_id FROM planning_resource_keys WHERE session_id=? AND resource_key=? AND resource_type='weather'"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 491,
+        "preview": "SELECT COUNT(DISTINCT id) count FROM weather_definitions WHERE id IN (?,?) AND project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 499,
+        "preview": "UPDATE project_environment_settings SET initial_weather_id=?,revision=revision+1,updated_at=? WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 508,
+        "preview": "SELECT resource_id FROM planning_resource_keys WHERE session_id=? AND resource_key=? AND resource_type='stat'"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 529,
+        "preview": "SELECT resource_id FROM planning_resource_keys WHERE session_id=? AND resource_key=? AND resource_type='ability'"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 541,
+        "preview": "SELECT resource_id FROM planning_resource_keys WHERE session_id=? AND resource_key=? AND resource_type='outfit'"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 551,
+        "preview": "SELECT resource_id FROM planning_resource_keys WHERE session_id=? AND resource_key=? AND resource_type='routine'"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 561,
+        "preview": "UPDATE project_minigame_configs SET enabled=?,ai_description=?,allowed_actions_json=?,required_actor_tags_json=?,required_location_tags_json=?,min_difficulty=?,max_difficulty=?,upd"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 577,
+        "preview": "DELETE FROM ambient_assignments WHERE project_id=? AND owner_type=? AND owner_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 585,
+        "preview": "UPDATE project_music_settings SET mode=?,manual_theme_id=? WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 585,
+        "preview": "DELETE FROM project_music_themes WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 595,
+        "preview": "SELECT state_json FROM lore_card_versions WHERE entity_id=? ORDER BY created_at DESC LIMIT 1"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 607,
+        "preview": "SELECT id,status,prompt_revision,media_asset_id,generation_job_id FROM planning_image_plans WHERE session_id=? AND resource_key=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 403,
+        "preview": "SELECT game_key FROM project_minigame_configs WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 411,
+        "preview": "SELECT id FROM ambient_variants WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 418,
+        "preview": "SELECT id FROM music_themes"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 480,
+        "preview": "UPDATE weather_definitions SET name=?,description=?,imagegen_description=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 482,
+        "preview": "INSERT INTO weather_definitions(id,project_id,name,description,imagegen_description,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 487,
+        "preview": "DELETE FROM weather_transitions WHERE project_id=? AND source_weather_id IN ("
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 497,
+        "preview": "SELECT id FROM weather_definitions WHERE id=? AND project_id=? AND enabled=1"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 512,
+        "preview": "UPDATE stat_definitions SET stat_key=?,label=?,scope=?,default_value=?,minimum=?,maximum=?,integer_only=?,visibility=?,updated_at=? WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 513,
+        "preview": "INSERT INTO stat_definitions(id,project_id,stat_key,label,scope,default_value,minimum,maximum,integer_only,visibility,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 515,
+        "preview": "SELECT stat_key FROM stat_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 531,
+        "preview": "UPDATE ability_definitions SET ability_key=?,name=?,description=?,target_type=?,requirements_json=?,costs_json=?,effects_json=?,minigame_profile_json=?,updated_at=? WHERE id=? AND "
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 532,
+        "preview": "INSERT INTO ability_definitions(id,project_id,ability_key,name,description,target_type,requirements_json,costs_json,effects_json,minigame_profile_json,created_at,updated_at) VALUES"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 542,
+        "preview": "UPDATE entity_outfits SET name=?,description=?,equipment_json=?,updated_at=? WHERE id=? AND entity_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 543,
+        "preview": "INSERT INTO entity_outfits(id,entity_id,name,description,equipment_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 552,
+        "preview": "UPDATE character_routines SET character_id=?,location_id=?,time_phase_id=?,notes=?,updated_at=? WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 553,
+        "preview": "INSERT INTO character_routines(id,project_id,character_id,location_id,time_phase_id,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 560,
+        "preview": "SELECT game_key FROM project_minigame_configs WHERE project_id=? AND game_key=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 571,
+        "preview": "SELECT id FROM ambient_variants WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 586,
+        "preview": "INSERT INTO project_music_themes(project_id,theme_id) VALUES(?,?)"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 590,
+        "preview": "SELECT kind,content FROM bible_documents WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 605,
+        "preview": "SELECT id,validation_status FROM workflow_presets WHERE id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 610,
+        "preview": "UPDATE planning_image_plans SET prompt=?,negative_prompt=?,workflow_preset_id=?,width=?,height=?,prompt_revision=?,status=?,error=NULL,updated_at=? WHERE id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 611,
+        "preview": "INSERT INTO planning_image_plans(id,session_id,project_id,resource_key,entity_id,kind,prompt,negative_prompt,workflow_preset_id,width,height,prompt_revision,status,created_at,updat"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 540,
+        "preview": "SELECT id FROM world_entities WHERE id=? AND project_id=? AND kind='character'"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 547,
+        "preview": "SELECT id FROM world_entities WHERE id=? AND project_id=? AND kind='character'"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 548,
+        "preview": "SELECT id FROM world_entities WHERE id=? AND project_id=? AND kind='location'"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 550,
+        "preview": "SELECT id FROM time_phases WHERE id=? AND project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 569,
+        "preview": "DELETE FROM"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 581,
+        "preview": "INSERT INTO ambient_assignments(id,project_id,owner_type,owner_id,selector_type,selector_value,weather_id,time_phase_id,variant_id) VALUES(?,?,?,?,?,?,?,?,?)"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 583,
+        "preview": "SELECT id FROM music_themes"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 612,
+        "preview": "SELECT * FROM planning_image_plans WHERE id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 390,
+        "preview": "SELECT stat_key FROM stat_definitions WHERE project_id=?"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 408,
+        "preview": "SELECT id FROM"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 570,
+        "preview": "INSERT INTO"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 567,
+        "preview": "SELECT id FROM"
+      },
+      {
+        "file": "app/services/runtimes.py",
+        "line": 130,
+        "preview": "llama.cpp does not support /apply-template; update llama.cpp to use planning autocomplete:"
+      },
+      {
+        "file": "app/services/runtimes.py",
+        "line": 180,
+        "preview": "llama.cpp raw planning completion failed; update llama.cpp if /completion is unavailable:"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 43,
+        "preview": "SELECT * FROM runtime_settings WHERE id = 1"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 201,
+        "preview": "SELECT id FROM generation_jobs WHERE status='queued' ORDER BY created_at,id"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 138,
+        "preview": "SELECT stat_key, label, scope, default_value, minimum, maximum FROM stat_definitions WHERE project_id = ?"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 139,
+        "preview": "SELECT ability_key, name, description, target_type, costs_json, effects_json FROM ability_definitions WHERE project_id = ?"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 141,
+        "preview": "SELECT mode FROM project_music_settings WHERE project_id = ?"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 142,
+        "preview": "SELECT t.id, t.name, t.description FROM music_themes t JOIN project_music_themes p ON p.theme_id = t.id WHERE p.project_id = ?"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 144,
+        "preview": "SELECT enabled,ai_create_locations,ai_propose_weather FROM project_environment_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 416,
+        "preview": "SELECT * FROM stat_definitions WHERE project_id = ? AND stat_key = ? AND scope = ?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 444,
+        "preview": "SELECT * FROM ability_definitions WHERE project_id = ? AND ability_key = ?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 672,
+        "preview": "SELECT parent_id FROM story_nodes WHERE id = ? AND project_id = ?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 750,
+        "preview": "SELECT * FROM stat_definitions WHERE project_id = ? AND scope = ?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 974,
+        "preview": "SELECT enabled FROM project_environment_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 1048,
+        "preview": "SELECT ability_key, name, description, target_type, costs_json, effects_json FROM ability_definitions WHERE project_id = ?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 266,
+        "preview": "SELECT enabled,ai_create_locations FROM project_environment_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 778,
+        "preview": "SELECT id FROM entity_outfits WHERE id = ? AND entity_id = ?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 350,
+        "preview": "SELECT enabled,initial_weather_id FROM project_environment_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 363,
+        "preview": "SELECT id FROM weather_definitions WHERE id=? AND project_id=? AND enabled=1"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 367,
+        "preview": "SELECT id FROM weather_definitions WHERE id=? AND project_id=? AND enabled=1"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 373,
+        "preview": "SELECT enabled,ai_propose_weather FROM project_environment_settings WHERE project_id=?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 369,
+        "preview": "SELECT 1 FROM weather_transitions WHERE project_id=? AND source_weather_id=? AND target_weather_id=?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 390,
+        "preview": "SELECT mode FROM project_music_settings WHERE project_id = ?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 394,
+        "preview": "SELECT 1 FROM project_music_themes WHERE project_id = ? AND theme_id = ?"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 392,
+        "preview": "The storyteller may select music only in AI-managed mode"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 396,
+        "preview": "SELECT mode FROM project_music_settings WHERE project_id = ?"
+      }
+    ],
+    "transitional_db_calls": [
+      {
+        "file": "app/bootstrap_admin.py",
+        "line": 30,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/bootstrap_admin.py",
+        "line": 31,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 48,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 108,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 115,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 236,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 259,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 335,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 435,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 552,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 56,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 167,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 173,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 200,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 206,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 420,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 450,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 461,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 499,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 511,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 523,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/imageJobHandler.py",
+        "line": 534,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 81,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 357,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 543,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 635,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 884,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 988,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 1032,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 1126,
+        "method": "update_job_metrics",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 1141,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 151,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 162,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 196,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 504,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 516,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 794,
+        "method": "update_job_partial_output",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 877,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/planningJobHandler.py",
+        "line": 710,
+        "method": "update_job_partial_output",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyFinalizer.py",
+        "line": 351,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyFinalizer.py",
+        "line": 380,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyFinalizer.py",
+        "line": 317,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyFinalizer.py",
+        "line": 108,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyInlineActions.py",
+        "line": 137,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 38,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 568,
+        "method": "update_job_partial_output",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 790,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1018,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1023,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1038,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1048,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1101,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 1249,
+        "method": "update_job_metrics",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 440,
+        "method": "update_job_partial_output",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 678,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 695,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 833,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 985,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/handlers/storyJobHandler.py",
+        "line": 160,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 220,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 257,
+        "method": "get_project",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 264,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 278,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 303,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 382,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 405,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 415,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 459,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 466,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 527,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 543,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 546,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 555,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 566,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 572,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 587,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 601,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 607,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 711,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 719,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 729,
+        "method": "update_job_payload",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 780,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 792,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 840,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 851,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 928,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 939,
+        "method": "create_story_node",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 944,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 946,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 960,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 964,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 972,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 977,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 988,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1006,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1012,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1045,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1055,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1093,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1114,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1122,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1132,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1140,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1146,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1151,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1160,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1174,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1199,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1234,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1261,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1284,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1327,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1337,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1346,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1424,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1429,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1434,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1435,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1442,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1452,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1456,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1463,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1474,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1481,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1499,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1507,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1516,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1605,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1609,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1629,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1631,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1637,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1638,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1640,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1678,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1704,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1711,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1737,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1741,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1744,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1749,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1762,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1767,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1774,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1785,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1791,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1797,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1800,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1806,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1840,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1856,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1857,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1907,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1908,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1913,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1921,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1924,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1932,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1934,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1941,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1984,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1985,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1986,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1990,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2017,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2018,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2091,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2093,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2096,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2102,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2127,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2163,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2184,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2229,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2372,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2381,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2383,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2393,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2440,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2443,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2500,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2511,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2514,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2568,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2577,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2582,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2591,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2597,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2604,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2616,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2620,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2628,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2652,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2656,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2663,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2670,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2689,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2690,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2730,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2747,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2770,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2776,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2782,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2795,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2945,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 373,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 375,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 420,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 427,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 439,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 444,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 447,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/main.py",
+        "line": 534,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 536,
+        "method": "get_project",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 552,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 575,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 731,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 772,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 838,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 844,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 872,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 911,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 994,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 997,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1011,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1063,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1103,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1112,
+        "method": "update_job_payload",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1153,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1168,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1228,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1246,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1256,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1258,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1282,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1294,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1306,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1335,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1355,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1446,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1471,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1511,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1636,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1715,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1724,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1727,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1730,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1790,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1792,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1816,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1820,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1825,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1827,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1835,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1842,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1866,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1868,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1873,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1880,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1882,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1889,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1892,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1895,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1902,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1914,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1925,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1944,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1956,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1959,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1977,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1996,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2006,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2027,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2029,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2046,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2047,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2049,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2065,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2072,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2083,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2174,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2214,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2375,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2378,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2386,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2388,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2460,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2468,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2543,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2544,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2545,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2551,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2552,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2553,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2554,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2558,
+        "method": "create_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2566,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2572,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2635,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2642,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2755,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 161,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 196,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 211,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 421,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 549,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 608,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1020,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1041,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1232,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1291,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1353,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1431,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1432,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1766,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1809,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1814,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1815,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1832,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1912,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1943,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1957,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2004,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2064,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2082,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2389,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2524,
+        "method": "update_job_payload",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2525,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2532,
+        "method": "update_job_payload",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2533,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2640,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 388,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1024,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1025,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1054,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1326,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1345,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1512,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1515,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1615,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1616,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1617,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1618,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 508,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 820,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1336,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2448,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2449,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 2450,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1753,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1754,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/main.py",
+        "line": 1755,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/managers/storyManager.py",
+        "line": 218,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/managers/storyManager.py",
+        "line": 496,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/managers/storyManager.py",
+        "line": 518,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 104,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 117,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 121,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 131,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 143,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 154,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 155,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 78,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 87,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 114,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 139,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 158,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/auth.py",
+        "line": 95,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/image_prompt.py",
+        "line": 56,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 25,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 88,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 124,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 43,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 120,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 134,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 143,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 152,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 65,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 92,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 141,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 68,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 110,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 36,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 105,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/lifecycle.py",
+        "line": 117,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/memory.py",
+        "line": 58,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/memory.py",
+        "line": 71,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/memory.py",
+        "line": 75,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 43,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 80,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 89,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 196,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 212,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 29,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 44,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 46,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 67,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 94,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 107,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 178,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 116,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 122,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 192,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 193,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 185,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 186,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 188,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 189,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/bullethell/catalog.py",
+        "line": 191,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 412,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 420,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 498,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 859,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 877,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 1024,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 393,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 853,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 481,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 551,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/minigames/service.py",
+        "line": 783,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 308,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 309,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 419,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 420,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 513,
+        "method": "begin_transaction",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 537,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 597,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 671,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 671,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 676,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 315,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 482,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 510,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 530,
+        "method": "finish_transaction",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 540,
+        "method": "connect",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 264,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 293,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 294,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 295,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 319,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 433,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 460,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 464,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 532,
+        "method": "finish_transaction",
+        "severity": "low"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 533,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 282,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 297,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 298,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 299,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 428,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 436,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 458,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 459,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 301,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning.py",
+        "line": 525,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 442,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 449,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 467,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 591,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 466,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 477,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 487,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 491,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 494,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 499,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 508,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 529,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 541,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 551,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 561,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 577,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 585,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 585,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 595,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 607,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 403,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 411,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 418,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 480,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 482,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 497,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 512,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 513,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 515,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 531,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 532,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 542,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 543,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 552,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 553,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 560,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 569,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 571,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 586,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 590,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 605,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 610,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 611,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 408,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 540,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 547,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 548,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 550,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 570,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 581,
+        "method": "execute",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 583,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 612,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 390,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/planning_v2.py",
+        "line": 567,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 43,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 200,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 253,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 276,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 288,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 292,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 323,
+        "method": "update_job_progress",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 361,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 377,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 398,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 426,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 406,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 414,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 446,
+        "method": "get_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/scheduler.py",
+        "line": 454,
+        "method": "update_job",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 138,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 139,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 141,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 142,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/story_planner.py",
+        "line": 144,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 415,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 444,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 672,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 750,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 974,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 1048,
+        "method": "fetch_all",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 111,
+        "method": "get_project",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 231,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 718,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 118,
+        "method": "story_path",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 266,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 778,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 350,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 363,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 367,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 373,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 369,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 390,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 393,
+        "method": "fetch_one",
+        "severity": "review"
+      },
+      {
+        "file": "app/services/world.py",
+        "line": 396,
+        "method": "fetch_one",
+        "severity": "review"
+      }
+    ],
+    "parse_errors": []
+  },
+  "tests": {
+    "total": 31,
+    "phase3": [
+      "test_phase3_data_provider.py",
+      "test_phase3_repository_boundaries.py",
+      "test_phase3_slice2.py",
+      "test_phase3_slice3a.py",
+      "test_phase3_slice3a_integration.py",
+      "test_phase3_slice3b.py",
+      "test_phase3_slice4.py"
+    ],
+    "legacy": [
+      "test_auth.py",
+      "test_bullethell.py",
+      "test_consistency.py",
+      "test_context.py",
+      "test_database.py",
+      "test_environment.py",
+      "test_expansion.py",
+      "test_image_job_handler.py",
+      "test_inline_tools.py",
+      "test_job_scheduler_boundary.py",
+      "test_memory.py",
+      "test_minigames.py",
+      "test_multiplayer_api.py",
+      "test_phase1_generation.py",
+      "test_phase2_closeout_interfaces.py",
+      "test_phase2_integrated_story_handler.py",
+      "test_planning_budget.py",
+      "test_planning_job_handler.py",
+      "test_planning_v2.py",
+      "test_runtimes.py",
+      "test_scheduler.py",
+      "test_story_stream_service.py",
+      "test_workflow.py",
+      "test_world.py"
+    ]
+  },
+  "pytest": {
+    "command": "C:\\Program Files\\Python313\\python.exe -m pytest -q",
+    "returncode": 2,
+    "failed_nodes": [],
+    "failure_headers": [
+      "ERROR collecting tests/test_auth.py",
+      "ERROR collecting tests/test_consistency.py",
+      "ERROR collecting tests/test_multiplayer_api.py",
+      "ERROR collecting tests/test_scheduler.py"
+    ],
+    "output": "\n=================================== ERRORS ====================================\n_____________________ ERROR collecting tests/test_auth.py _____________________\nImportError while importing test module 'C:\\Users\\Pavoi\\Documents\\GitHub\\StoryStudio\\backend\\tests\\test_auth.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\nC:\\Program Files\\Python313\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests\\test_auth.py:8: in <module>\n    from app.services.auth import AuthError, AuthService\napp\\services\\auth.py:11: in <module>\n    from argon2 import PasswordHasher\nE   ModuleNotFoundError: No module named 'argon2'\n_________________ ERROR collecting tests/test_consistency.py __________________\nImportError while importing test module 'C:\\Users\\Pavoi\\Documents\\GitHub\\StoryStudio\\backend\\tests\\test_consistency.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\nC:\\Program Files\\Python313\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests\\test_consistency.py:9: in <module>\n    from app import main as app_main\napp\\main.py:90: in <module>\n    from app.services.auth import AuthError, AuthService, AuthUser, COOKIE_NAME, SESSION_DAYS\napp\\services\\auth.py:11: in <module>\n    from argon2 import PasswordHasher\nE   ModuleNotFoundError: No module named 'argon2'\n_______________ ERROR collecting tests/test_multiplayer_api.py ________________\nImportError while importing test module 'C:\\Users\\Pavoi\\Documents\\GitHub\\StoryStudio\\backend\\tests\\test_multiplayer_api.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\nC:\\Program Files\\Python313\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests\\test_multiplayer_api.py:7: in <module>\n    from app import main\napp\\main.py:90: in <module>\n    from app.services.auth import AuthError, AuthService, AuthUser, COOKIE_NAME, SESSION_DAYS\napp\\services\\auth.py:11: in <module>\n    from argon2 import PasswordHasher\nE   ModuleNotFoundError: No module named 'argon2'\n__________________ ERROR collecting tests/test_scheduler.py ___________________\nImportError while importing test module 'C:\\Users\\Pavoi\\Documents\\GitHub\\StoryStudio\\backend\\tests\\test_scheduler.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\nC:\\Program Files\\Python313\\Lib\\importlib\\__init__.py:88: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\ntests\\test_scheduler.py:13: in <module>\n    from app.services.scheduler import GenerationScheduler, _looks_like_token_truncation, _planning_json_error\nE   ImportError: cannot import name '_looks_like_token_truncation' from 'app.services.scheduler' (C:\\Users\\Pavoi\\Documents\\GitHub\\StoryStudio\\backend\\app\\services\\scheduler.py)\n=========================== short test summary info ===========================\nERROR tests/test_auth.py\nERROR tests/test_consistency.py\nERROR tests/test_multiplayer_api.py\nERROR tests/test_scheduler.py\n!!!!!!!!!!!!!!!!!!! Interrupted: 4 errors during collection !!!!!!!!!!!!!!!!!!!\n4 errors in 1.62s\n"
+  }
+}

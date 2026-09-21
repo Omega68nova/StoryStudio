@@ -11,8 +11,6 @@ import pytest
 from app.database import Database, new_id, utc_now
 from app.services.events import EventHub
 from app.services.scheduler import GenerationScheduler
-from app.handlers.planningJobHandler import PlanningJobHandler, _looks_like_token_truncation, _planning_json_error
-from app.services.job_handlers import JobExecutionContext
 from app.handlers.planningJobHandler import (
     _looks_like_token_truncation,
     _planning_json_error,
@@ -185,33 +183,10 @@ async def test_empty_raw_completion_retries_once_without_cache(tmp_path: Path) -
     llama = EmptyRawLlama()
     scheduler = GenerationScheduler(db, EventHub(), FakeSupervisor(llama, FakeComfy()))
     job = db.create_job(project["id"], "planning", {"action": "test"})
-    handler = scheduler.handlers["planning"]
-    assert isinstance(handler, PlanningJobHandler)
-
-    async def set_state(*_args):
-        return None
-
-    async def enqueue(_job_id):
-        return None
-
-    context = JobExecutionContext(
-        db=db,
-        events=scheduler.events,
-        ai=scheduler.ai,
-        job=job,
-        cancel_event=asyncio.Event(),
-        set_runtime_state=set_state,
-        enqueue=enqueue,
-    )
-    handler._start_metrics(context)
     with pytest.raises(Exception, match="cache-free retry"):
-        await handler._generate_planning_json_raw(
-            context,
-            llama,
-            [{"role": "user", "content": "Return JSON"}],
-            8192,
-            "Test stage",
-            None,
+        await scheduler._generate_planning_json_raw(
+            job, llama, [{"role": "user", "content": "Return JSON"}], 8192,
+            asyncio.Event(), "Test stage", None,
         )
     assert llama.cache_flags == [True, False]
 
@@ -469,7 +444,7 @@ async def test_running_story_can_cancel_during_planning(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stopping_stream_preserves_all_streamed_prose(tmp_path: Path) -> None:
+async def test_stopping_stream_keeps_only_complete_sentences(tmp_path: Path) -> None:
     db, project = setup_db(tmp_path)
     user = db.create_story_node(project["id"], None, "user", "Begin")
 
@@ -491,11 +466,14 @@ async def test_stopping_stream_preserves_all_streamed_prose(tmp_path: Path) -> N
     await scheduler.cancel(job["id"])
     await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
     assistant = db.fetch_one("SELECT content FROM story_nodes WHERE parent_id=?", (user["id"],))
-    assert assistant and assistant["content"] == (
-        "The first sentence is complete. The unfinished sentence"
-    )
+    assert assistant and assistant["content"] == "The first sentence is complete."
     assert db.get_job(job["id"])["status"] == "completed"
     assert db.get_job(job["id"])["result"]["stopped"] is True
+
+
+def test_sentence_cutoff_discards_incomplete_tail() -> None:
+    assert GenerationScheduler._complete_sentences("One. Two unfinished") == "One."
+    assert GenerationScheduler._complete_sentences("No completed sentence") == ""
 
 
 @pytest.mark.asyncio

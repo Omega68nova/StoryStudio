@@ -2188,8 +2188,8 @@ async def update_project_story_defaults(project_id: str, request: ProjectStoryDe
 @app.get("/api/projects/{project_id}/planning")
 async def get_planning_session(project_id: str) -> dict[str, Any] | None:
     require_project(project_id)
-    session_id = data.planning.latest_session_id(project_id)
-    return scheduler.planning.get_session(session_id) if session_id else None
+    session = db.fetch_one("SELECT id FROM planning_sessions WHERE project_id = ? ORDER BY created_at DESC", (project_id,))
+    return scheduler.planning.get_session(session["id"]) if session else None
 
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/preflight")
@@ -2231,10 +2231,14 @@ async def generate_planning_stage(
         "repair": repair, "append": append, "focus": focus,
         "automate": automate, "automation_prompt": automation_prompt,
     })
-    data.planning.queue_stage_generation(
-        stage_id=stage["id"],
-        job_id=job["id"],
-        prompt=human_prompt,
+    now, revision_id = utc_now(), new_id()
+    db.execute(
+        "INSERT INTO planning_stage_revisions(id, stage_id, job_id, prompt, status, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)",
+        (revision_id, stage["id"], job["id"], human_prompt, now, now),
+    )
+    db.execute(
+        "UPDATE planning_stages SET human_prompt = ?, status = 'queued', active_job_id = ?, updated_at = ? WHERE id = ?",
+        (human_prompt, job["id"], now, stage["id"]),
     )
     await scheduler.enqueue(job["id"])
     return {"job": job, "stage": stage}
@@ -2314,58 +2318,34 @@ async def planning_dependency_impact(session_id: str, stage_number: int) -> dict
 
 @app.get("/api/planning/{session_id}/revisions")
 async def planning_revision_history(session_id: str) -> list[dict[str, Any]]:
-    if not data.planning.session_exists(session_id):
+    if not db.fetch_one("SELECT id FROM planning_sessions WHERE id=?", (session_id,)):
         raise HTTPException(404, "Planning session not found")
-    return data.planning.revision_history(session_id)
+    rows = db.fetch_all(
+        "SELECT r.*,s.stage_number,s.kind FROM planning_stage_revisions r JOIN planning_stages s ON s.id=r.stage_id WHERE s.session_id=? ORDER BY r.created_at DESC", (session_id,)
+    )
+    for row in rows:
+        row["draft"] = json.loads(row.pop("draft_json")) if row.get("draft_json") else None
+    return rows
 
 
 @app.patch("/api/planning/image-plans/{plan_id}")
-async def update_planning_image_plan(
-    plan_id: str,
-    request: PlanningImagePlanUpdate,
-) -> dict[str, Any]:
-    plan = data.planning.image_plan(plan_id)
-    if not plan:
-        raise HTTPException(404, "Planning image not found")
-    if plan["status"] == "queued":
-        raise HTTPException(409, "Wait for or cancel the active image job")
-    workflow = (
-        data.workflows.get(request.workflow_preset_id)
-        if request.workflow_preset_id
-        else None
-    )
-    status = (
-        "ready"
-        if workflow and workflow["validation_status"] == "valid"
-        else "draft"
-    )
-    revision = hashlib.sha256(
-        json.dumps(
-            request.model_dump(),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
-    return data.planning.update_image_plan(
-        plan_id,
-        prompt=request.prompt,
-        negative_prompt=request.negative_prompt,
-        workflow_preset_id=request.workflow_preset_id,
-        width=request.width,
-        height=request.height,
-        prompt_revision=revision,
-        status=status,
-    )
+async def update_planning_image_plan(plan_id: str, request: PlanningImagePlanUpdate) -> dict[str, Any]:
+    plan = db.fetch_one("SELECT * FROM planning_image_plans WHERE id=?", (plan_id,))
+    if not plan: raise HTTPException(404, "Planning image not found")
+    if plan["status"] == "queued": raise HTTPException(409, "Wait for or cancel the active image job")
+    workflow = db.fetch_one("SELECT id,validation_status FROM workflow_presets WHERE id=?", (request.workflow_preset_id,)) if request.workflow_preset_id else None
+    status = "ready" if workflow and workflow["validation_status"] == "valid" else "draft"
+    revision = hashlib.sha256(json.dumps(request.model_dump(), sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    db.execute("UPDATE planning_image_plans SET prompt=?,negative_prompt=?,workflow_preset_id=?,width=?,height=?,prompt_revision=?,status=?,generation_job_id=NULL,error=NULL,updated_at=? WHERE id=?", (request.prompt, request.negative_prompt, request.workflow_preset_id, request.width, request.height, revision, status, utc_now(), plan_id))
+    return db.fetch_one("SELECT * FROM planning_image_plans WHERE id=?", (plan_id,)) or {}
 
 
 @app.delete("/api/planning/image-plans/{plan_id}", status_code=204)
 async def delete_planning_image_plan(plan_id: str) -> None:
-    plan = data.planning.image_plan(plan_id)
-    if not plan:
-        raise HTTPException(404, "Planning image not found")
-    if plan["status"] == "queued":
-        raise HTTPException(409, "Wait for or cancel the active image job")
-    data.planning.delete_image_plan(plan_id)
+    plan = db.fetch_one("SELECT status FROM planning_image_plans WHERE id=?", (plan_id,))
+    if not plan: raise HTTPException(404, "Planning image not found")
+    if plan["status"] == "queued": raise HTTPException(409, "Wait for or cancel the active image job")
+    db.execute("DELETE FROM planning_image_plans WHERE id=?", (plan_id,))
 
 
 async def _queue_planning_image(plan_id: str) -> dict[str, Any]:
@@ -2391,7 +2371,7 @@ async def _queue_planning_image(plan_id: str) -> dict[str, Any]:
     payload = job.get("payload") or {}
     payload["planning_image_plan_id"] = plan_id
     db.execute("UPDATE generation_jobs SET payload_json=? WHERE id=?", (json.dumps(payload), job["id"]))
-    data.planning.mark_image_plan_queued(plan_id, media_asset_id=asset_id, generation_job_id=job["id"])
+    db.execute("UPDATE planning_image_plans SET status='queued',media_asset_id=?,generation_job_id=?,error=NULL,updated_at=? WHERE id=?", (asset_id, job["id"], now, plan_id))
     return job
 
 
@@ -2401,26 +2381,16 @@ async def generate_planning_image_plan(plan_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/planning/{session_id}/images/generate", status_code=202)
-async def generate_planning_images(
-    session_id: str,
-    request: PlanningImageGenerateBatch,
-) -> dict[str, Any]:
-    if not data.planning.session_exists(session_id):
-        raise HTTPException(404, "Planning session not found")
-    ids = request.plan_ids or data.planning.ready_image_plan_ids(session_id)
-    known = data.planning.image_plan_ids(session_id)
-    if not set(ids) <= known:
-        raise HTTPException(
-            422,
-            "Image selection contains a plan from another workshop",
-        )
-    jobs: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
+async def generate_planning_images(session_id: str, request: PlanningImageGenerateBatch) -> dict[str, Any]:
+    session = db.fetch_one("SELECT id FROM planning_sessions WHERE id=?", (session_id,))
+    if not session: raise HTTPException(404, "Planning session not found")
+    ids = request.plan_ids or [row["id"] for row in db.fetch_all("SELECT id FROM planning_image_plans WHERE session_id=? AND status='ready'", (session_id,))]
+    known = {row["id"] for row in db.fetch_all("SELECT id FROM planning_image_plans WHERE session_id=?", (session_id,))}
+    if not set(ids) <= known: raise HTTPException(422, "Image selection contains a plan from another workshop")
+    jobs, failures = [], []
     for plan_id in dict.fromkeys(ids):
-        try:
-            jobs.append(await _queue_planning_image(plan_id))
-        except HTTPException as exc:
-            failures.append({"plan_id": plan_id, "error": str(exc.detail)})
+        try: jobs.append(await _queue_planning_image(plan_id))
+        except HTTPException as exc: failures.append({"plan_id": plan_id, "error": str(exc.detail)})
     return {"jobs": jobs, "failures": failures}
 
 
@@ -2431,7 +2401,8 @@ async def reset_planning_stage(session_id: str, stage_number: int) -> dict[str, 
         raise HTTPException(409, {"message": "Cancel active generation before resetting this stage", "recovery_actions": ["cancel_job"]})
     if stage["status"] == "approved":
         return scheduler.planning.reopen_stage(session_id, stage_number)
-    data.planning.reset_stage(stage["id"])
+    db.execute("DELETE FROM planning_approval_claims WHERE stage_id=?", (stage["id"],))
+    db.execute("UPDATE planning_stages SET status='pending',draft_json=NULL,raw_draft_text=NULL,validation_error=NULL,active_job_id=NULL,updated_at=? WHERE id=?", (utc_now(), stage["id"]))
     return scheduler.planning.get_session(session_id)
 
 
@@ -2481,17 +2452,16 @@ async def delete_planning_session(session_id: str, request: PlanningDeleteReques
 
 @app.delete("/api/planning/{session_id}/revisions")
 async def clear_planning_revisions(session_id: str) -> dict[str, int]:
-    session = data.planning.session(session_id)
+    session = db.fetch_one("SELECT project_id FROM planning_sessions WHERE id=?", (session_id,))
     if not session:
         raise HTTPException(404, "Planning session not found")
     try:
         lifecycle.require_idle(session["project_id"])
     except LifecycleConflict as exc:
-        raise HTTPException(
-            409,
-            {"message": str(exc), "recovery_actions": exc.actions},
-        ) from exc
-    return {"removed": data.planning.clear_revisions(session_id)}
+        raise HTTPException(409, {"message": str(exc), "recovery_actions": exc.actions}) from exc
+    count = int((db.fetch_one("SELECT COUNT(*) n FROM planning_stage_revisions WHERE stage_id IN (SELECT id FROM planning_stages WHERE session_id=?)", (session_id,)) or {"n": 0})["n"])
+    db.execute("DELETE FROM planning_stage_revisions WHERE stage_id IN (SELECT id FROM planning_stages WHERE session_id=?)", (session_id,))
+    return {"removed": count}
 
 
 @app.get("/api/projects/{project_id}/reviews")
