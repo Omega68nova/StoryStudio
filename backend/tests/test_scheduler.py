@@ -14,6 +14,7 @@ from app.services.scheduler import GenerationScheduler
 from app.services.planningGenerationCore import PlanningGenerationCore, _looks_like_token_truncation, _planning_json_error
 from app.services.batchGenerationApiService import BatchGenerationApiService
 from app.services.planning import PlanningService
+from app.services.planningWorkspace import PlanningWorkspaceService
 from app.services.job_handlers import JobExecutionContext
 from app.services.minigames import VIRTUAL_PLAYER_ID
 from app.services.world import WorldEngine
@@ -150,16 +151,19 @@ async def test_planning_generation_continues_token_truncated_json(tmp_path: Path
 
     llama = TruncatedPlanningLlama()
     scheduler = GenerationScheduler(db, EventHub(), FakeSupervisor(llama, FakeComfy()))
-    planning = PlanningService(db, scheduler.world)
-    session = planning.create_session(project["id"], {})
+    workspace = PlanningWorkspaceService(
+        db,
+        world=scheduler.world,
+    )
+    plan = workspace.create(project["id"], {})
     api = BatchGenerationApiService(db, world=scheduler.world)
-    job = api.queue_planning_stage(session["id"], 1)["job"]
+    job = api.queue_planning_stage(plan["id"], 1)["job"]
 
     await scheduler.start(); await scheduler.enqueue(job["id"])
     await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
 
     saved = db.get_job(job["id"])
-    planned = api.planning_session_view(session["id"])["stages"][0]
+    planned = api.planning_session_view(plan["id"])["stages"][0]
     assert saved and saved["status"] == "completed"
     assert planned["draft"]["summary"] == "A cut story"
     assert llama.stream_calls == [(None, True), (0.0, True)]
