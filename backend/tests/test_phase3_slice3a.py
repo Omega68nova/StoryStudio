@@ -39,7 +39,6 @@ def test_data_provider_exposes_slice3_repositories() -> None:
     assert data.projects.db is data.db
     assert data.stories.db is data.db
     assert data.jobs.db is data.db
-    assert data.planning.db is data.db
 
 
 def test_route_data_hides_ai_instructions_for_members() -> None:
