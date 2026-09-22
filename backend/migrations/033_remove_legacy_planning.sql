@@ -5,18 +5,22 @@
 -- Existing bridge plans absorb the actual workshop settings before the source
 -- session disappears.
 UPDATE generation_plans
-SET settings_json = json_set(
-  json_patch(
-    COALESCE(
-      (SELECT ps.settings_json
-       FROM planning_sessions ps
-       WHERE ps.id = generation_plans.source_id),
-      '{}'
+SET settings_json = json_remove(
+  json_set(
+    json_patch(
+      COALESCE(
+        (SELECT ps.settings_json
+         FROM planning_sessions ps
+         WHERE ps.id = generation_plans.source_id),
+        '{}'
+      ),
+      settings_json
     ),
-    settings_json
+    '$.legacy_session_id', source_id,
+    '$.planning_schema_version', 3
   ),
-  '$.legacy_session_id', source_id,
-  '$.planning_schema_version', 3
+  '$.planning_session_id',
+  '$.bridge_version'
 )
 WHERE source_kind = 'planning_session';
 
@@ -147,6 +151,17 @@ JOIN generation_plan_tasks parent
 WHERE child.target_kind = 'planning_stage'
   AND parent.target_kind = 'planning_stage'
   AND CAST(child.target_key AS INTEGER) > 1;
+
+-- Jobs are marked interrupted later in Database.initialize(); detach their
+-- planning tasks now so the task graph cannot retain stale active-job state.
+UPDATE generation_plan_tasks
+SET status = 'cancelled',
+    active_job_id = NULL,
+    error = COALESCE(error, 'Planning migration interrupted active generation')
+WHERE plan_id IN (
+  SELECT id FROM generation_plans WHERE source_kind = 'planning_workspace'
+)
+  AND status IN ('queued','running');
 
 -- GenerationPlan-owned canonical resource provenance.
 CREATE TABLE generation_resource_keys (
