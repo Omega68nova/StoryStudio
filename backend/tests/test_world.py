@@ -5,6 +5,7 @@ import pytest
 
 from app.database import Database
 from app.services.planning import PlanningService
+from app.services.planningWorkspace import PlanningWorkspaceService
 from app.services.story_planner import normalize_native_tool_calls, parse_json_object
 from app.services.world import WorldEngine, WorldValidationError
 
@@ -98,14 +99,40 @@ def test_illegal_movement_and_structured_tool_normalization(tmp_path: Path) -> N
     assert parse_json_object('```json\n{"scene_intent":"go"}\n```')["scene_intent"] == "go"
 
 
-def test_planning_approval_becomes_root_transaction(tmp_path: Path) -> None:
+def test_planning_publication_becomes_root_transaction(tmp_path: Path) -> None:
     db, project, world = setup_world(tmp_path)
     planning = PlanningService(db, world)
-    session = planning.create_session(project["id"], {"major_locations": 4, "secondary_locations": 12, "characters": 8})
-    draft = {"summary": "A clockwork coast", "notes": [], "entities": [{"key": "aether", "kind": "lore_system", "name": "Aethercraft", "aliases": [], "tags": ["magic"], "state": {"rules": "Power has a memory cost"}}], "relations": []}
-    result = planning.approve_stage(session["id"], 1, draft)
-    assert result["session"]["current_stage"] == 2
-    assert next(iter(world.projection(project["id"])["entities"].values()))["name"] == "Aethercraft"
+    workspace = PlanningWorkspaceService(db, world=world)
+    plan = workspace.create(
+        project["id"],
+        {
+            "major_locations": 4,
+            "secondary_locations": 12,
+            "characters": 8,
+        },
+    )
+    draft = {
+        "summary": "A clockwork coast",
+        "notes": [],
+        "entities": [
+            {
+                "key": "aether",
+                "kind": "lore_system",
+                "name": "Aethercraft",
+                "aliases": [],
+                "tags": ["magic"],
+                "state": {"rules": "Power has a memory cost"},
+            }
+        ],
+        "relations": [],
+    }
+
+    result = planning.publish(plan["id"], 1, draft)
+
+    assert (
+        next(iter(world.projection(project["id"])["entities"].values()))["name"]
+        == "Aethercraft"
+    )
     assert result["transaction"]["story_node_id"] is None
 
 
