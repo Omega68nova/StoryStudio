@@ -432,7 +432,10 @@ class PlanningService:
 
         proposed_entities, proposed_relations = world_payload(stage_number, draft)
         existing_keys = {row["resource_key"]: row["resource_id"] for row in self.db.fetch_all(
-            "SELECT * FROM planning_resource_keys WHERE session_id=? AND resource_type='entity'", (session_id,)
+            "SELECT * FROM planning_resource_keys WHERE "
+            "(generation_plan_id=? OR "
+            "(generation_plan_id IS NULL AND session_id=?)) "
+            "AND resource_type='entity'", (generation_plan_id, session_id)
         )}
         existing_keys.update({row["entity_key"]: row["entity_id"] for row in self.db.fetch_all("SELECT * FROM planning_entity_keys WHERE session_id = ?", (session_id,))})
         resolutions = resolutions or {}
@@ -457,7 +460,13 @@ class PlanningService:
             if action in {"keep_manual", "unlink"}:
                 preserve_manual.add(entity["key"])
                 if action == "unlink":
-                    self.db.execute("DELETE FROM planning_resource_keys WHERE session_id=? AND resource_key=?", (session_id, entity["key"]))
+                    self.db.execute(
+                        "DELETE FROM planning_resource_keys WHERE "
+                        "(generation_plan_id=? OR "
+                        "(generation_plan_id IS NULL AND session_id=?)) "
+                        "AND resource_key=?",
+                        (generation_plan_id, session_id, entity["key"]),
+                    )
                     self.db.execute("DELETE FROM planning_entity_keys WHERE session_id=? AND entity_key=?", (session_id, entity["key"]))
                 self.db.execute("UPDATE planning_conflicts SET resolution_json=?,status='resolved',updated_at=? WHERE id=?", (json.dumps(resolution), utc_now(), conflict["id"]))
                 continue
@@ -548,12 +557,12 @@ class PlanningService:
                 entity_id = combined_keys.get(str(entity["key"]))
                 if entity_id:
                     canonical = projection["entities"].get(entity_id)
-                    connection.execute("INSERT INTO planning_resource_keys(session_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key) DO UPDATE SET resource_id=excluded.resource_id,stage_number=excluded.stage_number,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at", (session_id, entity["key"], "entity", entity_id, stage_number, _entity_fingerprint(canonical) if canonical else stable_hash(entity), utc_now()))
+                    connection.execute("INSERT INTO planning_resource_keys(session_id,generation_plan_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key) DO UPDATE SET generation_plan_id=COALESCE(excluded.generation_plan_id,planning_resource_keys.generation_plan_id),resource_id=excluded.resource_id,stage_number=excluded.stage_number,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at", (session_id, generation_plan_id, entity["key"], "entity", entity_id, stage_number, _entity_fingerprint(canonical) if canonical else stable_hash(entity), utc_now()))
             for relation in proposed_relations:
                 if not relation.get("key"): continue
                 source = combined_keys.get(relation.get("source_key"), relation.get("source_key")); target = combined_keys.get(relation.get("target_key"), relation.get("target_key"))
                 relation_id = next((item["id"] for item in projection["relations"].values() if item.get("source_id") == source and item.get("target_id") == target and item.get("relation") == relation.get("relation")), None)
-                if relation_id: connection.execute("INSERT INTO planning_resource_keys(session_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key) DO UPDATE SET resource_id=excluded.resource_id,stage_number=excluded.stage_number,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at", (session_id, relation["key"], "relationship", relation_id, stage_number, stable_hash(relation), utc_now()))
+                if relation_id: connection.execute("INSERT INTO planning_resource_keys(session_id,generation_plan_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key) DO UPDATE SET generation_plan_id=COALESCE(excluded.generation_plan_id,planning_resource_keys.generation_plan_id),resource_id=excluded.resource_id,stage_number=excluded.stage_number,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at", (session_id, generation_plan_id, relation["key"], "relationship", relation_id, stage_number, stable_hash(relation), utc_now()))
             if not finalize:
                 replacement = next_draft if next_draft is not None else empty_draft(stage_number)
                 connection.execute(
