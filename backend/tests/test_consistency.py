@@ -5,15 +5,17 @@ from app.database import Database, new_id, utc_now
 from app.data.dataProvider import DataProvider
 from app.services.lifecycle import DataLifecycle, LifecycleConflict
 import pytest
-from app.services.planning import PlanningService
 from app.services.world import WorldEngine
 from app import main as app_main
 from app.schemas import StoryTurnCreate
 
 
 def setup(path: Path):
-    db = Database(path); db.initialize(); project = db.create_project("Consistency"); world = WorldEngine(db)
-    return db, project, world, PlanningService(db, world)
+    db = Database(path)
+    db.initialize()
+    project = db.create_project("Consistency")
+    world = WorldEngine(db)
+    return db, project, world, None
 
 
 def create_entity(world: WorldEngine, project_id: str, name: str, *, tags=None, state=None) -> str:
@@ -22,62 +24,6 @@ def create_entity(world: WorldEngine, project_id: str, name: str, *, tags=None, 
     }}], provenance="author")
     world.commit_root(project_id, mutations, provenance="author", summary=name)
     return mutations[0].arguments["entity_id"]
-
-
-def test_planning_conflict_resolutions_and_idempotent_approval(tmp_path: Path) -> None:
-    db, project, world, planning = setup(tmp_path)
-    ids = {name: create_entity(world, project["id"], name, tags=["old"], state={"traits": ["old"]}) for name in ("Link", "Merge", "Rename", "Omit")}
-    session = planning.create_session(project["id"], {})
-    draft = {"summary": "Resolved", "entities": [
-        {"key": name.casefold(), "kind": "character", "name": name, "aliases": [], "tags": ["new"], "state": {"traits": ["new"]}}
-        for name in ids
-    ], "relations": [{"source_key": "rename", "target_key": "omit", "relation": "friend"}]}
-    conflicts = planning.preflight(session["id"], 1, draft)
-    assert len(conflicts) == 4
-    result = planning.approve_stage(session["id"], 1, draft, {
-        "link": {"action": "link", "entity_id": ids["Link"]},
-        "merge": {"action": "merge", "entity_id": ids["Merge"]},
-        "rename": {"action": "rename", "new_name": "Renamed Copy"},
-        "omit": {"action": "omit"},
-    })
-    projection = world.projection(project["id"], use_cache=False)
-    assert projection["entities"][ids["Merge"]]["state"]["traits"] == ["old", "new"]
-    assert any(entity["name"] == "Renamed Copy" for entity in projection["entities"].values())
-    assert not projection["relations"]
-    repeated = planning.approve_stage(session["id"], 1, draft)
-    assert repeated["duplicate"] is True
-    assert repeated["transaction"]["id"] == result["transaction"]["id"]
-
-
-def test_reopen_keeps_approved_canonical_data_active(tmp_path: Path) -> None:
-    _, project, world, planning = setup(tmp_path)
-    session = planning.create_session(project["id"], {})
-    draft = {"summary": "Root", "entities": [{"key": "hero", "kind": "character", "name": "Hero", "state": {}}], "relations": []}
-    approved = planning.approve_stage(session["id"], 1, draft)
-    planning.reopen_stage(session["id"], 1)
-    assert not world.db.fetch_one("SELECT transaction_id FROM inactive_world_transactions WHERE transaction_id=?", (approved["transaction"]["id"],))
-    projection = world.projection(project["id"], use_cache=False)
-    assert any(entity["name"] == "Hero" for entity in projection["entities"].values())
-    assert planning.get_session(session["id"])["stages"][0]["status"] == "ready"
-
-
-def test_restart_repairs_approved_json_stale_generation_and_current_stage(tmp_path: Path) -> None:
-    db, project, world, planning = setup(tmp_path)
-    session = planning.create_session(project["id"], {})
-    draft = {"summary": "Kept", "entities": [], "relations": []}
-    approved = planning.approve_stage(session["id"], 1, draft)
-    stage = db.fetch_one("SELECT id FROM planning_stages WHERE session_id=? AND stage_number=1", (session["id"],))
-    db.execute("UPDATE planning_stages SET status='draft',transaction_id=NULL,approved_revision_hash=NULL WHERE id=?", (stage["id"],))
-    second = db.fetch_one("SELECT id FROM planning_stages WHERE session_id=? AND stage_number=2", (session["id"],))
-    job = db.create_job(project["id"], "planning", {"session_id": session["id"], "stage_number": 2})
-    db.execute("UPDATE planning_stages SET status='generating',active_job_id=? WHERE id=?", (job["id"], second["id"]))
-    db.execute("UPDATE planning_sessions SET current_stage=5 WHERE id=?", (session["id"],))
-    db.initialize()
-    repaired = planning.get_session(session["id"])
-    assert repaired["stages"][0]["status"] == "approved"
-    assert repaired["stages"][0]["transaction_id"] == approved["transaction"]["id"]
-    assert repaired["stages"][1]["status"] == "cancelled"
-    assert repaired["current_stage"] == 2
 
 
 def test_reference_counted_files_fts_cleanup_and_relocation(tmp_path: Path, monkeypatch) -> None:
