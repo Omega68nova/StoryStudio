@@ -8,7 +8,6 @@ from app.services.job_handlers import BaseJobHandler, JobExecutionContext
 from app.services.runtimes import RuntimeFailure
 from app.services.planningGenerationCore import PlanningGenerationCore
 from app.services.planningBatchTaskExecutor import PlanningBatchTaskExecutor
-from app.services.planningBatchTaskExecutor import PlanningBatchTaskExecutor
 
 
 class BatchGenerationJobHandler(BaseJobHandler):
@@ -71,7 +70,7 @@ class BatchGenerationJobHandler(BaseJobHandler):
             )
             return
 
-        if bool(settings.get("planning_bridge")):
+        if bool(settings.get("planning_workspace")):
             result = await PlanningBatchTaskExecutor().generate(
                 context,
                 task,
@@ -162,7 +161,7 @@ class BatchGenerationJobHandler(BaseJobHandler):
     async def _run_deterministic(self, context, repo, plan_id, task) -> None:
         prompt = dict(task.get("prompt") or {})
         settings = dict(task.get("settings") or {})
-        if bool(settings.get("planning_bridge")) and str(task.get("target_key")) == "8":
+        if bool(settings.get("planning_workspace")) and str(task.get("target_key")) == "8":
             from app.services.planning import PlanningService
             from app.services.world import WorldEngine
 
@@ -172,14 +171,14 @@ class BatchGenerationJobHandler(BaseJobHandler):
                 WorldEngine(context.db, data_provider=data),
                 data_provider=data,
             )
-            session = planning.prepare_image_stage(
-                str(prompt.get("planning_session_id") or ""),
-                generation_plan_id=plan_id,
+            prepared = planning.prepare_image_stage(
+                plan_id,
+                (task.get("result") or {}).get("json"),
             )
             result = {
-                "json": session["stages"][7].get("draft") or {},
+                "json": prepared["draft"],
                 "stage_number": 8,
-                "session_id": prompt.get("planning_session_id"),
+                "plan_id": plan_id,
             }
             repo.finish_task(
                 plan_id,
