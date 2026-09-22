@@ -14,7 +14,6 @@ def test_phase3_final_repository_boundaries() -> None:
         "lifecycleRepository.py",
         "mediaRepository.py",
         "musicRepository.py",
-        "planningRepository.py",
         "projectRepository.py",
         "reviewRepository.py",
         "runtimeRepository.py",
