@@ -4,10 +4,11 @@ import json
 from typing import Any
 
 from app.data.dataProvider import DataProvider
-from app.handlers.planningJobHandler import PlanningJobHandler
 from app.services.planning import PlanningService, stage_prompt
+from app.services.planningGenerationCore import PlanningGenerationCore
 from app.services.planning_v2 import (
     generated_stage_has_content,
+    merge_generated_batch,
     normalize_generated_defaults,
 )
 from app.services.runtimes import RuntimeFailure
@@ -16,25 +17,45 @@ from app.services.world import WorldEngine, WorldValidationError
 
 
 class PlanningBatchTaskExecutor:
-    def __init__(self) -> None:
-        self._legacy = PlanningJobHandler()
+    """Structured Planning v2-compatible generation on the Phase 4 task path."""
 
-    async def generate(self, context, task: dict[str, Any]) -> dict[str, Any]:
+    def __init__(self) -> None:
+        self.core = PlanningGenerationCore()
+
+    async def generate(
+        self,
+        context: Any,
+        task: dict[str, Any],
+    ) -> dict[str, Any]:
         prompt = dict(task.get("prompt") or {})
-        session_id = str(prompt.get("planning_session_id") or "")
-        stage_number = int(
-            prompt.get("planning_stage_number")
-            or task.get("target_key")
+        session_id = str(
+            prompt.get("planning_session_id") or ""
         )
+        try:
+            stage_number = int(
+                prompt.get("planning_stage_number")
+                or task.get("target_key")
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeFailure(
+                "Planning batch task has no valid stage number"
+            ) from exc
+
         if not session_id:
-            raise RuntimeFailure("Planning batch task has no source session")
+            raise RuntimeFailure(
+                "Planning batch task has no source session"
+            )
         if stage_number == 8:
             raise RuntimeFailure(
-                "Planning stage 8 is deterministic and is prepared after stage 7 commit"
+                "Planning stage 8 is prepared deterministically "
+                "after stage 7 commit"
             )
 
         data = DataProvider(context.db)
-        world = WorldEngine(context.db, data_provider=data)
+        world = WorldEngine(
+            context.db,
+            data_provider=data,
+        )
         planning = PlanningService(
             context.db,
             world,
@@ -45,20 +66,18 @@ class PlanningBatchTaskExecutor:
             stage_number,
         )
 
+        stage = dict(stage)
+        stage["human_prompt"] = str(
+            prompt.get("human_prompt") or ""
+        )
+
         llama = await context.ai.ensure_text_ready(
             "planning",
             reason=f"Batch planning stage {stage_number} generation",
         )
-        self._legacy._start_metrics(context)
-
         label = (
             f"Stage {stage_number}/8 · "
             f"{str(stage['kind']).replace('_', ' ').title()}"
-        )
-        await self._legacy._job_phase(
-            context,
-            "planning_context",
-            f"{label}: preparing compact context",
         )
 
         settings = data.runtime.settings()
@@ -68,23 +87,64 @@ class PlanningBatchTaskExecutor:
                 settings.get("context_tokens", 8192),
             )
         )
+        if context_tokens < 2048:
+            raise RuntimeFailure(
+                f"The configured llama.cpp context "
+                f"({context_tokens} tokens) is too small for "
+                "preplanning."
+            )
+
         desired_outputs = {
-            1: 1000, 2: 2300, 3: 2400, 4: 1900,
-            5: 2200, 6: 2200, 7: 1800,
+            1: 1000,
+            2: 2300,
+            3: 2400,
+            4: 1900,
+            5: 2200,
+            6: 2200,
+            7: 1800,
         }
-        desired_output = desired_outputs.get(stage_number, 900)
+        desired_output = desired_outputs.get(
+            stage_number,
+            900,
+        )
+
+        append = bool(prompt.get("append"))
+        focus = (
+            str(prompt.get("focus") or "").strip()
+            or None
+        )
+        if append:
+            desired_output = min(desired_output, 1200)
+
         available_prompt = max(
             768,
             context_tokens - desired_output - 768,
         )
-        character_budget = max(3500, available_prompt * 2)
+        character_budget = max(
+            3500,
+            available_prompt * 2,
+        )
 
+        existing_draft = (
+            prompt.get("existing_draft")
+            if append
+            else None
+        )
+        if existing_draft is not None and not isinstance(
+            existing_draft,
+            dict,
+        ):
+            existing_draft = None
+
+        repair_text = str(
+            prompt.get("repair_text") or ""
+        )
         inventory = planning.world_inventory(
             session["project_id"],
             include_catalogs=stage_number == 7,
             session_id=session["id"],
         )
-        repair_text = str(prompt.get("repair_text") or "")
+
         messages = stage_prompt(
             stage,
             session,
@@ -92,6 +152,8 @@ class PlanningBatchTaskExecutor:
             inventory,
             character_budget=character_budget,
             repair_text=repair_text,
+            focus=focus,
+            existing_draft=existing_draft,
         )
 
         count_prompt_tokens = getattr(
@@ -106,11 +168,14 @@ class PlanningBatchTaskExecutor:
         )
         if not count_prompt_tokens or not apply_template:
             raise RuntimeFailure(
-                "llama.cpp runtime is missing raw planning autocomplete support"
+                "llama.cpp runtime is missing raw planning "
+                "autocomplete support"
             )
 
         formatted = await apply_template(messages)
-        prompt_tokens = int(await count_prompt_tokens(formatted))
+        prompt_tokens = int(
+            await count_prompt_tokens(formatted)
+        )
         while (
             prompt_tokens > available_prompt
             and character_budget > 3500
@@ -126,6 +191,8 @@ class PlanningBatchTaskExecutor:
                 inventory,
                 character_budget=character_budget,
                 repair_text=repair_text,
+                focus=focus,
+                existing_draft=existing_draft,
             )
             formatted = await apply_template(messages)
             prompt_tokens = int(
@@ -137,7 +204,9 @@ class PlanningBatchTaskExecutor:
                 f"{label} leaves too little context for a useful answer"
             )
 
-        async def progress(update: dict[str, Any]) -> None:
+        async def progress(
+            update: dict[str, Any],
+        ) -> None:
             context.db.update_job_progress(
                 context.job_id,
                 "planning_generating",
@@ -145,9 +214,22 @@ class PlanningBatchTaskExecutor:
                 update.get("value"),
                 update.get("max"),
             )
+            await context.events.publish(
+                "job",
+                {
+                    "job_id": context.job_id,
+                    "status": "running",
+                    "stage": "planning_generating",
+                    "message": (
+                        f"{label}: generating structured draft"
+                    ),
+                    "value": update.get("value"),
+                    "max": update.get("max"),
+                },
+            )
 
         raw, generation_error, _, _ = (
-            await self._legacy._generate_planning_json_raw(
+            await self.core.raw_complete_json(
                 context,
                 llama,
                 messages,
@@ -170,23 +252,50 @@ class PlanningBatchTaskExecutor:
         draft: dict[str, Any] = {}
 
         for attempt in range(3):
+            batch_has_content = False
             try:
                 draft = parse_json_object(raw)
                 normalize_generated_defaults(
                     stage_number,
                     draft,
                 )
+
+                if append:
+                    batch_has_content = (
+                        generated_stage_has_content(
+                            stage_number,
+                            draft,
+                            focus,
+                        )
+                    )
+                    if batch_has_content:
+                        draft = merge_generated_batch(
+                            stage_number,
+                            existing_draft or {},
+                            draft,
+                            str(focus),
+                        )
+
                 planning.validate_draft(
                     draft,
                     stage_number,
-                    json.loads(session["settings_json"]),
+                    json.loads(
+                        session["settings_json"]
+                    ),
                 )
-                if generated_stage_has_content(
-                    stage_number,
-                    draft,
-                ):
+
+                usable = (
+                    batch_has_content
+                    if append
+                    else generated_stage_has_content(
+                        stage_number,
+                        draft,
+                    )
+                )
+                if usable:
                     validation_error = None
                     break
+
                 validation_error = WorldValidationError(
                     f"{label} returned no usable stage resources"
                 )
@@ -202,13 +311,14 @@ class PlanningBatchTaskExecutor:
                     "role": "user",
                     "content": (
                         "The previous answer contained no usable "
-                        "stage resources or did not match the requested "
-                        "root JSON shape. Generate the requested root object now."
+                        f"{focus or 'stage resources'} or did not "
+                        "match the requested root JSON shape. "
+                        "Generate the requested root object now."
                     ),
                 },
             ]
             raw, generation_error, _, _ = (
-                await self._legacy._generate_planning_json_raw(
+                await self.core.raw_complete_json(
                     context,
                     llama,
                     retry_messages,

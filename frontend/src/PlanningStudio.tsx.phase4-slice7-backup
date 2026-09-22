@@ -247,7 +247,7 @@ export function PlanningStudio({
   async function randomizeDirection() {
     setRandomizingDirection(true);
     try {
-      const created = await api<{ id: string }>(`/projects/${projectId}/generation-plans/random-direction`, {
+      const created = await api<{ id: string }>(`/projects/${projectId}/planning/random-direction`, {
         method: "POST",
         body: JSON.stringify({ theme: randomTheme.trim() }),
       });
@@ -277,7 +277,7 @@ export function PlanningStudio({
   async function generate(stage: number, repair = false, automate = false, shared = "") {
     try {
       clearDirty(stage);
-      await api(`/generation-plans/planning/${session!.id}/tasks/${stage}/generate`, {
+      await api(`/planning/${session!.id}/stages/${stage}/generate`, {
         method: "POST",
         body: JSON.stringify({
           prompt: shared || prompts[stage] || "",
@@ -297,7 +297,7 @@ export function PlanningStudio({
     setDrafts((current) => ({ ...current, [stage]: JSON.stringify(draft, null, 2) }));
   }
   async function requestSection(stage: number, focus: string) {
-    await api(`/generation-plans/planning/${session!.id}/tasks/${stage}/generate`, {
+    await api(`/planning/${session!.id}/stages/${stage}/generate`, {
       method: "POST",
       body: JSON.stringify({ prompt: prompts[stage] || "", append: true, focus }),
     });
@@ -339,7 +339,7 @@ export function PlanningStudio({
       const draft = JSON.parse(drafts[stage] || "{}");
       if (approve && !suppliedResolutions) {
         const result = await api<{ conflicts: PlanningConflict[] }>(
-          `/generation-plans/planning/${session!.id}/tasks/${stage}/preflight`,
+          `/planning/${session!.id}/stages/${stage}/preflight`,
           { method: "POST", body: JSON.stringify({ draft }) },
         );
         if (result.conflicts.length) {
@@ -355,20 +355,13 @@ export function PlanningStudio({
           return;
         }
       }
-      if (approve) {
-        await api(`/generation-plans/planning/${session!.id}/tasks/${stage}/approve`, {
-          method: "POST",
-          body: JSON.stringify({
-            draft,
-            resolutions: suppliedResolutions ?? {},
-          }),
-        });
-      } else {
-        await api(`/planning/${session!.id}/stages/${stage}`, {
-          method: "PUT",
-          body: JSON.stringify({ draft }),
-        });
-      }
+      await api(`/planning/${session!.id}/stages/${stage}${approve ? "/approve" : ""}`, {
+        method: approve ? "POST" : "PUT",
+        body: JSON.stringify({
+          draft,
+          resolutions: suppliedResolutions ?? {},
+        }),
+      });
       clearDirty(stage);
       setApprovalStage(null);
       setConflicts([]);

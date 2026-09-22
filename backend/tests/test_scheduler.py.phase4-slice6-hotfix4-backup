@@ -15,8 +15,13 @@ from app.services.planningGenerationCore import PlanningGenerationCore, _looks_l
 from app.services.batchGenerationApiService import BatchGenerationApiService
 from app.services.planning import PlanningService
 from app.services.job_handlers import JobExecutionContext
+    _looks_like_token_truncation,
+    _planning_json_error,
+)
 from app.services.minigames import VIRTUAL_PLAYER_ID
 from app.services.world import WorldEngine
+
+
 class FakeLlama:
     def __init__(self) -> None:
         self.loads = 0

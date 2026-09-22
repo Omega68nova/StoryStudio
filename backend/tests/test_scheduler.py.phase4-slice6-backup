@@ -11,12 +11,16 @@ import pytest
 from app.database import Database, new_id, utc_now
 from app.services.events import EventHub
 from app.services.scheduler import GenerationScheduler
-from app.services.planningGenerationCore import PlanningGenerationCore, _looks_like_token_truncation, _planning_json_error
-from app.services.batchGenerationApiService import BatchGenerationApiService
-from app.services.planning import PlanningService
+from app.handlers.planningJobHandler import PlanningJobHandler, _looks_like_token_truncation, _planning_json_error
 from app.services.job_handlers import JobExecutionContext
+from app.handlers.planningJobHandler import (
+    _looks_like_token_truncation,
+    _planning_json_error,
+)
 from app.services.minigames import VIRTUAL_PLAYER_ID
 from app.services.world import WorldEngine
+
+
 class FakeLlama:
     def __init__(self) -> None:
         self.loads = 0
@@ -115,8 +119,7 @@ async def test_random_planning_direction_uses_one_high_temperature_request(tmp_p
     db, project = setup_db(tmp_path)
     llama = FakeLlama()
     scheduler = GenerationScheduler(db, EventHub(), FakeSupervisor(llama, FakeComfy()))
-    api = BatchGenerationApiService(db, world=scheduler.world)
-    job = api.queue_random_direction(project["id"], "medieval fantasy")
+    job = db.create_job(project["id"], "planning", {"action": "random_direction", "theme": "medieval fantasy"})
     await scheduler.start(); await scheduler.enqueue(job["id"])
     await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
 
@@ -150,16 +153,16 @@ async def test_planning_generation_continues_token_truncated_json(tmp_path: Path
 
     llama = TruncatedPlanningLlama()
     scheduler = GenerationScheduler(db, EventHub(), FakeSupervisor(llama, FakeComfy()))
-    planning = PlanningService(db, scheduler.world)
-    session = planning.create_session(project["id"], {})
-    api = BatchGenerationApiService(db, world=scheduler.world)
-    job = api.queue_planning_stage(session["id"], 1)["job"]
+    session = scheduler.planning.create_session(project["id"], {})
+    stage = db.fetch_one("SELECT id FROM planning_stages WHERE session_id=? AND stage_number=1", (session["id"],))
+    job = db.create_job(project["id"], "planning", {"session_id": session["id"], "stage_number": 1})
+    db.execute("UPDATE planning_stages SET status='queued',active_job_id=? WHERE id=?", (job["id"], stage["id"]))
 
     await scheduler.start(); await scheduler.enqueue(job["id"])
     await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
 
     saved = db.get_job(job["id"])
-    planned = api.planning_session_view(session["id"])["stages"][0]
+    planned = scheduler.planning.get_session(session["id"])["stages"][0]
     assert saved and saved["status"] == "completed"
     assert planned["draft"]["summary"] == "A cut story"
     assert llama.stream_calls == [(None, True), (0.0, True)]
@@ -181,7 +184,9 @@ async def test_empty_raw_completion_retries_once_without_cache(tmp_path: Path) -
 
     llama = EmptyRawLlama()
     scheduler = GenerationScheduler(db, EventHub(), FakeSupervisor(llama, FakeComfy()))
-    job = db.create_job(project["id"], "batch_generation", {"plan_id": "test", "task_key": "test"})
+    job = db.create_job(project["id"], "planning", {"action": "test"})
+    handler = scheduler.handlers["planning"]
+    assert isinstance(handler, PlanningJobHandler)
 
     async def set_state(*_args):
         return None
@@ -198,8 +203,9 @@ async def test_empty_raw_completion_retries_once_without_cache(tmp_path: Path) -
         set_runtime_state=set_state,
         enqueue=enqueue,
     )
+    handler._start_metrics(context)
     with pytest.raises(Exception, match="cache-free retry"):
-        await PlanningGenerationCore().raw_complete_json(
+        await handler._generate_planning_json_raw(
             context,
             llama,
             [{"role": "user", "content": "Return JSON"}],
@@ -236,10 +242,9 @@ async def test_planning_context_stays_loaded_until_story_generation(tmp_path: Pa
 
     supervisor = SwitchingSupervisor()
     scheduler = GenerationScheduler(db, EventHub(), supervisor)
-    api = BatchGenerationApiService(db, world=scheduler.world)
     await scheduler.start()
     for _ in range(2):
-        planning_job = api.queue_random_direction(project["id"], "fantasy")
+        planning_job = db.create_job(project["id"], "planning", {"action": "random_direction", "theme": "fantasy"})
         await scheduler.enqueue(planning_job["id"]); await asyncio.wait_for(scheduler.queue.join(), 2)
         assert db.get_job(planning_job["id"])["status"] == "completed"
     user = db.create_story_node(project["id"], None, "user", "Begin")
@@ -268,8 +273,7 @@ async def test_external_llama_rejects_insufficient_planning_context(tmp_path: Pa
         async def shutdown(self): pass
 
     scheduler = GenerationScheduler(db, EventHub(), ExternalSupervisor())
-    api = BatchGenerationApiService(db, world=scheduler.world)
-    job = api.queue_random_direction(project["id"], "")
+    job = db.create_job(project["id"], "planning", {"action": "random_direction"})
     await scheduler.start(); await scheduler.enqueue(job["id"])
     await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
     saved = db.get_job(job["id"])

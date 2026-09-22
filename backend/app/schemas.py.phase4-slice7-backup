@@ -367,29 +367,6 @@ class PlanningGenerateRequest(BaseModel):
     append: bool = False
     focus: str | None = Field(default=None, max_length=64)
 
-class GenerationTaskGenerateRequest(BaseModel):
-    prompt: str = Field(default="", max_length=10_000)
-    repair: bool = False
-    automate: bool = False
-    automation_prompt: str = Field(default="", max_length=10_000)
-    append: bool = False
-    focus: str | None = Field(default=None, max_length=64)
-
-
-class GenerationTaskReviewRequest(BaseModel):
-    result: dict[str, Any] | None = None
-    note: str = Field(default="", max_length=10_000)
-    resolutions: dict[str, PlanningResolution] = Field(default_factory=dict)
-
-
-class GenerationTaskRejectRequest(BaseModel):
-    note: str = Field(default="", max_length=10_000)
-
-
-class GenerationResultUpdate(BaseModel):
-    result: dict[str, Any]
-
-
 
 class WorldEntityCreate(BaseModel):
     kind: Literal["character", "location", "faction", "item", "lore_system", "fact", "relationship", "plot_beat"]

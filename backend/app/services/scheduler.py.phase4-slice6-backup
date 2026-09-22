@@ -11,6 +11,7 @@ from app.services.job_handlers import JobExecutionContext, JobHandler
 from app.services.runtimes import ProcessSupervisor
 from app.services.minigames import MinigameService
 from app.services.npc import NpcDirector
+from app.services.planning import PlanningService
 from app.services.story_planner import StoryPlanner
 from app.services.world import WorldEngine
 
@@ -91,6 +92,7 @@ class GenerationScheduler:
         # scheduler refactor can land without rewriting every API route in
         # the same commit. Phase 3 should inject these directly into routes.
         self.world = WorldEngine(db)
+        self.planning = PlanningService(db, self.world)
         self.story_planner = StoryPlanner(self.world)
         self.npc_director = NpcDirector(self.world)
         self.minigames = MinigameService(db, self.world)
@@ -102,12 +104,14 @@ class GenerationScheduler:
             # Lazy imports avoid making the scheduler module the owner of
             # handler implementations while retaining drop-in construction.
             from app.handlers.imageJobHandler import ImageJobHandler
+            from app.handlers.planningJobHandler import PlanningJobHandler
             from app.handlers.storyJobHandler import StoryJobHandler
             from app.handlers.batchGenerationJobHandler import BatchGenerationJobHandler
 
             self.handlers.update({
                 "story": StoryJobHandler(),
                 "image": ImageJobHandler(),
+                "planning": PlanningJobHandler(),
                 "batch_generation": BatchGenerationJobHandler(),
             })
 

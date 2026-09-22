@@ -28,10 +28,6 @@ from app.schemas import (
     PlanningBatchAcceptRequest,
     PlanningDeleteRequest,
     PlanningGenerateRequest,
-    GenerationTaskGenerateRequest,
-    GenerationTaskReviewRequest,
-    GenerationTaskRejectRequest,
-    GenerationResultUpdate,
     PlanningSessionCreate,
     RandomPlanningDirectionRequest,
     PlanningImagePlanUpdate,
@@ -95,10 +91,6 @@ from app.services.auth import AuthError, AuthService, AuthUser, COOKIE_NAME, SES
 from app.services.environment import EnvironmentService
 from app.data.dataProvider import DataProvider
 from app.services.routeDataService import RouteDataService
-from app.services.generationPlanApiService import GenerationPlanApiService
-from app.services.planning import PlanningService
-from app.services.batchGenerationApiService import BatchGenerationApiService
-from app.services.batchGeneration import GenerationPlanError
 
 
 db = Database()
@@ -110,9 +102,6 @@ auth = AuthService(db)
 environment = EnvironmentService(db)
 data = DataProvider(db)
 route_data = RouteDataService(data)
-generation_api = GenerationPlanApiService(db, data_provider=data, world=scheduler.world)
-planning = PlanningService(db, scheduler.world, data_provider=data)
-batch_api = BatchGenerationApiService(db, data_provider=data, world=scheduler.world)
 current_user_context: ContextVar[AuthUser | None] = ContextVar("current_user", default=None)
 BUILD_VERSION = "0.17.0-environment"
 
@@ -164,8 +153,6 @@ def _resource_project_id(path: str) -> str | None:
         (r"^/api/suggestions/([^/]+)", "SELECT n.project_id FROM image_suggestions s JOIN story_nodes n ON n.id=s.story_node_id WHERE s.id=?"),
         (r"^/api/minigames/sessions/([^/]+)", "SELECT project_id FROM minigame_sessions WHERE id=?"),
         (r"^/api/jobs/([^/]+)", "SELECT project_id FROM generation_jobs WHERE id=?"),
-        (r"^/api/generation-plans/planning/([^/]+)", "SELECT project_id FROM planning_sessions WHERE id=?"),
-        (r"^/api/generation-plans/([^/]+)", "SELECT project_id FROM generation_plans WHERE id=?"),
         (r"^/api/entities/([^/]+)", "SELECT project_id FROM world_entities WHERE id=?"),
     )
     for pattern, query in lookups:
@@ -191,10 +178,6 @@ def _member_route_allowed(method: str, path: str, user: AuthUser) -> bool:
         ) or (
             method == "POST" and re.fullmatch(r"/api/projects/[^/]+/(turns|see)", path)
         ) or (
-            method == "GET" and re.fullmatch(r"/api/projects/[^/]+/generation-plans", path)
-        ) or (
-            method == "POST" and re.fullmatch(r"/api/projects/[^/]+/generation-plans/random-direction", path)
-        ) or (
             method == "GET" and re.fullmatch(r"/api/projects/[^/]+/(music|minigames/checkpoint)", path)
         ) or (
             method in {"GET", "PUT"} and re.fullmatch(r"/api/projects/[^/]+/music/playback", path)
@@ -204,8 +187,6 @@ def _member_route_allowed(method: str, path: str, user: AuthUser) -> bool:
         return bool(allowed and auth.assigned(user.id, direct_project))
     indirect_project = _resource_project_id(path)
     if indirect_project and auth.assigned(user.id, indirect_project):
-        if path.startswith("/api/generation-plans/") and method in {"GET", "POST", "PUT"}:
-            return True
         if method == "PATCH" and re.fullmatch(r"/api/bible/[^/]+", path):
             return True
         if method == "POST" and re.fullmatch(r"/api/minigames/sessions/[^/]+/(start|resolve|resume)", path):
@@ -2172,234 +2153,19 @@ async def import_bible(project_id: str) -> dict[str, Any]:
 @app.post("/api/projects/{project_id}/planning", status_code=201)
 async def create_planning_session(project_id: str, request: PlanningSessionCreate) -> dict[str, Any]:
     require_project(project_id)
-    return planning.create_session(project_id, request.model_dump())
+    return scheduler.planning.create_session(project_id, request.model_dump())
 
 
-
-
-@app.get("/api/projects/{project_id}/generation-plans")
-async def list_generation_plans(project_id: str) -> list[dict[str, Any]]:
-    require_project(project_id)
-    return generation_api.list_project(project_id)
-
-
-@app.get("/api/generation-plans/{plan_id}")
-async def get_generation_plan(plan_id: str) -> dict[str, Any]:
-    try:
-        return generation_api.get(plan_id)
-    except GenerationPlanError as exc:
-        raise HTTPException(404, str(exc)) from exc
-
-
-@app.post("/api/projects/{project_id}/generation-plans/random-direction", status_code=202)
-async def generation_plan_random_direction(
-    project_id: str,
-    request: RandomPlanningDirectionRequest,
-) -> dict[str, Any]:
+@app.post("/api/projects/{project_id}/planning/random-direction", status_code=202)
+async def generate_random_planning_direction(project_id: str, request: RandomPlanningDirectionRequest) -> dict[str, Any]:
     require_project(project_id)
     user = current_user()
-    job = batch_api.queue_random_direction(
-        project_id,
-        request.theme.strip(),
-        requested_by_user_id=user.id,
-        requester_name_snapshot=user.username,
+    job = db.create_job(
+        project_id, "planning", {"action": "random_direction", "temperature": 1.25, "theme": request.theme.strip()},
+        requested_by_user_id=user.id, requester_name_snapshot=user.username,
     )
     await scheduler.enqueue(job["id"])
     return job
-
-
-@app.post("/api/generation-plans/planning/{session_id}")
-async def import_planning_generation_plan(session_id: str) -> dict[str, Any]:
-    try:
-        return generation_api.planning_plan(session_id)
-    except (GenerationPlanError, WorldValidationError) as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-@app.post(
-    "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/generate",
-    status_code=202,
-)
-async def generate_generation_plan_planning_task(
-    session_id: str,
-    stage_number: int,
-    request: GenerationTaskGenerateRequest | None = None,
-) -> dict[str, Any]:
-    request = request or GenerationTaskGenerateRequest()
-    user = current_user()
-    try:
-        result = generation_api.queue_planning_task(
-            session_id,
-            stage_number,
-            human_prompt=request.prompt.strip(),
-            repair=request.repair,
-            append=request.append,
-            focus=request.focus.strip() if request.focus else None,
-            automate=request.automate,
-            automation_prompt=request.automation_prompt.strip(),
-            requested_by_user_id=user.id,
-            requester_name_snapshot=user.username,
-        )
-    except (GenerationPlanError, WorldValidationError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-    if result.get("deterministic"):
-        return result
-
-    await scheduler.enqueue(result["job"]["id"])
-    return result
-
-
-@app.post(
-    "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/preflight"
-)
-async def preflight_generation_plan_planning_task(
-    session_id: str,
-    stage_number: int,
-    request: PlanningDraftUpdate,
-) -> dict[str, Any]:
-    try:
-        return {
-            "conflicts": generation_api.preflight_planning(
-                session_id,
-                stage_number,
-                request.draft,
-            )
-        }
-    except WorldValidationError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-@app.post(
-    "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/approve"
-)
-async def approve_generation_plan_planning_task(
-    session_id: str,
-    stage_number: int,
-    request: PlanningApprovalRequest,
-) -> dict[str, Any]:
-    try:
-        plan = generation_api.approve_and_commit_planning(
-            session_id,
-            stage_number,
-            draft=request.draft,
-            resolutions={
-                key: value.model_dump(exclude_none=True)
-                for key, value in request.resolutions.items()
-            },
-        )
-    except (GenerationPlanError, WorldValidationError, ValueError) as exc:
-        status = 409 if "conflict" in str(exc).casefold() else 422
-        raise HTTPException(status, str(exc)) from exc
-
-    await events.publish(
-        "planning",
-        {
-            "session_id": session_id,
-            "stage_number": stage_number,
-            "status": "approved",
-        },
-    )
-    return plan
-
-
-@app.post("/api/generation-plans/{plan_id}/tasks/{task_key}/generate", status_code=202)
-async def generate_generation_plan_task(
-    plan_id: str,
-    task_key: str,
-) -> dict[str, Any]:
-    user = current_user()
-    try:
-        job = generation_api.batch.queue_task(
-            plan_id,
-            task_key,
-            requested_by_user_id=user.id,
-            requester_name_snapshot=user.username,
-        )
-    except GenerationPlanError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    await scheduler.enqueue(job["id"])
-    return job
-
-
-@app.post("/api/generation-plans/{plan_id}/generate-ready", status_code=202)
-async def generate_ready_generation_plan_tasks(
-    plan_id: str,
-) -> dict[str, Any]:
-    user = current_user()
-    try:
-        jobs = generation_api.batch.queue_ready(
-            plan_id,
-            requested_by_user_id=user.id,
-            requester_name_snapshot=user.username,
-        )
-    except GenerationPlanError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    for job in jobs:
-        await scheduler.enqueue(job["id"])
-    return {"jobs": jobs, "plan": generation_api.get(plan_id)}
-
-
-@app.put("/api/generation-plans/{plan_id}/tasks/{task_key}/result")
-async def replace_generation_plan_task_result(
-    plan_id: str,
-    task_key: str,
-    request: GenerationResultUpdate,
-) -> dict[str, Any]:
-    try:
-        return generation_api.replace_generated_result(
-            plan_id,
-            task_key,
-            request.result,
-        )
-    except (GenerationPlanError, ValueError, KeyError) as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-@app.post("/api/generation-plans/{plan_id}/tasks/{task_key}/approve")
-async def approve_generation_plan_task(
-    plan_id: str,
-    task_key: str,
-    request: GenerationTaskReviewRequest,
-) -> dict[str, Any]:
-    try:
-        if request.result is not None:
-            generation_api.replace_generated_result(
-                plan_id,
-                task_key,
-                request.result,
-            )
-        return generation_api.approve(
-            plan_id,
-            task_key,
-            request.note,
-        )
-    except (GenerationPlanError, ValueError, KeyError) as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-@app.post("/api/generation-plans/{plan_id}/tasks/{task_key}/reject")
-async def reject_generation_plan_task(
-    plan_id: str,
-    task_key: str,
-    request: GenerationTaskRejectRequest,
-) -> dict[str, Any]:
-    try:
-        return generation_api.reject(
-            plan_id,
-            task_key,
-            request.note,
-        )
-    except GenerationPlanError as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
-@app.get("/api/generation-plans/{plan_id}/tasks/{task_key}/revisions")
-async def generation_plan_task_revisions(
-    plan_id: str,
-    task_key: str,
-) -> list[dict[str, Any]]:
-    return generation_api.revisions(plan_id, task_key)
 
 
 @app.get("/api/projects/{project_id}/story-defaults")
@@ -2423,30 +2189,90 @@ async def update_project_story_defaults(project_id: str, request: ProjectStoryDe
 async def get_planning_session(project_id: str) -> dict[str, Any] | None:
     require_project(project_id)
     session_id = data.planning.latest_session_id(project_id)
-    return batch_api.planning_session_view(session_id) if session_id else None
+    return scheduler.planning.get_session(session_id) if session_id else None
 
 
+@app.post("/api/planning/{session_id}/stages/{stage_number}/preflight")
+async def preflight_planning_stage(session_id: str, stage_number: int, request: PlanningDraftUpdate) -> dict[str, Any]:
+    try:
+        conflicts = scheduler.planning.preflight(session_id, stage_number, request.draft)
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"conflicts": conflicts}
 
 
+@app.post("/api/planning/{session_id}/stages/{stage_number}/generate", status_code=202)
+async def generate_planning_stage(
+    session_id: str, stage_number: int, request: PlanningGenerateRequest | None = None
+) -> dict[str, Any]:
+    session, stage, _ = scheduler.planning.stage_for_generation(session_id, stage_number)
+    if stage_number == 8:
+        result = scheduler.planning.prepare_image_stage(session_id)
+        await events.publish("planning", {"session_id": session_id, "stage_number": 8, "status": "ready"})
+        return {"stage": result["stages"][7], "image_plans": result.get("image_plans", []), "deterministic": True}
+    if stage.get("active_job_id") and stage["status"] in {"queued", "generating"}:
+        active = db.get_job(stage["active_job_id"])
+        if active and active["status"] in {"queued", "running"}:
+            return {"job": active, "stage": stage, "duplicate": True}
+    human_prompt = request.prompt.strip() if request else ""
+    repair = bool(request and request.repair)
+    append = bool(request and request.append)
+    focus = request.focus.strip() if request and request.focus else None
+    if append and (stage_number == 1 or not focus):
+        raise HTTPException(422, "Incremental generation requires a section in stages 2 through 7")
+    if append and repair:
+        raise HTTPException(422, "Repair and incremental generation cannot run together")
+    if repair and not stage.get("raw_draft_text"):
+        raise HTTPException(409, "There is no malformed draft to repair")
+    automate = bool(request and request.automate)
+    automation_prompt = (request.automation_prompt.strip() if request else "") or human_prompt
+    job = db.create_job(session["project_id"], "planning", {
+        "session_id": session_id, "stage_number": stage_number, "human_prompt": human_prompt,
+        "repair": repair, "append": append, "focus": focus,
+        "automate": automate, "automation_prompt": automation_prompt,
+    })
+    data.planning.queue_stage_generation(
+        stage_id=stage["id"],
+        job_id=job["id"],
+        prompt=human_prompt,
+    )
+    await scheduler.enqueue(job["id"])
+    return {"job": job, "stage": stage}
 
 
 @app.put("/api/planning/{session_id}/stages/{stage_number}")
 async def save_planning_stage(session_id: str, stage_number: int, request: PlanningDraftUpdate) -> dict[str, Any]:
-    _, stage, _ = planning.stage_for_generation(session_id, stage_number)
+    _, stage, _ = scheduler.planning.stage_for_generation(session_id, stage_number)
     if stage["status"] in {"queued", "generating"}:
         raise HTTPException(409, "Wait for or cancel the active generation before saving this stage")
-    return planning.save_draft(stage["id"], request.draft)
+    return scheduler.planning.save_draft(stage["id"], request.draft)
 
 
+@app.post("/api/planning/{session_id}/stages/{stage_number}/approve")
+async def approve_planning_stage(session_id: str, stage_number: int, request: PlanningApprovalRequest) -> dict[str, Any]:
+    try:
+        _, stage, _ = scheduler.planning.stage_for_generation(session_id, stage_number)
+        if stage["status"] in {"queued", "generating"}:
+            raise HTTPException(409, "Wait for or cancel the active generation before approving this stage")
+        result = scheduler.planning.approve_stage(
+            session_id, stage_number, request.draft,
+            {key: value.model_dump(exclude_none=True) for key, value in request.resolutions.items()},
+        )
+    except WorldValidationError as exc:
+        status = 409 if "conflict" in str(exc).casefold() or "reopen" in str(exc).casefold() else 422
+        raise HTTPException(status, {"message": str(exc), "recovery_actions": ["review_conflicts", "reopen_stage"]}) from exc
+    await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "approved"})
+    await events.publish("memory_changed", {"transaction_id": result["transaction"]["id"]})
+    return result
 
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/accept-batch")
 async def accept_planning_stage_batch(session_id: str, stage_number: int, request: PlanningBatchAcceptRequest) -> dict[str, Any]:
     try:
-        _, stage, _ = planning.stage_for_generation(session_id, stage_number)
+        _, stage, _ = scheduler.planning.stage_for_generation(session_id, stage_number)
         if stage["status"] in {"queued", "generating"}:
             raise HTTPException(409, "Wait for or cancel the active generation before accepting this set")
-        result = planning.accept_stage_batch(session_id, stage_number, request.focus, request.draft)
+        result = scheduler.planning.accept_stage_batch(session_id, stage_number, request.focus, request.draft)
     except WorldValidationError as exc:
         raise HTTPException(422, {"message": str(exc), "recovery_actions": ["edit_current_set"]}) from exc
     await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "ready", "accepted_focus": request.focus})
@@ -2457,7 +2283,7 @@ async def accept_planning_stage_batch(session_id: str, stage_number: int, reques
 @app.post("/api/planning/{session_id}/stages/{stage_number}/reopen")
 async def reopen_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
     try:
-        result = planning.reopen_stage(session_id, stage_number)
+        result = scheduler.planning.reopen_stage(session_id, stage_number)
     except WorldValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
     await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "ready"})
@@ -2466,7 +2292,7 @@ async def reopen_planning_stage(session_id: str, stage_number: int) -> dict[str,
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/skip")
 async def skip_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
-    try: result = planning.skip_stage(session_id, stage_number)
+    try: result = scheduler.planning.skip_stage(session_id, stage_number)
     except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
     await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "skipped"})
     return result
@@ -2474,7 +2300,7 @@ async def skip_planning_stage(session_id: str, stage_number: int) -> dict[str, A
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/revalidate")
 async def revalidate_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
-    try: result = planning.revalidate_stage(session_id, stage_number)
+    try: result = scheduler.planning.revalidate_stage(session_id, stage_number)
     except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
     await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "approved"})
     return result
@@ -2482,7 +2308,7 @@ async def revalidate_planning_stage(session_id: str, stage_number: int) -> dict[
 
 @app.get("/api/planning/{session_id}/stages/{stage_number}/dependency-impact")
 async def planning_dependency_impact(session_id: str, stage_number: int) -> dict[str, Any]:
-    try: return planning.dependency_impact(session_id, stage_number)
+    try: return scheduler.planning.dependency_impact(session_id, stage_number)
     except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
 
 
@@ -2600,13 +2426,13 @@ async def generate_planning_images(
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/reset")
 async def reset_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
-    _, stage, _ = planning.stage_for_generation(session_id, stage_number)
+    _, stage, _ = scheduler.planning.stage_for_generation(session_id, stage_number)
     if stage["status"] in {"queued", "generating"}:
         raise HTTPException(409, {"message": "Cancel active generation before resetting this stage", "recovery_actions": ["cancel_job"]})
     if stage["status"] == "approved":
-        return planning.reopen_stage(session_id, stage_number)
+        return scheduler.planning.reopen_stage(session_id, stage_number)
     data.planning.reset_stage(stage["id"])
-    return planning.get_session(session_id)
+    return scheduler.planning.get_session(session_id)
 
 
 @app.get("/api/planning/{session_id}/delete-impact")
