@@ -55,9 +55,15 @@ class PlanningWorkspaceService:
         project_id: str,
         settings: dict[str, Any],
     ) -> dict[str, Any]:
-        existing = self.latest_plan_id(project_id)
-        if existing:
-            return self.view(existing)
+        active = self.db.fetch_one(
+            "SELECT id FROM generation_plans "
+            "WHERE project_id=? AND source_kind='planning_workspace' "
+            "AND status NOT IN ('completed','cancelled') "
+            "ORDER BY updated_at DESC LIMIT 1",
+            (project_id,),
+        )
+        if active:
+            return self.view(str(active["id"]))
 
         normalized = normalized_settings(settings)
         tasks: list[GenerationTaskDefinition] = []
