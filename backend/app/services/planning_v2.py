@@ -436,21 +436,56 @@ def published_domains(stage_number: int, draft: dict[str, Any]) -> dict[str, str
     return {domain: stable_hash({"stage": stage_number, "domain": domain, "draft": draft}) for domain in STAGE_PUBLISHES[stage_number]}
 
 
+def _provenance_owner_ids(db: Database, owner_id: str) -> tuple[str | None, str]:
+    plan = db.fetch_one(
+        "SELECT id,source_id FROM generation_plans WHERE id=?",
+        (owner_id,),
+    )
+    if not plan:
+        return None, owner_id
+    return str(plan["id"]), str(plan.get("source_id") or owner_id)
+
+
+def _resource_row(
+    db: Database,
+    owner_id: str,
+    key: str,
+    expected_type: str | None = None,
+) -> dict[str, Any] | None:
+    generation_plan_id, legacy_session_id = _provenance_owner_ids(db, owner_id)
+    if expected_type:
+        return db.fetch_one(
+            "SELECT resource_id,resource_type,rowid FROM planning_resource_keys "
+            "WHERE generation_plan_id=? AND resource_key=? AND resource_type=? "
+            "UNION ALL "
+            "SELECT resource_id,resource_type,rowid FROM planning_resource_keys "
+            "WHERE generation_plan_id IS NULL AND session_id=? "
+            "AND resource_key=? AND resource_type=? LIMIT 1",
+            (
+                generation_plan_id,
+                key,
+                expected_type,
+                legacy_session_id,
+                key,
+                expected_type,
+            ),
+        )
+    return db.fetch_one(
+        "SELECT resource_id,resource_type,rowid FROM planning_resource_keys "
+        "WHERE generation_plan_id=? AND resource_key=? "
+        "UNION ALL "
+        "SELECT resource_id,resource_type,rowid FROM planning_resource_keys "
+        "WHERE generation_plan_id IS NULL AND session_id=? AND resource_key=? "
+        "LIMIT 1",
+        (generation_plan_id, key, legacy_session_id, key),
+    )
+
+
 def resolve_resource(db: Database, owner_id: str, key_or_id: str | None, expected_type: str | None = None) -> str | None:
     if not key_or_id:
         return None
-    row = db.fetch_one(
-        "SELECT resource_id,resource_type FROM planning_resource_keys "
-        "WHERE generation_plan_id=? AND resource_key=? "
-        "UNION ALL "
-        "SELECT resource_id,resource_type FROM planning_resource_keys "
-        "WHERE generation_plan_id IS NULL AND session_id=? AND resource_key=? "
-        "LIMIT 1",
-        (owner_id, key_or_id, owner_id, key_or_id),
-    )
-    if row and (not expected_type or row["resource_type"] == expected_type):
-        return str(row["resource_id"])
-    return str(key_or_id)
+    row = _resource_row(db, owner_id, str(key_or_id), expected_type)
+    return str(row["resource_id"]) if row else str(key_or_id)
 
 
 def record_resource(db: Database, owner_id: str, stage_number: int, key: str, resource_type: str, resource_id: str, value: Any) -> None:
@@ -510,7 +545,7 @@ def apply_foundation(db: Database, project_id: str, draft: dict[str, Any]) -> No
 def apply_weather(db: Database, project_id: str, owner_id: str, stage_number: int, draft: dict[str, Any]) -> None:
     now, ids = utc_now(), {}
     for weather in draft.get("weather", []):
-        key = str(weather["key"]); existing = db.fetch_one("SELECT resource_id FROM planning_resource_keys WHERE (generation_plan_id=? OR (generation_plan_id IS NULL AND session_id=?)) AND resource_key=? AND resource_type='weather'", (owner_id, owner_id, key))
+        key = str(weather["key"]); existing = _resource_row(db, owner_id, key, "weather")
         weather_id = str(existing["resource_id"]) if existing else new_id()
         if existing:
             db.execute("UPDATE weather_definitions SET name=?,description=?,imagegen_description=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=? AND project_id=?", (weather["name"], weather.get("description", ""), weather.get("imagegen_description", ""), json.dumps(weather.get("tags", [])), json.dumps(weather.get("image_tags", [])), int(weather.get("enabled", True)), now, weather_id, project_id))
@@ -541,7 +576,7 @@ def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int,
         key = str(stat.get("key") or stat.get("stat_key") or "").strip()
         if not key or stat.get("scope", "character") not in {"character", "relationship"}:
             raise WorldValidationError("Invalid stat definition")
-        existing = db.fetch_one("SELECT resource_id FROM planning_resource_keys WHERE (generation_plan_id=? OR (generation_plan_id IS NULL AND session_id=?)) AND resource_key=? AND resource_type='stat'", (owner_id, owner_id, key))
+        existing = _resource_row(db, owner_id, key, "stat")
         stat_id = str(existing["resource_id"]) if existing else new_id()
         values = (stat["stat_key"], stat.get("label") or stat["stat_key"], stat.get("scope", "character"), float(stat.get("default_value", 0)), float(stat.get("minimum", 0)), float(stat.get("maximum", 100)), int(stat.get("integer_only", True)), stat.get("visibility", "public"))
         if values[4] > values[5]: raise WorldValidationError("Stat minimum cannot exceed maximum")
@@ -562,7 +597,7 @@ def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int,
                 f"Ability '{ability_name}' references unavailable stat(s): {', '.join(missing)}. "
                 f"Available stat keys: {available}"
             )
-        existing = db.fetch_one("SELECT resource_id FROM planning_resource_keys WHERE (generation_plan_id=? OR (generation_plan_id IS NULL AND session_id=?)) AND resource_key=? AND resource_type='ability'", (owner_id, owner_id, key)); ability_id = str(existing["resource_id"]) if existing else new_id()
+        existing = _resource_row(db, owner_id, key, "ability"); ability_id = str(existing["resource_id"]) if existing else new_id()
         values = (ability.get("ability_key") or key, ability.get("name") or key, ability.get("description", ""), ability.get("target_type", "self"), json.dumps(ability.get("requirements", {})), json.dumps(ability.get("costs", {})), json.dumps(ability.get("effects", [])), json.dumps(ability.get("minigame_profile", {})))
         if existing: db.execute("UPDATE ability_definitions SET ability_key=?,name=?,description=?,target_type=?,requirements_json=?,costs_json=?,effects_json=?,minigame_profile_json=?,updated_at=? WHERE id=? AND project_id=?", (*values, now, ability_id, project_id))
         else: db.execute("INSERT INTO ability_definitions(id,project_id,ability_key,name,description,target_type,requirements_json,costs_json,effects_json,minigame_profile_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (ability_id, project_id, *values, now, now))
@@ -574,7 +609,7 @@ def apply_outfits(db: Database, project_id: str, owner_id: str, stage_number: in
     for outfit in draft.get("outfits", []):
         key = str(outfit.get("key") or "").strip(); entity_id = resolve_resource(db, owner_id, outfit.get("character_key"), "entity")
         if not key or not entity_id or not db.fetch_one("SELECT id FROM world_entities WHERE id=? AND project_id=? AND kind='character'", (entity_id, project_id)): raise WorldValidationError("Outfit references an unavailable character")
-        existing = db.fetch_one("SELECT resource_id FROM planning_resource_keys WHERE (generation_plan_id=? OR (generation_plan_id IS NULL AND session_id=?)) AND resource_key=? AND resource_type='outfit'", (owner_id, owner_id, key)); outfit_id = str(existing["resource_id"]) if existing else new_id()
+        existing = _resource_row(db, owner_id, key, "outfit"); outfit_id = str(existing["resource_id"]) if existing else new_id()
         if existing: db.execute("UPDATE entity_outfits SET name=?,description=?,equipment_json=?,updated_at=? WHERE id=? AND entity_id=?", (outfit.get("name", "Outfit"), outfit.get("description", ""), json.dumps(outfit.get("equipment", [])), now, outfit_id, entity_id))
         else: db.execute("INSERT INTO entity_outfits(id,entity_id,name,description,equipment_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (outfit_id, entity_id, outfit.get("name", "Outfit"), outfit.get("description", ""), json.dumps(outfit.get("equipment", [])), now, now))
         record_resource(db, owner_id, stage_number, key, "outfit", outfit_id, outfit)
@@ -584,7 +619,7 @@ def apply_outfits(db: Database, project_id: str, owner_id: str, stage_number: in
         if location_id and not db.fetch_one("SELECT id FROM world_entities WHERE id=? AND project_id=? AND kind='location'", (location_id, project_id)): raise WorldValidationError("Routine references an unavailable location")
         phase_id = routine.get("time_phase_id")
         if phase_id and not db.fetch_one("SELECT id FROM time_phases WHERE id=? AND project_id=?", (phase_id, project_id)): raise WorldValidationError("Routine references an unavailable time phase")
-        existing = db.fetch_one("SELECT resource_id FROM planning_resource_keys WHERE (generation_plan_id=? OR (generation_plan_id IS NULL AND session_id=?)) AND resource_key=? AND resource_type='routine'", (owner_id, owner_id, key)); routine_id = str(existing["resource_id"]) if existing else new_id()
+        existing = _resource_row(db, owner_id, key, "routine"); routine_id = str(existing["resource_id"]) if existing else new_id()
         if existing: db.execute("UPDATE character_routines SET character_id=?,location_id=?,time_phase_id=?,notes=?,updated_at=? WHERE id=? AND project_id=?", (character_id, location_id, phase_id, routine.get("notes", ""), now, routine_id, project_id))
         else: db.execute("INSERT INTO character_routines(id,project_id,character_id,location_id,time_phase_id,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", (routine_id, project_id, character_id, location_id, phase_id, routine.get("notes", ""), now, now))
         record_resource(db, owner_id, stage_number, key, "routine", routine_id, routine)
@@ -606,15 +641,15 @@ def apply_runtime(db: Database, project_id: str, owner_id: str, draft: dict[str,
             for definition_id in ids: db.execute(f"INSERT INTO {join}(project_id,{column}) VALUES(?,?)", (project_id, definition_id))
     variants = {row["id"] for row in db.fetch_all("SELECT id FROM ambient_variants WHERE project_id=?", (project_id,))}
     for rule in draft.get("ambient", []):
-        owner_type = str(rule.get("owner_type") or ""); owner_id = resolve_resource(db, owner_id, rule.get("owner_key"))
-        if owner_type not in {"weather", "time", "location", "action"} or not owner_id: raise WorldValidationError("Invalid ambient owner")
+        owner_type = str(rule.get("owner_type") or ""); ambient_owner_id = resolve_resource(db, owner_id, rule.get("owner_key"))
+        if owner_type not in {"weather", "time", "location", "action"} or not ambient_owner_id: raise WorldValidationError("Invalid ambient owner")
         selected = set(rule.get("variant_ids") or [])
         if not selected <= variants: raise WorldValidationError("Ambient assignment references an unavailable variant")
-        db.execute("DELETE FROM ambient_assignments WHERE project_id=? AND owner_type=? AND owner_id=?", (project_id, owner_type, owner_id))
+        db.execute("DELETE FROM ambient_assignments WHERE project_id=? AND owner_type=? AND owner_id=?", (project_id, owner_type, ambient_owner_id))
         for sound_set in rule.get("sets", [{"selector_type": "default", "variant_ids": list(selected)}]):
             for variant_id in dict.fromkeys(sound_set.get("variant_ids") or []):
                 if variant_id not in variants: raise WorldValidationError("Ambient assignment references an unavailable variant")
-                db.execute("INSERT INTO ambient_assignments(id,project_id,owner_type,owner_id,selector_type,selector_value,weather_id,time_phase_id,variant_id) VALUES(?,?,?,?,?,?,?,?,?)", (new_id(), project_id, owner_type, owner_id, sound_set.get("selector_type", "default"), sound_set.get("selector_value"), resolve_resource(db, owner_id, sound_set.get("weather_key"), "weather"), sound_set.get("time_phase_id"), variant_id))
+                db.execute("INSERT INTO ambient_assignments(id,project_id,owner_type,owner_id,selector_type,selector_value,weather_id,time_phase_id,variant_id) VALUES(?,?,?,?,?,?,?,?,?)", (new_id(), project_id, owner_type, ambient_owner_id, sound_set.get("selector_type", "default"), sound_set.get("selector_value"), resolve_resource(db, owner_id, sound_set.get("weather_key"), "weather"), sound_set.get("time_phase_id"), variant_id))
     if "music" in draft:
         music = draft.get("music") or {}; theme_ids = list(dict.fromkeys(music.get("enabled_theme_ids") or [])); known_themes = {row["id"] for row in db.fetch_all("SELECT id FROM music_themes")}
         if not set(theme_ids) <= known_themes or (music.get("manual_theme_id") and music["manual_theme_id"] not in theme_ids): raise WorldValidationError("Music settings reference unavailable themes")
@@ -650,7 +685,7 @@ def prepare_image_plans(db: Database, project_id: str, owner_id: str, draft: dic
         existing = db.fetch_one("SELECT id,status,prompt_revision,media_asset_id,generation_job_id FROM planning_image_plans WHERE (generation_plan_id=? OR (generation_plan_id IS NULL AND session_id=?)) AND resource_key=? LIMIT 1", (generation_plan_id, legacy_session_id, resource_key)); plan_id = existing["id"] if existing else new_id()
         keep_status = existing and existing["prompt_revision"] == revision and existing["status"] in {"queued", "generated"}
         next_status = existing["status"] if keep_status else status
-        if existing: db.execute("UPDATE planning_image_plans SET prompt=?,negative_prompt=?,workflow_preset_id=?,width=?,height=?,prompt_revision=?,status=?,error=NULL,updated_at=? WHERE id=?", (prompt, override.get("negative_prompt", ""), workflow_id, override.get("width"), override.get("height"), revision, next_status, now, plan_id))
+        if existing: db.execute("UPDATE planning_image_plans SET generation_plan_id=COALESCE(generation_plan_id,?),prompt=?,negative_prompt=?,workflow_preset_id=?,width=?,height=?,prompt_revision=?,status=?,error=NULL,updated_at=? WHERE id=?", (generation_plan_id, prompt, override.get("negative_prompt", ""), workflow_id, override.get("width"), override.get("height"), revision, next_status, now, plan_id))
         else: db.execute("INSERT INTO planning_image_plans(id,session_id,generation_plan_id,project_id,resource_key,entity_id,kind,prompt,negative_prompt,workflow_preset_id,width,height,prompt_revision,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (plan_id, legacy_session_id, generation_plan_id, project_id, resource_key, row["id"], kind, prompt, override.get("negative_prompt", ""), workflow_id, override.get("width"), override.get("height"), revision, next_status, now, now))
         result.append(db.fetch_one("SELECT * FROM planning_image_plans WHERE id=?", (plan_id,)) or {})
     return result
