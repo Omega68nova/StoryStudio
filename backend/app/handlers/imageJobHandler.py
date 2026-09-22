@@ -35,7 +35,7 @@ class ImageJobHandler(BaseJobHandler):
       * image persistence
       * image_suggestions updates
       * entity_media_assets updates
-      * planning_image_plans updates
+      * generation_image_plans updates
       * environment background-ready notification
       * image-domain cancellation/failure cleanup
 
@@ -463,7 +463,7 @@ class ImageJobHandler(BaseJobHandler):
         plan_id = payload.get("planning_image_plan_id")
         if not plan_id:
             plan = context.db.fetch_one(
-                "SELECT id FROM planning_image_plans "
+                "SELECT id FROM generation_image_plans "
                 "WHERE media_asset_id=? AND generation_job_id=?",
                 (
                     asset_id,
@@ -474,7 +474,7 @@ class ImageJobHandler(BaseJobHandler):
 
         if plan_id:
             context.db.execute(
-                "UPDATE planning_image_plans "
+                "UPDATE generation_image_plans "
                 "SET status='generated', media_asset_id=?, "
                 "error=NULL, updated_at=? WHERE id=?",
                 (
@@ -536,7 +536,7 @@ class ImageJobHandler(BaseJobHandler):
         plan_id = payload.get("planning_image_plan_id")
         if not plan_id and asset_id:
             plan = context.db.fetch_one(
-                "SELECT id FROM planning_image_plans "
+                "SELECT id FROM generation_image_plans "
                 "WHERE media_asset_id=? AND generation_job_id=?",
                 (
                     asset_id,
@@ -547,7 +547,7 @@ class ImageJobHandler(BaseJobHandler):
 
         if plan_id:
             context.db.execute(
-                "UPDATE planning_image_plans "
+                "UPDATE generation_image_plans "
                 "SET status=?, error=?, updated_at=? "
                 "WHERE id=?",
                 (
