@@ -135,62 +135,6 @@ class Database:
             )
             # GenerationPlan owns generation/review recovery.
 
-    def _repair_planning_state(self, connection: sqlite3.Connection) -> None:
-        """Idempotently recover legacy/in-flight planning without discarding drafts."""
-        now = utc_now()
-        connection.execute(
-            "UPDATE planning_stages SET status='approved', active_job_id=NULL, updated_at=? "
-            "WHERE approved_json IS NOT NULL AND status NOT IN ('approved','stale','skipped')", (now,),
-        )
-        connection.execute("UPDATE planning_stages SET status='ready', updated_at=? WHERE status='draft'", (now,))
-        connection.execute(
-            "UPDATE planning_stages SET status='cancelled', active_job_id=NULL, updated_at=? "
-            "WHERE status IN ('queued','generating') AND (active_job_id IS NULL OR active_job_id IN "
-            "(SELECT id FROM generation_jobs WHERE status NOT IN ('queued','running','switching')))", (now,),
-        )
-        connection.execute("DELETE FROM planning_approval_claims WHERE stage_id IN (SELECT id FROM planning_stages WHERE status NOT IN ('approved','stale'))")
-        sessions = connection.execute("SELECT id, project_id, created_at FROM planning_sessions").fetchall()
-        for session in sessions:
-            warnings: list[dict[str, str]] = []
-            stages = connection.execute(
-                "SELECT id, stage_number, transaction_id FROM planning_stages WHERE session_id=? AND status IN ('approved','stale') ORDER BY stage_number",
-                (session["id"],),
-            ).fetchall()
-            missing = [stage for stage in stages if not stage["transaction_id"]]
-            transactions = connection.execute(
-                "SELECT id FROM world_transactions WHERE project_id=? AND provenance='planning' AND created_at>=? "
-                "AND id NOT IN (SELECT transaction_id FROM planning_stages WHERE transaction_id IS NOT NULL) ORDER BY created_at",
-                (session["project_id"], session["created_at"]),
-            ).fetchall()
-            if missing and len(missing) == len(transactions):
-                for stage, transaction in zip(missing, transactions, strict=True):
-                    connection.execute(
-                        "UPDATE planning_stages SET transaction_id=?, legacy_link_state='linked' WHERE id=?",
-                        (transaction["id"], stage["id"]),
-                    )
-            elif missing:
-                warnings.append({"code": "ambiguous_legacy_transactions", "message": "Approved stages could not be linked safely to legacy world transactions."})
-                for stage in missing:
-                    connection.execute("UPDATE planning_stages SET legacy_link_state='ambiguous' WHERE id=?", (stage["id"],))
-            linked_stages = connection.execute(
-                "SELECT stage_number,transaction_id FROM planning_stages WHERE session_id=? AND transaction_id IS NOT NULL", (session["id"],)
-            ).fetchall()
-            for linked in linked_stages:
-                connection.execute(
-                    "UPDATE planning_entity_keys SET stage_number=? WHERE session_id=? AND stage_number=0 AND entity_id IN "
-                    "(SELECT entity_id FROM world_events WHERE transaction_id=? AND event_type='entity.created')",
-                    (linked["stage_number"], session["id"], linked["transaction_id"]),
-                )
-            unresolved = connection.execute(
-                "SELECT MIN(stage_number) n FROM planning_stages WHERE session_id=? AND status NOT IN ('approved','skipped')", (session["id"],)
-            ).fetchone()["n"]
-            current = int(unresolved or 8)
-            status = "completed" if unresolved is None else "active"
-            connection.execute(
-                "UPDATE planning_sessions SET current_stage=?, status=?, recovery_warnings_json=?, updated_at=? WHERE id=?",
-                (current, status, json.dumps(warnings), now, session["id"]),
-            )
-
     def relocate(self, destination: Path) -> None:
         if self._environment_locked:
             raise ValueError("The data directory is controlled by STORYSTUDIO_DATA_DIR and cannot be changed here")

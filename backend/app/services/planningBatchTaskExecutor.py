@@ -29,9 +29,7 @@ class PlanningBatchTaskExecutor:
         task: dict[str, Any],
     ) -> dict[str, Any]:
         prompt = dict(task.get("prompt") or {})
-        session_id = str(
-            prompt.get("planning_session_id") or ""
-        )
+        plan_id = str(task.get("plan_id") or "")
         try:
             stage_number = int(
                 prompt.get("planning_stage_number")
@@ -42,9 +40,9 @@ class PlanningBatchTaskExecutor:
                 "Planning batch task has no valid stage number"
             ) from exc
 
-        if not session_id:
+        if not plan_id:
             raise RuntimeFailure(
-                "Planning batch task has no source session"
+                "Planning batch task has no plan id"
             )
         if stage_number == 8:
             raise RuntimeFailure(
@@ -65,8 +63,8 @@ class PlanningBatchTaskExecutor:
         session, stage, approved = PlanningPlanContext(
             context.db,
             data_provider=data,
-        ).session_and_stage(
-            session_id,
+        ).plan_and_stage(
+            plan_id,
             stage_number,
         )
 
@@ -146,7 +144,7 @@ class PlanningBatchTaskExecutor:
         inventory = planning.world_inventory(
             session["project_id"],
             include_catalogs=stage_number == 7,
-            session_id=session["id"],
+            plan_id=plan_id,
         )
 
         messages = stage_prompt(

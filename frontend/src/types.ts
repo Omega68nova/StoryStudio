@@ -174,10 +174,10 @@ export type WorldRelationship = {
 
 export type PlanningScalePreset = "intimate" | "local" | "regional" | "global";
 export type PlanningStageKind = "foundation" | "macro_world" | "detailed_locations" | "systems" | "cast" | "character_details" | "runtime_presentation" | "images";
-export type PlanningStageStatus = "pending" | "ready" | "queued" | "generating" | "approved" | "skipped" | "stale" | "cancelled";
+export type PlanningStageStatus = "pending" | "ready" | "queued" | "generating" | "approved" | "skipped" | "stale" | "failed" | "cancelled";
 export type PlanningResourceReference = { resource_key: string; resource_type: string; resource_id: string; stage_number: number; fingerprint: string };
 export type PlanningDependencyImpact = { stage_number: number; changed_domains: string[]; affected_stages: Array<{ stage_number: number; kind: PlanningStageKind; status: PlanningStageStatus }> };
-export type PlanningAssetPlan = { id: string; session_id: string; resource_key: string; entity_id: string; outfit_id?: string | null; kind: "portrait" | "full_body" | "location"; prompt: string; negative_prompt: string; workflow_preset_id?: string | null; width?: number | null; height?: number | null; status: "draft" | "ready" | "queued" | "generated" | "failed"; media_asset_id?: string | null; generation_job_id?: string | null; error?: string | null };
+export type PlanningAssetPlan = { id: string; generation_plan_id: string; legacy_session_id?: string | null; resource_key: string; entity_id: string; outfit_id?: string | null; kind: "portrait" | "full_body" | "location"; prompt: string; negative_prompt: string; workflow_preset_id?: string | null; width?: number | null; height?: number | null; status: "draft" | "ready" | "queued" | "generated" | "failed"; media_asset_id?: string | null; generation_job_id?: string | null; error?: string | null };
 
 export type PlanningStage = {
   id: string;

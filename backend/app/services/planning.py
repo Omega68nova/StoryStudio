@@ -8,7 +8,7 @@ from app.data.dataProvider import DataProvider
 from app.services.planning_v2 import (
     PLANNING_STAGES, STAGE_CONSUMES, apply_foundation, apply_outfits, apply_rules, apply_runtime,
     apply_weather, compact_schema, dependency_snapshot, empty_draft, normalized_settings,
-    prepare_image_plans, published_domains, resolve_resource, stable_hash,
+    prepare_image_plans, published_domains, record_resource, resolve_resource, stable_hash,
     validate_catalog_references, validate_stage, world_payload, STAGE_GENERATION_FOCI,
 )
 from app.services.world import WorldEngine, WorldValidationError
@@ -220,6 +220,8 @@ def stage_prompt(
 
 
 class PlanningService:
+    """Planning semantics without a second workflow/state machine."""
+
     def __init__(
         self,
         db: Database,
@@ -230,463 +232,639 @@ class PlanningService:
         self.db = db
         self.world = world
         self.data = data_provider or DataProvider(db)
-        self.repo = self.data.planning
 
-    def create_session(self, project_id: str, settings: dict[str, Any]) -> dict[str, Any]:
-        active = self.repo.active_session(project_id)
-        if active:
-            return self.get_session(active["id"])
-        session_id = self.repo.create_session(
-            project_id,
-            normalized_settings(settings),
-            PLANNING_STAGES,
+    def _plan(self, plan_id: str) -> dict[str, Any]:
+        plan = self.db.fetch_one(
+            "SELECT * FROM generation_plans WHERE id=?",
+            (plan_id,),
         )
-        return self.get_session(session_id)
+        if not plan or plan.get("source_kind") != "planning_workspace":
+            raise WorldValidationError("Planning workspace not found")
+        plan = dict(plan)
+        plan["settings"] = json.loads(plan.get("settings_json") or "{}")
+        return plan
 
-    def get_session(self, session_id: str) -> dict[str, Any]:
-        session = self.repo.session(session_id)
-        if not session:
-            raise WorldValidationError("Planning session not found")
-        session["settings"] = json.loads(session.pop("settings_json"))
-        session["schema_version"] = int(session.get("schema_version") or 2)
-        session["recovery_warnings"] = json.loads(
-            session.pop("recovery_warnings_json", "[]") or "[]"
-        )
-        stages = self.repo.stages(session_id)
-        for stage in stages:
-            stage["draft"] = json.loads(stage["draft_json"]) if stage["draft_json"] else None
-            stage["approved"] = json.loads(stage["approved_json"]) if stage["approved_json"] else None
-            stage["dependency_snapshot"] = json.loads(stage.get("dependency_snapshot_json") or "{}")
-            stage["published_domains"] = json.loads(stage.get("published_domains_json") or "{}")
-            stage["conflicts"] = self.repo.conflicts_for_stage(stage["id"])
-            stage["operation"] = None
-            if stage.get("active_job_id"):
-                job = self.db.get_job(stage["active_job_id"])
-                if job:
-                    stage["operation"] = {
-                        key: job.get(key)
-                        for key in (
-                            "id", "status", "phase", "progress_message",
-                            "progress_current", "progress_total", "error",
-                            "created_at", "updated_at",
-                        )
-                    }
-        session["stages"] = stages
-        session["image_plans"] = self.repo.image_plans(session_id)
-        return session
-
-    def world_inventory(self, project_id: str, include_catalogs: bool = False, session_id: str | None = None) -> list[dict[str, Any]]:
+    def world_inventory(
+        self,
+        project_id: str,
+        include_catalogs: bool = False,
+        plan_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         projection = self.world.projection(project_id)
         planning_keys = {
             row["resource_id"]: row["resource_key"]
-            for row in self.db.fetch_all("SELECT resource_id,resource_key FROM planning_resource_keys WHERE session_id=?", (session_id,))
-        } if session_id else {}
+            for row in self.db.fetch_all(
+                "SELECT resource_id,resource_key FROM generation_resource_keys "
+                "WHERE generation_plan_id=?",
+                (plan_id,),
+            )
+        } if plan_id else {}
+
         items = [
-            {"id": planning_keys.get(entity["id"], entity["id"]), "kind": entity["kind"], "name": entity["name"], "aliases": entity.get("aliases", []), "tags": entity.get("tags", [])}
+            {
+                "id": planning_keys.get(entity["id"], entity["id"]),
+                "canonical_id": entity["id"],
+                "kind": entity["kind"],
+                "name": entity["name"],
+                "aliases": entity.get("aliases", []),
+                "tags": entity.get("tags", []),
+            }
             for entity in projection["entities"].values()
             if not entity.get("state", {}).get("archived")
         ]
         items += [
-            {"id": planning_keys.get(relation["id"], relation["id"]), "kind": "route", "name": f"{projection['entities'].get(relation.get('source_id'), {}).get('name', relation.get('source_id'))} -> {projection['entities'].get(relation.get('target_id'), {}).get('name', relation.get('target_id'))}", "aliases": [], "tags": list(relation.get("modes") or [])}
-            for relation in projection["relations"].values() if relation.get("relation") == "route"
+            {
+                "id": planning_keys.get(relation["id"], relation["id"]),
+                "canonical_id": relation["id"],
+                "kind": "route",
+                "name": (
+                    f"{projection['entities'].get(relation.get('source_id'), {}).get('name', relation.get('source_id'))}"
+                    f" -> {projection['entities'].get(relation.get('target_id'), {}).get('name', relation.get('target_id'))}"
+                ),
+                "aliases": [],
+                "tags": list(relation.get("modes") or []),
+            }
+            for relation in projection["relations"].values()
+            if relation.get("relation") == "route"
         ]
-        items += [{"id": planning_keys.get(row["id"], row["id"]), "kind": "weather", "name": row["name"], "aliases": [], "tags": json.loads(row["tags_json"])} for row in self.db.fetch_all("SELECT id,name,tags_json FROM weather_definitions WHERE project_id=?", (project_id,))]
-        items += [{"id": row["stat_key"], "kind": "stat", "name": row["label"], "aliases": [row["stat_key"]], "tags": [row["scope"]]} for row in self.db.fetch_all("SELECT stat_key,label,scope FROM stat_definitions WHERE project_id=?", (project_id,))]
-        items += [{"id": row["ability_key"], "kind": "ability", "name": row["name"], "aliases": [row["ability_key"]], "tags": [row["target_type"]]} for row in self.db.fetch_all("SELECT ability_key,name,target_type FROM ability_definitions WHERE project_id=?", (project_id,))]
+        items += [
+            {
+                "id": planning_keys.get(row["id"], row["id"]),
+                "canonical_id": row["id"],
+                "kind": "weather",
+                "name": row["name"],
+                "aliases": [],
+                "tags": json.loads(row["tags_json"]),
+            }
+            for row in self.db.fetch_all(
+                "SELECT id,name,tags_json FROM weather_definitions WHERE project_id=?",
+                (project_id,),
+            )
+        ]
+        items += [
+            {
+                "id": row["stat_key"],
+                "canonical_id": row["id"],
+                "kind": "stat",
+                "name": row["label"],
+                "aliases": [row["stat_key"]],
+                "tags": [row["scope"]],
+            }
+            for row in self.db.fetch_all(
+                "SELECT id,stat_key,label,scope FROM stat_definitions WHERE project_id=?",
+                (project_id,),
+            )
+        ]
+        items += [
+            {
+                "id": row["ability_key"],
+                "canonical_id": row["id"],
+                "kind": "ability",
+                "name": row["name"],
+                "aliases": [row["ability_key"]],
+                "tags": [row["target_type"]],
+            }
+            for row in self.db.fetch_all(
+                "SELECT id,ability_key,name,target_type FROM ability_definitions WHERE project_id=?",
+                (project_id,),
+            )
+        ]
         if include_catalogs:
-            items += [{"id": row["game_key"], "kind": "minigame", "name": row["game_key"], "aliases": [], "tags": []} for row in self.db.fetch_all("SELECT game_key FROM project_minigame_configs WHERE project_id=?", (project_id,))]
-            items += [{"id": row["id"], "kind": "ambient_variant", "name": row["label"], "aliases": [], "tags": json.loads(row["tags_json"])} for row in self.db.fetch_all("SELECT id,label,tags_json FROM ambient_variants WHERE project_id=? AND enabled=1 AND available=1", (project_id,))]
-            items += [{"id": row["id"], "kind": "music_theme", "name": row["name"], "aliases": [], "tags": []} for row in self.db.fetch_all("SELECT id,name FROM music_themes")]
-            for kind, table in (("bullet_mode", "bullethell_modes"), ("bullet_skill", "bullethell_skills"), ("bullet_attack", "bullethell_attacks")):
-                items += [{"id": row["id"], "kind": kind, "name": row["name"], "aliases": [], "tags": []} for row in self.db.fetch_all(f"SELECT id,name FROM {table}")]
+            items += [
+                {
+                    "id": row["game_key"],
+                    "canonical_id": row["game_key"],
+                    "kind": "minigame",
+                    "name": row["game_key"],
+                    "aliases": [],
+                    "tags": [],
+                }
+                for row in self.db.fetch_all(
+                    "SELECT game_key FROM project_minigame_configs WHERE project_id=?",
+                    (project_id,),
+                )
+            ]
+            items += [
+                {
+                    "id": row["id"],
+                    "canonical_id": row["id"],
+                    "kind": "ambient_variant",
+                    "name": row["label"],
+                    "aliases": [],
+                    "tags": json.loads(row["tags_json"]),
+                }
+                for row in self.db.fetch_all(
+                    "SELECT id,label,tags_json FROM ambient_variants "
+                    "WHERE project_id=? AND enabled=1 AND available=1",
+                    (project_id,),
+                )
+            ]
+            items += [
+                {
+                    "id": row["id"],
+                    "canonical_id": row["id"],
+                    "kind": "music_theme",
+                    "name": row["name"],
+                    "aliases": [],
+                    "tags": [],
+                }
+                for row in self.db.fetch_all("SELECT id,name FROM music_themes")
+            ]
+            for kind, table in (
+                ("bullet_mode", "bullethell_modes"),
+                ("bullet_skill", "bullethell_skills"),
+                ("bullet_attack", "bullethell_attacks"),
+            ):
+                items += [
+                    {
+                        "id": row["id"],
+                        "canonical_id": row["id"],
+                        "kind": kind,
+                        "name": row["name"],
+                        "aliases": [],
+                        "tags": [],
+                    }
+                    for row in self.db.fetch_all(f"SELECT id,name FROM {table}")
+                ]
         return items
 
-    def conflicts_for_stage(self, stage_id: str) -> list[dict[str, Any]]:
-        return self.repo.conflicts_for_stage(stage_id)
-
-    def preflight(self, session_id: str, stage_number: int, draft: dict[str, Any]) -> list[dict[str, Any]]:
-        session = self.db.fetch_one("SELECT * FROM planning_sessions WHERE id=?", (session_id,))
-        stage = self.db.fetch_one("SELECT * FROM planning_stages WHERE session_id=? AND stage_number=?", (session_id, stage_number))
-        if not session or not stage:
-            raise WorldValidationError("Planning stage not found")
-        validate_stage(stage_number, draft, json.loads(session["settings_json"]))
+    def preflight(
+        self,
+        plan_id: str,
+        stage_number: int,
+        draft: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        plan = self._plan(plan_id)
+        validate_stage(stage_number, draft, plan["settings"])
         proposed_entities, _ = world_payload(stage_number, draft)
-        inventory, conflicts, now = self.world_inventory(session["project_id"]), [], utc_now()
-        with self.db._lock, self.db.connect() as connection:
-            connection.execute("DELETE FROM planning_conflicts WHERE stage_id=?", (stage["id"],))
-            projection = self.world.projection(session["project_id"])
-            for proposed in proposed_entities:
-                linked = self.db.fetch_one("SELECT resource_id,fingerprint FROM planning_resource_keys WHERE session_id=? AND resource_key=? AND resource_type='entity'", (session_id, proposed["key"]))
-                if linked:
-                    current = projection["entities"].get(linked["resource_id"])
-                    if current and linked.get("fingerprint") and linked["fingerprint"] != _entity_fingerprint(current):
-                        marked = {**proposed, "_planning_conflict": "manual_change"}
-                        candidates = [{"id": current["id"], "kind": current["kind"], "name": current["name"], "aliases": current.get("aliases", []), "tags": current.get("tags", [])}]
-                        conflict = {"id": new_id(), "session_id": session_id, "stage_id": stage["id"], "entity_key": proposed["key"],
-                                    "proposed": marked, "candidates": candidates, "recommended_resolution": None, "status": "unresolved"}
-                        connection.execute(
-                            "INSERT INTO planning_conflicts(id,session_id,stage_id,entity_key,proposed_json,candidates_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'unresolved',?,?)",
-                            (conflict["id"], session_id, stage["id"], proposed["key"], json.dumps(marked), json.dumps(candidates), now, now),
-                        )
-                        conflicts.append(conflict)
-                    continue
-                names = {str(proposed["name"]).casefold(), *[str(alias).casefold() for alias in proposed.get("aliases", [])]}
-                candidates = [item for item in inventory if item["name"].casefold() in names or names.intersection(str(alias).casefold() for alias in item.get("aliases", []))]
-                if not candidates:
-                    continue
-                exact = [item for item in candidates if item["name"].casefold() == str(proposed["name"]).casefold() and item["kind"] == proposed["kind"]]
-                recommended = {"action": "link", "entity_id": exact[0]["id"]} if len(exact) == 1 else None
-                conflict = {"id": new_id(), "session_id": session_id, "stage_id": stage["id"], "entity_key": proposed["key"],
-                            "proposed": proposed, "candidates": candidates, "recommended_resolution": recommended, "status": "unresolved"}
-                connection.execute(
-                    "INSERT INTO planning_conflicts(id,session_id,stage_id,entity_key,proposed_json,candidates_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?,'unresolved',?,?)",
-                    (conflict["id"], session_id, stage["id"], proposed["key"], json.dumps(proposed), json.dumps(candidates), now, now),
+        inventory = self.world_inventory(plan["project_id"], plan_id=plan_id)
+        projection = self.world.projection(plan["project_id"])
+        conflicts: list[dict[str, Any]] = []
+
+        for proposed in proposed_entities:
+            linked = self.db.fetch_one(
+                "SELECT resource_id,fingerprint FROM generation_resource_keys "
+                "WHERE generation_plan_id=? AND resource_key=? "
+                "AND resource_type='entity'",
+                (plan_id, proposed["key"]),
+            )
+            if linked:
+                current = projection["entities"].get(linked["resource_id"])
+                if (
+                    current
+                    and linked.get("fingerprint")
+                    and linked["fingerprint"] != _entity_fingerprint(current)
+                ):
+                    conflicts.append(
+                        {
+                            "id": new_id(),
+                            "entity_key": proposed["key"],
+                            "proposed": {
+                                **proposed,
+                                "_planning_conflict": "manual_change",
+                            },
+                            "candidates": [
+                                {
+                                    "id": current["id"],
+                                    "kind": current["kind"],
+                                    "name": current["name"],
+                                    "aliases": current.get("aliases", []),
+                                    "tags": current.get("tags", []),
+                                }
+                            ],
+                            "recommended_resolution": None,
+                            "status": "unresolved",
+                        }
+                    )
+                continue
+
+            names = {
+                str(proposed["name"]).casefold(),
+                *[
+                    str(alias).casefold()
+                    for alias in proposed.get("aliases", [])
+                ],
+            }
+            candidates = [
+                item
+                for item in inventory
+                if item["name"].casefold() in names
+                or names.intersection(
+                    str(alias).casefold()
+                    for alias in item.get("aliases", [])
                 )
-                conflicts.append(conflict)
+            ]
+            if not candidates:
+                continue
+            exact = [
+                item
+                for item in candidates
+                if item["name"].casefold()
+                == str(proposed["name"]).casefold()
+                and item["kind"] == proposed["kind"]
+            ]
+            recommended = (
+                {
+                    "action": "link",
+                    "entity_id": exact[0].get("canonical_id", exact[0]["id"]),
+                }
+                if len(exact) == 1 else None
+            )
+            conflicts.append(
+                {
+                    "id": new_id(),
+                    "entity_key": proposed["key"],
+                    "proposed": proposed,
+                    "candidates": [
+                        {
+                            **item,
+                            "id": item.get("canonical_id", item["id"]),
+                        }
+                        for item in candidates
+                    ],
+                    "recommended_resolution": recommended,
+                    "status": "unresolved",
+                }
+            )
         return conflicts
 
-    def stage_for_generation(
-        self,
-        session_id: str,
-        stage_number: int,
-    ) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]]]:
-        session_raw = self.repo.session(session_id)
-        stage = self.repo.stage(session_id, stage_number)
-        if not session_raw or not stage:
-            raise WorldValidationError("Planning stage not found")
-        if session_raw["status"] != "active":
-            raise WorldValidationError("Planning session is not active")
-        if self.repo.has_unapproved_prior(session_id, stage_number):
-            raise WorldValidationError("Approve earlier planning stages first")
-        stage["description"] = next(
-            item[2] for item in PLANNING_STAGES if item[0] == stage_number
-        )
-        approved = self.repo.prior_stages(
-            session_id,
-            stage_number,
-            statuses=("approved", "skipped", "stale"),
-        )
-        return session_raw, stage, approved
-
-    def save_draft(self, stage_id: str, draft: dict[str, Any]) -> dict[str, Any]:
-        stage = self.repo.stage_with_settings(stage_id)
-        if not stage:
-            raise WorldValidationError("Planning stage not found")
-        validate_stage(
-            int(stage["stage_number"]),
-            draft,
-            json.loads(stage["settings_json"]),
-        )
-        return self.repo.save_draft(stage_id, draft)
-
-    def save_generated_draft(
-        self,
-        stage_id: str,
-        job_id: str,
-        draft: dict[str, Any],
-    ) -> bool:
-        stage = self.repo.stage_with_settings(stage_id)
-        if not stage:
-            raise WorldValidationError("Planning stage not found")
-        validate_stage(
-            int(stage["stage_number"]),
-            draft,
-            json.loads(stage["settings_json"]),
-        )
-        return self.repo.save_generated_draft(stage_id, job_id, draft)
-
-    def save_invalid_generated_draft(
-        self,
-        stage_id: str,
-        job_id: str,
-        raw: str,
-        error: str,
-    ) -> bool:
-        return self.repo.save_invalid_generated_draft(
-            stage_id,
-            job_id,
-            raw,
-            error,
-        )
-
     @staticmethod
-    def validate_draft(draft: dict[str, Any], stage_number: int = 1, settings: dict[str, Any] | None = None) -> None:
-        # Kept as a public compatibility entrypoint for scheduler/tests.
+    def validate_draft(
+        draft: dict[str, Any],
+        stage_number: int = 1,
+        settings: dict[str, Any] | None = None,
+    ) -> None:
         validate_stage(stage_number, draft, settings)
 
-    def approve_stage(self, session_id: str, stage_number: int, draft: dict[str, Any], resolutions: dict[str, dict[str, Any]] | None = None,
-                      *, finalize: bool = True, next_draft: dict[str, Any] | None = None,
-                      sync_legacy_state: bool = True, generation_plan_id: str | None = None) -> dict[str, Any]:
-        session = self.db.fetch_one("SELECT * FROM planning_sessions WHERE id = ?", (session_id,))
-        stage = self.db.fetch_one("SELECT * FROM planning_stages WHERE session_id = ? AND stage_number = ?", (session_id, stage_number))
-        if not session or not stage:
-            raise WorldValidationError("Planning stage not found")
-        settings = json.loads(session["settings_json"]); validate_stage(stage_number, draft, settings)
-        validate_catalog_references(self.db, session["project_id"], stage_number, draft)
-        digest = stable_hash(draft)
-        if sync_legacy_state and finalize and stage["status"] == "approved":
-            if stage.get("approved_revision_hash") == digest or json.loads(stage.get("approved_json") or "null") == draft:
-                transaction = self.db.fetch_one("SELECT * FROM world_transactions WHERE id=?", (stage.get("transaction_id"),)) or {"id": stage.get("transaction_id")}
-                return {"transaction": transaction, "session": self.get_session(session_id), "duplicate": True}
-            raise WorldValidationError("Reopen this approved stage before approving different content")
+    def publish(
+        self,
+        plan_id: str,
+        stage_number: int,
+        draft: dict[str, Any],
+        resolutions: dict[str, dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        plan = self._plan(plan_id)
+        project_id = str(plan["project_id"])
+        validate_stage(stage_number, draft, plan["settings"])
+        validate_catalog_references(self.db, project_id, stage_number, draft)
 
         proposed_entities, proposed_relations = world_payload(stage_number, draft)
-        existing_keys = {row["resource_key"]: row["resource_id"] for row in self.db.fetch_all(
-            "SELECT * FROM planning_resource_keys WHERE "
-            "(generation_plan_id=? OR "
-            "(generation_plan_id IS NULL AND session_id=?)) "
-            "AND resource_type='entity'", (generation_plan_id, session_id)
-        )}
-        existing_keys.update({row["entity_key"]: row["entity_id"] for row in self.db.fetch_all("SELECT * FROM planning_entity_keys WHERE session_id = ?", (session_id,))})
+        existing_keys = {
+            row["resource_key"]: row["resource_id"]
+            for row in self.db.fetch_all(
+                "SELECT resource_key,resource_id FROM generation_resource_keys "
+                "WHERE generation_plan_id=? AND resource_type='entity'",
+                (plan_id,),
+            )
+        }
         resolutions = resolutions or {}
-        provenance_owner = generation_plan_id or session_id
-        conflicts = {item["entity_key"]: item for item in self.preflight(session_id, stage_number, draft)}
+        conflicts = {
+            item["entity_key"]: item
+            for item in self.preflight(plan_id, stage_number, draft)
+        }
         omitted: set[str] = set()
         preserve_manual: set[str] = set()
         creates: list[dict[str, Any]] = []
         raw: list[dict[str, Any]] = []
+
         for entity in proposed_entities:
             conflict = conflicts.get(entity["key"])
             if entity["key"] in existing_keys and not conflict:
-                raw.append({"tool": "updateEntity", "arguments": {"entity_id": existing_keys[entity["key"]], "name": entity["name"], "patch": entity.get("state", {}),
-                            "aliases": entity.get("aliases", []), "tags": entity.get("tags", [])}})
+                raw.append(
+                    {
+                        "tool": "updateEntity",
+                        "arguments": {
+                            "entity_id": existing_keys[entity["key"]],
+                            "name": entity["name"],
+                            "patch": entity.get("state", {}),
+                            "aliases": entity.get("aliases", []),
+                            "tags": entity.get("tags", []),
+                        },
+                    }
+                )
                 continue
             if not conflict:
-                creates.append(entity); continue
-            resolution = resolutions.get(entity["key"]) or conflict.get("recommended_resolution")
+                creates.append(entity)
+                continue
+
+            resolution = (
+                resolutions.get(entity["key"])
+                or conflict.get("recommended_resolution")
+            )
             if not resolution:
-                raise WorldValidationError(f"Planning conflict for '{entity['name']}' requires review")
+                raise WorldValidationError(
+                    f"Planning conflict for '{entity['name']}' requires review"
+                )
             action = resolution.get("action")
             if action in {"keep_manual", "unlink"}:
                 preserve_manual.add(entity["key"])
                 if action == "unlink":
                     self.db.execute(
-                        "DELETE FROM planning_resource_keys WHERE "
-                        "(generation_plan_id=? OR "
-                        "(generation_plan_id IS NULL AND session_id=?)) "
-                        "AND resource_key=?",
-                        (generation_plan_id, session_id, entity["key"]),
+                        "DELETE FROM generation_resource_keys "
+                        "WHERE generation_plan_id=? AND resource_key=?",
+                        (plan_id, entity["key"]),
                     )
-                    self.db.execute("DELETE FROM planning_entity_keys WHERE session_id=? AND entity_key=?", (session_id, entity["key"]))
-                self.db.execute("UPDATE planning_conflicts SET resolution_json=?,status='resolved',updated_at=? WHERE id=?", (json.dumps(resolution), utc_now(), conflict["id"]))
                 continue
             if action == "overwrite" and entity["key"] in existing_keys:
-                raw.append({"tool": "updateEntity", "arguments": {"entity_id": existing_keys[entity["key"]], "name": entity["name"], "patch": entity.get("state", {}), "aliases": entity.get("aliases", []), "tags": entity.get("tags", [])}})
-                self.db.execute("UPDATE planning_conflicts SET resolution_json=?,status='resolved',updated_at=? WHERE id=?", (json.dumps(resolution), utc_now(), conflict["id"]))
+                raw.append(
+                    {
+                        "tool": "updateEntity",
+                        "arguments": {
+                            "entity_id": existing_keys[entity["key"]],
+                            "name": entity["name"],
+                            "patch": entity.get("state", {}),
+                            "aliases": entity.get("aliases", []),
+                            "tags": entity.get("tags", []),
+                        },
+                    }
+                )
                 continue
             if action == "omit":
-                omitted.add(entity["key"]); continue
+                omitted.add(entity["key"])
+                continue
             if action == "rename":
                 name = str(resolution.get("new_name", "")).strip()
                 if not name:
-                    raise WorldValidationError("Create renamed requires a unique new name")
-                creates.append({**entity, "name": name}); continue
-            candidate = next((item for item in conflict["candidates"] if item["id"] == resolution.get("entity_id")), None)
-            if action not in {"link", "merge"} or not candidate or candidate["kind"] != entity["kind"]:
-                raise WorldValidationError("Link and merge require a same-kind candidate")
+                    raise WorldValidationError(
+                        "Create renamed requires a unique new name"
+                    )
+                creates.append({**entity, "name": name})
+                continue
+            candidate = next(
+                (
+                    item
+                    for item in conflict["candidates"]
+                    if item["id"] == resolution.get("entity_id")
+                ),
+                None,
+            )
+            if (
+                action not in {"link", "merge"}
+                or not candidate
+                or candidate["kind"] != entity["kind"]
+            ):
+                raise WorldValidationError(
+                    "Link and merge require a same-kind candidate"
+                )
             existing_keys[entity["key"]] = candidate["id"]
             if action == "merge":
-                current_entity = self.world.projection(session["project_id"])["entities"][candidate["id"]]
-                raw.append({"tool": "updateEntity", "arguments": {"entity_id": candidate["id"], "patch": merge_planning(current_entity.get("state", {}), entity.get("state", {})),
-                            "aliases": list(dict.fromkeys([*candidate.get("aliases", []), *entity.get("aliases", [])])),
-                            "tags": list(dict.fromkeys([*candidate.get("tags", []), *entity.get("tags", [])]))}})
-            self.db.execute("UPDATE planning_conflicts SET resolution_json=?,status='resolved',updated_at=? WHERE id=?",
-                            (json.dumps(resolution), utc_now(), conflict["id"]))
+                current_entity = self.world.projection(project_id)["entities"][
+                    candidate["id"]
+                ]
+                raw.append(
+                    {
+                        "tool": "updateEntity",
+                        "arguments": {
+                            "entity_id": candidate["id"],
+                            "patch": merge_planning(
+                                current_entity.get("state", {}),
+                                entity.get("state", {}),
+                            ),
+                            "aliases": list(
+                                dict.fromkeys(
+                                    [
+                                        *candidate.get("aliases", []),
+                                        *entity.get("aliases", []),
+                                    ]
+                                )
+                            ),
+                            "tags": list(
+                                dict.fromkeys(
+                                    [
+                                        *candidate.get("tags", []),
+                                        *entity.get("tags", []),
+                                    ]
+                                )
+                            ),
+                        },
+                    }
+                )
+
         for entity in creates:
-            raw.append({"tool": "createEntity", "arguments": {**entity, "state": copy_state(entity.get("state", {}), existing_keys)}})
-        base_projection = self.world.projection(session["project_id"])
+            raw.append(
+                {
+                    "tool": "createEntity",
+                    "arguments": {
+                        **entity,
+                        "state": copy_state(
+                            entity.get("state", {}),
+                            existing_keys,
+                        ),
+                    },
+                }
+            )
+
+        base_projection = self.world.projection(project_id)
         for relation in proposed_relations:
-            if relation.get("source_key") in omitted or relation.get("target_key") in omitted:
+            if (
+                relation.get("source_key") in omitted
+                or relation.get("target_key") in omitted
+            ):
                 continue
-            relation_id = resolve_resource(self.db, provenance_owner, relation.get("key"), "relationship") if relation.get("key") else None
-            current_relation = base_projection["relations"].get(relation_id) if relation_id else None
-            source_id = existing_keys.get(relation.get("source_key"), relation.get("source_key"))
-            target_id = existing_keys.get(relation.get("target_key"), relation.get("target_key"))
-            if current_relation and (current_relation.get("source_id"), current_relation.get("target_id"), current_relation.get("relation")) != (source_id, target_id, relation.get("relation")):
-                raw.append({"tool": "removeRelationship", "arguments": {"relationship_id": relation_id}})
+            relation_id = (
+                resolve_resource(
+                    self.db,
+                    plan_id,
+                    relation.get("key"),
+                    "relationship",
+                )
+                if relation.get("key") else None
+            )
+            current_relation = (
+                base_projection["relations"].get(relation_id)
+                if relation_id else None
+            )
+            source_id = existing_keys.get(
+                relation.get("source_key"),
+                relation.get("source_key"),
+            )
+            target_id = existing_keys.get(
+                relation.get("target_key"),
+                relation.get("target_key"),
+            )
+            if current_relation and (
+                current_relation.get("source_id"),
+                current_relation.get("target_id"),
+                current_relation.get("relation"),
+            ) != (
+                source_id,
+                target_id,
+                relation.get("relation"),
+            ):
+                raw.append(
+                    {
+                        "tool": "removeRelationship",
+                        "arguments": {"relationship_id": relation_id},
+                    }
+                )
                 relation_id = new_id()
-            raw.append({"tool": "setRelationship", "arguments": {**relation, **({"id": relation_id} if relation_id else {}),
-                        "source_id": source_id, "target_id": target_id}})
-        normalized = self.world.normalize_mutations(session["project_id"], None, raw, provenance="planning")
+            raw.append(
+                {
+                    "tool": "setRelationship",
+                    "arguments": {
+                        **relation,
+                        **({"id": relation_id} if relation_id else {}),
+                        "source_id": source_id,
+                        "target_id": target_id,
+                    },
+                }
+            )
+
+        normalized = self.world.normalize_mutations(
+            project_id,
+            None,
+            raw,
+            provenance="planning",
+        )
         combined_keys = dict(existing_keys)
         for mutation in normalized:
             if mutation.tool == "createEntity" and mutation.arguments.get("key"):
-                combined_keys[str(mutation.arguments["key"])] = mutation.arguments["entity_id"]
+                combined_keys[str(mutation.arguments["key"])] = (
+                    mutation.arguments["entity_id"]
+                )
         for mutation in normalized:
             if mutation.tool == "createEntity":
-                mutation.arguments["state"] = copy_state(mutation.arguments.get("state", {}), combined_keys)
+                mutation.arguments["state"] = copy_state(
+                    mutation.arguments.get("state", {}),
+                    combined_keys,
+                )
             elif mutation.tool == "updateEntity":
-                mutation.arguments["patch"] = copy_state(mutation.arguments.get("patch", {}), combined_keys)
-        try:
-            self.db.execute("INSERT INTO planning_approval_claims(stage_id,revision_hash,created_at) VALUES(?,?,?)", (stage["id"], digest, utc_now()))
-        except Exception as exc:
-            raise WorldValidationError("This planning stage is already being approved; refresh its status") from exc
+                mutation.arguments["patch"] = copy_state(
+                    mutation.arguments.get("patch", {}),
+                    combined_keys,
+                )
+
         self.db.begin_transaction()
         try:
-            transaction = self.world.commit_root(session["project_id"], normalized, provenance="planning", summary=str(draft.get("summary", "")))
-            if stage_number == 1: apply_foundation(self.db, session["project_id"], draft)
-            elif stage_number == 2: apply_weather(self.db, session["project_id"], provenance_owner, stage_number, draft)
-            elif stage_number == 4: apply_rules(self.db, session["project_id"], provenance_owner, stage_number, draft)
+            transaction = self.world.commit_root(
+                project_id,
+                normalized,
+                provenance="planning",
+                summary=str(draft.get("summary", "")),
+            )
+            if stage_number == 1:
+                apply_foundation(self.db, project_id, draft)
+            elif stage_number == 2:
+                apply_weather(
+                    self.db, project_id, plan_id, stage_number, draft
+                )
+            elif stage_number == 4:
+                apply_rules(
+                    self.db, project_id, plan_id, stage_number, draft
+                )
             elif stage_number == 5:
-                pov_key = str(draft.get("default_pov_character_key") or "")
+                pov_key = str(
+                    draft.get("default_pov_character_key") or ""
+                )
                 pov_id = combined_keys.get(pov_key) if pov_key else None
                 if pov_id:
-                    character = self.world.projection(session["project_id"], use_cache=False)["entities"].get(pov_id)
-                    if not character or not character.get("state", {}).get("player_controlled"): raise WorldValidationError("Default POV must be a playable character")
-                    self.db.execute("UPDATE project_story_defaults SET pov_character_id=?,updated_at=? WHERE project_id=?", (pov_id, utc_now(), session["project_id"]))
-            elif stage_number == 6: apply_outfits(self.db, session["project_id"], provenance_owner, stage_number, draft)
-            elif stage_number == 7: apply_runtime(self.db, session["project_id"], provenance_owner, draft)
-            # Stage 8 plans are updated as immediate subresources. Approval records
-            # the reviewed snapshot but deliberately starts and rewrites no jobs.
+                    character = self.world.projection(
+                        project_id,
+                        use_cache=False,
+                    )["entities"].get(pov_id)
+                    if not character or not character.get(
+                        "state", {}
+                    ).get("player_controlled"):
+                        raise WorldValidationError(
+                            "Default POV must be a playable character"
+                        )
+                    self.db.execute(
+                        "UPDATE project_story_defaults "
+                        "SET pov_character_id=?,updated_at=? "
+                        "WHERE project_id=?",
+                        (pov_id, utc_now(), project_id),
+                    )
+            elif stage_number == 6:
+                apply_outfits(
+                    self.db, project_id, plan_id, stage_number, draft
+                )
+            elif stage_number == 7:
+                apply_runtime(self.db, project_id, plan_id, draft)
             self.db.finish_transaction(commit=True)
         except Exception:
             self.db.finish_transaction(commit=False)
-            self.db.execute("DELETE FROM planning_approval_claims WHERE stage_id=?", (stage["id"],))
             raise
-        old_domains = json.loads(stage.get("published_domains_json") or "{}")
-        domains = published_domains(stage_number, draft)
-        approved_stages = self.db.fetch_all("SELECT * FROM planning_stages WHERE session_id=? AND stage_number<? ORDER BY stage_number", (session_id, stage_number))
-        dependencies = dependency_snapshot(approved_stages, stage_number)
-        projection = self.world.projection(session["project_id"], use_cache=False)
-        with self.db._lock, self.db.connect() as connection:
-            for key, entity_id in combined_keys.items():
-                connection.execute("INSERT OR REPLACE INTO planning_entity_keys(session_id,entity_key,entity_id,stage_number) VALUES(?,?,?,?)", (session_id, key, entity_id, stage_number))
-            for entity in proposed_entities:
-                if entity["key"] in preserve_manual:
-                    continue
-                entity_id = combined_keys.get(str(entity["key"]))
-                if entity_id:
-                    canonical = projection["entities"].get(entity_id)
-                    connection.execute("INSERT INTO planning_resource_keys(session_id,generation_plan_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key) DO UPDATE SET generation_plan_id=COALESCE(excluded.generation_plan_id,planning_resource_keys.generation_plan_id),resource_id=excluded.resource_id,stage_number=excluded.stage_number,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at", (session_id, generation_plan_id, entity["key"], "entity", entity_id, stage_number, _entity_fingerprint(canonical) if canonical else stable_hash(entity), utc_now()))
-            for relation in proposed_relations:
-                if not relation.get("key"): continue
-                source = combined_keys.get(relation.get("source_key"), relation.get("source_key")); target = combined_keys.get(relation.get("target_key"), relation.get("target_key"))
-                relation_id = next((item["id"] for item in projection["relations"].values() if item.get("source_id") == source and item.get("target_id") == target and item.get("relation") == relation.get("relation")), None)
-                if relation_id: connection.execute("INSERT INTO planning_resource_keys(session_id,generation_plan_id,resource_key,resource_type,resource_id,stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(session_id,resource_key) DO UPDATE SET generation_plan_id=COALESCE(excluded.generation_plan_id,planning_resource_keys.generation_plan_id),resource_id=excluded.resource_id,stage_number=excluded.stage_number,fingerprint=excluded.fingerprint,updated_at=excluded.updated_at", (session_id, generation_plan_id, relation["key"], "relationship", relation_id, stage_number, stable_hash(relation), utc_now()))
-            if not finalize:
-                replacement = next_draft if next_draft is not None else empty_draft(stage_number)
-                connection.execute(
-                    "UPDATE planning_stages SET status='ready',draft_json=?,raw_draft_text=NULL,validation_error=NULL,active_job_id=NULL,updated_at=? WHERE id=?",
-                    (json.dumps(replacement), utc_now(), stage["id"]),
+
+        projection = self.world.projection(project_id, use_cache=False)
+        for entity in proposed_entities:
+            if entity["key"] in preserve_manual:
+                continue
+            entity_id = combined_keys.get(str(entity["key"]))
+            if entity_id:
+                canonical = projection["entities"].get(entity_id)
+                record_resource(
+                    self.db,
+                    plan_id,
+                    stage_number,
+                    entity["key"],
+                    "entity",
+                    entity_id,
+                    canonical if canonical else entity,
                 )
-                connection.execute("DELETE FROM planning_approval_claims WHERE stage_id=?", (stage["id"],))
-                return {"transaction": transaction, "partial": True}
-            if sync_legacy_state:
-                connection.execute(
-                    "UPDATE planning_stages SET status='approved',draft_json=?,raw_draft_text=NULL,validation_error=NULL,approved_json=?,transaction_id=?,approved_revision_hash=?,active_job_id=NULL,dependency_snapshot_json=?,published_domains_json=?,replaces_revision_hash=NULL,updated_at=? WHERE id=?",
-                    (json.dumps(draft), json.dumps(draft), transaction["id"], digest, json.dumps(dependencies), json.dumps(domains), utc_now(), stage["id"]),
+        for relation in proposed_relations:
+            if not relation.get("key"):
+                continue
+            source = combined_keys.get(
+                relation.get("source_key"),
+                relation.get("source_key"),
+            )
+            target = combined_keys.get(
+                relation.get("target_key"),
+                relation.get("target_key"),
+            )
+            relation_id = next(
+                (
+                    item["id"]
+                    for item in projection["relations"].values()
+                    if item.get("source_id") == source
+                    and item.get("target_id") == target
+                    and item.get("relation") == relation.get("relation")
+                ),
+                None,
+            )
+            if relation_id:
+                record_resource(
+                    self.db,
+                    plan_id,
+                    stage_number,
+                    relation["key"],
+                    "relationship",
+                    relation_id,
+                    relation,
                 )
-                changed = {domain for domain, value in domains.items() if old_domains.get(domain) != value}
-                if old_domains and changed:
-                    for later in connection.execute("SELECT id,stage_number,status FROM planning_stages WHERE session_id=? AND stage_number>? ORDER BY stage_number", (session_id, stage_number)).fetchall():
-                        if later["status"] == "approved" and STAGE_CONSUMES[int(later["stage_number"])] & changed:
-                            connection.execute("UPDATE planning_stages SET status='stale',updated_at=? WHERE id=?", (utc_now(), later["id"]))
-                            changed.update(published_domains(int(later["stage_number"]), json.loads((connection.execute("SELECT approved_json FROM planning_stages WHERE id=?", (later["id"],)).fetchone()["approved_json"] or "{}"))).keys())
-                unresolved = connection.execute("SELECT MIN(stage_number) n FROM planning_stages WHERE session_id=? AND status NOT IN ('approved','skipped')", (session_id,)).fetchone()["n"]
-                next_stage = int(unresolved or len(PLANNING_STAGES))
-                connection.execute("UPDATE planning_sessions SET current_stage=?,status=?,updated_at=? WHERE id=?", (next_stage, "completed" if unresolved is None else "active", utc_now(), session_id))
-            connection.execute("DELETE FROM planning_approval_claims WHERE stage_id=?", (stage["id"],))
-        return {"transaction": transaction, "session": self.get_session(session_id)}
 
-    def accept_stage_batch(self, session_id: str, stage_number: int, focus: str, draft: dict[str, Any]) -> dict[str, Any]:
-        if focus not in STAGE_GENERATION_FOCI.get(stage_number, ()):
-            raise WorldValidationError("Unsupported section for this planning stage")
-        grouped = {
-            (2, "locations"): ("locations", "routes"), (2, "weather"): ("weather", "weather_transitions", "initial_weather_key"),
-            (3, "locations"): ("locations", "routes"), (5, "characters"): ("characters", "default_pov_character_key"),
-        }
-        fields = grouped.get((stage_number, focus), (focus,))
-        batch = {"summary": str(draft.get("summary") or f"Accepted {focus} batch"), "notes": list(draft.get("notes") or [])}
-        next_draft = json.loads(json.dumps(draft))
-        blank = empty_draft(stage_number)
-        for field in fields:
-            batch[field] = json.loads(json.dumps(draft.get(field, blank.get(field))))
-            next_draft[field] = json.loads(json.dumps(blank.get(field)))
-        meaningful = any(batch.get(field) not in (None, "", [], {}) for field in fields)
-        if not meaningful:
-            raise WorldValidationError(f"The current {focus.replace('_', ' ')} set is empty")
-        result = self.approve_stage(session_id, stage_number, batch, finalize=False, next_draft=next_draft)
-        result["stage"] = self.db.fetch_one("SELECT * FROM planning_stages WHERE session_id=? AND stage_number=?", (session_id, stage_number))
-        return result
+        return {"transaction": transaction}
 
-    def reopen_stage(self, session_id: str, stage_number: int) -> dict[str, Any]:
-        session = self.repo.session(session_id)
-        stage = self.repo.stage(session_id, stage_number)
-        if not session or not stage:
-            raise WorldValidationError("Planning stage not found")
-        if stage["status"] in {"queued", "generating"}:
-            raise WorldValidationError(
-                "Cancel active planning generation before reopening a stage"
-            )
-        self.repo.reopen_stage(
-            session_id=session_id,
-            stage_id=stage["id"],
-            stage_number=stage_number,
-            default_draft=empty_draft(stage_number),
+    def prepare_image_stage(
+        self,
+        plan_id: str,
+        draft: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        plan = self._plan(plan_id)
+        prepared = json.loads(
+            json.dumps(draft if isinstance(draft, dict) else empty_draft(8))
         )
-        return self.get_session(session_id)
-
-    def skip_stage(self, session_id: str, stage_number: int) -> dict[str, Any]:
-        _session, stage, approved = self.stage_for_generation(
-            session_id,
-            stage_number,
+        plans = prepare_image_plans(
+            self.db,
+            plan["project_id"],
+            plan_id,
+            prepared,
         )
-        if stage["status"] in {"queued", "generating"}:
-            raise WorldValidationError(
-                "Cancel active generation before skipping this stage"
-            )
-        draft = empty_draft(stage_number)
-        self.repo.skip_stage(
-            session_id=session_id,
-            stage_id=stage["id"],
-            stage_number=stage_number,
-            draft=draft,
-            revision_hash=stable_hash(draft),
-            dependencies=dependency_snapshot(approved, stage_number),
-            domains=published_domains(stage_number, draft),
-            stage_count=len(PLANNING_STAGES),
-        )
-        return self.get_session(session_id)
-
-    def dependency_impact(self, session_id: str, stage_number: int) -> dict[str, Any]:
-        affected: list[dict[str, Any]] = []
-        dirty = set(STAGE_PUBLISHES[stage_number])
-        for later in self.repo.later_stages(session_id, stage_number):
-            later_number = int(later["stage_number"])
-            if STAGE_CONSUMES[later_number] & dirty:
-                affected.append({
-                    "stage_number": later["stage_number"],
-                    "kind": later["kind"],
-                    "status": later["status"],
-                })
-                dirty.update(STAGE_PUBLISHES[later_number])
-        return {
-            "stage_number": stage_number,
-            "changed_domains": sorted(STAGE_PUBLISHES[stage_number]),
-            "affected_stages": affected,
-        }
-
-    def revalidate_stage(self, session_id: str, stage_number: int) -> dict[str, Any]:
-        stage = self.repo.stage(session_id, stage_number)
-        if not stage or stage["status"] != "stale":
-            raise WorldValidationError("Only stale stages can be revalidated")
-        current = dependency_snapshot(
-            self.repo.prior_stages(session_id, stage_number),
-            stage_number,
-        )
-        approved = json.loads(stage.get("approved_json") or "{}")
-        validate_stage(stage_number, approved)
-        self.repo.revalidate_stage(stage["id"], current)
-        return self.get_session(session_id)
-
-    def prepare_image_stage(self, session_id: str, *, generation_plan_id: str | None = None) -> dict[str, Any]:
-        session = self.db.fetch_one("SELECT * FROM planning_sessions WHERE id=?", (session_id,)); stage = self.db.fetch_one("SELECT * FROM planning_stages WHERE session_id=? AND stage_number=8", (session_id,))
-        if not session or not stage: raise WorldValidationError("Planning image stage not found")
-        draft = json.loads(stage.get("draft_json") or stage.get("approved_json") or "null") or empty_draft(8)
-        plans = prepare_image_plans(self.db, session["project_id"], generation_plan_id or session_id, draft)
-        draft["assets"] = [{key: plan.get(key) for key in ("resource_key", "prompt", "negative_prompt", "workflow_preset_id", "width", "height")} for plan in plans]
-        self.db.execute("UPDATE planning_stages SET draft_json=?,status='ready',raw_draft_text=NULL,validation_error=NULL,updated_at=? WHERE id=?", (json.dumps(draft), utc_now(), stage["id"]))
-        return self.get_session(session_id)
+        prepared["assets"] = [
+            {
+                key: image_plan.get(key)
+                for key in (
+                    "resource_key",
+                    "prompt",
+                    "negative_prompt",
+                    "workflow_preset_id",
+                    "width",
+                    "height",
+                )
+            }
+            for image_plan in plans
+        ]
+        return {"draft": prepared, "image_plans": plans}
 
 
 def copy_state(state: dict[str, Any], known_keys: dict[str, str]) -> dict[str, Any]:

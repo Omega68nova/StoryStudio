@@ -436,91 +436,74 @@ def published_domains(stage_number: int, draft: dict[str, Any]) -> dict[str, str
     return {domain: stable_hash({"stage": stage_number, "domain": domain, "draft": draft}) for domain in STAGE_PUBLISHES[stage_number]}
 
 
-def _provenance_owner_ids(db: Database, owner_id: str) -> tuple[str | None, str]:
-    plan = db.fetch_one(
-        "SELECT id,source_id FROM generation_plans WHERE id=?",
-        (owner_id,),
-    )
-    if not plan:
-        return None, owner_id
-    return str(plan["id"]), str(plan.get("source_id") or owner_id)
-
-
 def _resource_row(
     db: Database,
     owner_id: str,
     key: str,
     expected_type: str | None = None,
 ) -> dict[str, Any] | None:
-    generation_plan_id, legacy_session_id = _provenance_owner_ids(db, owner_id)
     if expected_type:
         return db.fetch_one(
-            "SELECT resource_id,resource_type,rowid FROM planning_resource_keys "
-            "WHERE generation_plan_id=? AND resource_key=? AND resource_type=? "
-            "UNION ALL "
-            "SELECT resource_id,resource_type,rowid FROM planning_resource_keys "
-            "WHERE generation_plan_id IS NULL AND session_id=? "
-            "AND resource_key=? AND resource_type=? LIMIT 1",
-            (
-                generation_plan_id,
-                key,
-                expected_type,
-                legacy_session_id,
-                key,
-                expected_type,
-            ),
+            "SELECT resource_id,resource_type,rowid "
+            "FROM generation_resource_keys "
+            "WHERE generation_plan_id=? AND resource_key=? AND resource_type=?",
+            (owner_id, key, expected_type),
         )
     return db.fetch_one(
-        "SELECT resource_id,resource_type,rowid FROM planning_resource_keys "
-        "WHERE generation_plan_id=? AND resource_key=? "
-        "UNION ALL "
-        "SELECT resource_id,resource_type,rowid FROM planning_resource_keys "
-        "WHERE generation_plan_id IS NULL AND session_id=? AND resource_key=? "
-        "LIMIT 1",
-        (generation_plan_id, key, legacy_session_id, key),
+        "SELECT resource_id,resource_type,rowid "
+        "FROM generation_resource_keys "
+        "WHERE generation_plan_id=? AND resource_key=?",
+        (owner_id, key),
     )
 
 
-def resolve_resource(db: Database, owner_id: str, key_or_id: str | None, expected_type: str | None = None) -> str | None:
+def resolve_resource(
+    db: Database,
+    owner_id: str,
+    key_or_id: str | None,
+    expected_type: str | None = None,
+) -> str | None:
     if not key_or_id:
         return None
     row = _resource_row(db, owner_id, str(key_or_id), expected_type)
     return str(row["resource_id"]) if row else str(key_or_id)
 
 
-def record_resource(db: Database, owner_id: str, stage_number: int, key: str, resource_type: str, resource_id: str, value: Any) -> None:
-    plan = db.fetch_one(
-        "SELECT id,source_id FROM generation_plans WHERE id=?",
+def record_resource(
+    db: Database,
+    owner_id: str,
+    stage_number: int,
+    key: str,
+    resource_type: str,
+    resource_id: str,
+    value: Any,
+) -> None:
+    legacy = db.fetch_one(
+        "SELECT json_extract(settings_json,'$.legacy_session_id') legacy "
+        "FROM generation_plans WHERE id=?",
         (owner_id,),
     )
-    generation_plan_id = str(plan["id"]) if plan else None
-    legacy_session_id = (
-        str(plan.get("source_id"))
-        if plan and plan.get("source_id")
-        else owner_id
-    )
-    existing = db.fetch_one(
-        "SELECT rowid FROM planning_resource_keys "
-        "WHERE generation_plan_id=? AND resource_key=? "
-        "UNION ALL "
-        "SELECT rowid FROM planning_resource_keys "
-        "WHERE generation_plan_id IS NULL AND session_id=? AND resource_key=? "
-        "LIMIT 1",
-        (generation_plan_id, key, legacy_session_id, key),
-    )
-    if existing:
-        db.execute(
-            "UPDATE planning_resource_keys SET generation_plan_id=COALESCE(?,generation_plan_id),"
-            "resource_type=?,resource_id=?,stage_number=?,fingerprint=?,updated_at=? "
-            "WHERE rowid=?",
-            (generation_plan_id, resource_type, resource_id, stage_number, stable_hash(value), utc_now(), existing["rowid"]),
-        )
-        return
     db.execute(
-        "INSERT INTO planning_resource_keys("
-        "session_id,generation_plan_id,resource_key,resource_type,resource_id,"
-        "stage_number,fingerprint,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-        (legacy_session_id, generation_plan_id, key, resource_type, resource_id, stage_number, stable_hash(value), utc_now()),
+        "INSERT INTO generation_resource_keys("
+        "generation_plan_id,resource_key,resource_type,resource_id,"
+        "stage_number,fingerprint,legacy_session_id,updated_at"
+        ") VALUES(?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(generation_plan_id,resource_key) DO UPDATE SET "
+        "resource_type=excluded.resource_type,"
+        "resource_id=excluded.resource_id,"
+        "stage_number=excluded.stage_number,"
+        "fingerprint=excluded.fingerprint,"
+        "updated_at=excluded.updated_at",
+        (
+            owner_id,
+            key,
+            resource_type,
+            resource_id,
+            stage_number,
+            stable_hash(value),
+            legacy.get("legacy") if legacy else None,
+            utc_now(),
+        ),
     )
 
 
@@ -659,13 +642,15 @@ def apply_runtime(db: Database, project_id: str, owner_id: str, draft: dict[str,
 
 def prepare_image_plans(db: Database, project_id: str, owner_id: str, draft: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     bible = {row["kind"]: row["content"] for row in db.fetch_all("SELECT kind,content FROM bible_documents WHERE project_id=?", (project_id,))}
-    owner_plan = db.fetch_one("SELECT id,source_id FROM generation_plans WHERE id=?", (owner_id,))
-    generation_plan_id = str(owner_plan["id"]) if owner_plan else None
-    legacy_session_id = (
-        str(owner_plan.get("source_id"))
-        if owner_plan and owner_plan.get("source_id")
-        else owner_id
+    owner_plan = db.fetch_one(
+        "SELECT id,json_extract(settings_json,'$.legacy_session_id') legacy_session_id "
+        "FROM generation_plans WHERE id=?",
+        (owner_id,),
     )
+    if not owner_plan:
+        raise WorldValidationError("Planning workspace not found")
+    generation_plan_id = str(owner_plan["id"])
+    legacy_session_id = owner_plan.get("legacy_session_id")
     rows = db.fetch_all("SELECT id,kind,canonical_name,tags_json FROM world_entities WHERE project_id=? AND kind IN ('character','location')", (project_id,))
     projection_rows = {}
     # Latest lore version carries the branch-aware state without duplicating the world replay here.
@@ -682,10 +667,10 @@ def prepare_image_plans(db: Database, project_id: str, owner_id: str, draft: dic
         prompt = str(override.get("prompt") or ". ".join(part.strip() for part in details if part and part.strip()))[:20_000]
         workflow_id = override.get("workflow_preset_id"); workflow = db.fetch_one("SELECT id,validation_status FROM workflow_presets WHERE id=?", (workflow_id,)) if workflow_id else None
         status = "ready" if workflow and workflow["validation_status"] == "valid" and prompt else "draft"; revision = stable_hash({"prompt": prompt, "negative": override.get("negative_prompt", ""), "workflow": workflow_id, "width": override.get("width"), "height": override.get("height")})
-        existing = db.fetch_one("SELECT id,status,prompt_revision,media_asset_id,generation_job_id FROM planning_image_plans WHERE (generation_plan_id=? OR (generation_plan_id IS NULL AND session_id=?)) AND resource_key=? LIMIT 1", (generation_plan_id, legacy_session_id, resource_key)); plan_id = existing["id"] if existing else new_id()
+        existing = db.fetch_one("SELECT id,status,prompt_revision,media_asset_id,generation_job_id FROM generation_image_plans WHERE generation_plan_id=? AND resource_key=? LIMIT 1", (generation_plan_id, resource_key)); plan_id = existing["id"] if existing else new_id()
         keep_status = existing and existing["prompt_revision"] == revision and existing["status"] in {"queued", "generated"}
         next_status = existing["status"] if keep_status else status
-        if existing: db.execute("UPDATE planning_image_plans SET generation_plan_id=COALESCE(generation_plan_id,?),prompt=?,negative_prompt=?,workflow_preset_id=?,width=?,height=?,prompt_revision=?,status=?,error=NULL,updated_at=? WHERE id=?", (generation_plan_id, prompt, override.get("negative_prompt", ""), workflow_id, override.get("width"), override.get("height"), revision, next_status, now, plan_id))
-        else: db.execute("INSERT INTO planning_image_plans(id,session_id,generation_plan_id,project_id,resource_key,entity_id,kind,prompt,negative_prompt,workflow_preset_id,width,height,prompt_revision,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (plan_id, legacy_session_id, generation_plan_id, project_id, resource_key, row["id"], kind, prompt, override.get("negative_prompt", ""), workflow_id, override.get("width"), override.get("height"), revision, next_status, now, now))
-        result.append(db.fetch_one("SELECT * FROM planning_image_plans WHERE id=?", (plan_id,)) or {})
+        if existing: db.execute("UPDATE generation_image_plans SET generation_plan_id=COALESCE(generation_plan_id,?),prompt=?,negative_prompt=?,workflow_preset_id=?,width=?,height=?,prompt_revision=?,status=?,error=NULL,updated_at=? WHERE id=?", (generation_plan_id, prompt, override.get("negative_prompt", ""), workflow_id, override.get("width"), override.get("height"), revision, next_status, now, plan_id))
+        else: db.execute("INSERT INTO generation_image_plans(id,generation_plan_id,project_id,resource_key,entity_id,kind,prompt,negative_prompt,workflow_preset_id,width,height,prompt_revision,status,legacy_session_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (plan_id, generation_plan_id, project_id, resource_key, row["id"], kind, prompt, override.get("negative_prompt", ""), workflow_id, override.get("width"), override.get("height"), revision, next_status, legacy_session_id, now, now))
+        result.append(db.fetch_one("SELECT * FROM generation_image_plans WHERE id=?", (plan_id,)) or {})
     return result

@@ -311,11 +311,7 @@ export function PlanningStudio({
     if (!focus) return;
     try {
       const draft = JSON.parse(drafts[stage] || "{}");
-      await api(`/planning/${session!.id}/stages/${stage}/accept-batch`, {
-        method: "POST",
-        body: JSON.stringify({ draft, focus }),
-      });
-      clearDirty(stage);
+      await saveStageDraft(stage, draft);
       if (generateAfter) await requestSection(stage, focus);
       else await Promise.all([load(), loadCatalogs()]);
     } catch (cause) {
