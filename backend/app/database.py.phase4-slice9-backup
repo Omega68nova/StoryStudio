@@ -133,7 +133,7 @@ class Database:
                 "AND json_extract(j.payload_json,'$.media_asset_id')=entity_media_assets.id)",
                 (utc_now(),),
             )
-            # GenerationPlan owns generation/review recovery.
+            self._repair_planning_state(connection)
 
     def _repair_planning_state(self, connection: sqlite3.Connection) -> None:
         """Idempotently recover legacy/in-flight planning without discarding drafts."""

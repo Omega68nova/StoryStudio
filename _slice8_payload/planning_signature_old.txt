@@ -1,0 +1,2 @@
+    def approve_stage(self, session_id: str, stage_number: int, draft: dict[str, Any], resolutions: dict[str, dict[str, Any]] | None = None,
+                      *, finalize: bool = True, next_draft: dict[str, Any] | None = None) -> dict[str, Any]:

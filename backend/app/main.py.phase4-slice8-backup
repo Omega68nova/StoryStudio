@@ -2250,24 +2250,6 @@ async def generate_generation_plan_planning_task(
     return result
 
 
-@app.put(
-    "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/result"
-)
-async def save_generation_plan_planning_result(
-    session_id: str,
-    stage_number: int,
-    request: PlanningDraftUpdate,
-) -> dict[str, Any]:
-    try:
-        return generation_api.save_planning_result(
-            session_id,
-            stage_number,
-            request.draft,
-        )
-    except (GenerationPlanError, ValueError) as exc:
-        raise HTTPException(422, str(exc)) from exc
-
-
 @app.post(
     "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/preflight"
 )
@@ -2446,6 +2428,14 @@ async def get_planning_session(project_id: str) -> dict[str, Any] | None:
 
 
 
+
+
+@app.put("/api/planning/{session_id}/stages/{stage_number}")
+async def save_planning_stage(session_id: str, stage_number: int, request: PlanningDraftUpdate) -> dict[str, Any]:
+    _, stage, _ = planning.stage_for_generation(session_id, stage_number)
+    if stage["status"] in {"queued", "generating"}:
+        raise HTTPException(409, "Wait for or cancel the active generation before saving this stage")
+    return planning.save_draft(stage["id"], request.draft)
 
 
 

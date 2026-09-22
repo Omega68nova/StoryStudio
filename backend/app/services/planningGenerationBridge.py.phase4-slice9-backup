@@ -278,10 +278,9 @@ class PlanningStageCommitter(BatchTaskCommitter):
             draft,
             resolutions,
             sync_legacy_state=False,
-            generation_plan_id=plan["id"],
         )
         if stage_number == 7:
-            self.planning.prepare_image_stage(session_id, generation_plan_id=plan["id"])
+            self.planning.prepare_image_stage(session_id)
 
         tx = committed.get("transaction") or {}
         return BatchCommitResult(

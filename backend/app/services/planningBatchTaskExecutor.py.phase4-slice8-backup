@@ -5,7 +5,6 @@ from typing import Any
 
 from app.data.dataProvider import DataProvider
 from app.services.planning import PlanningService, stage_prompt
-from app.services.planningPlanContext import PlanningPlanContext
 from app.services.planningGenerationCore import PlanningGenerationCore
 from app.services.planning_v2 import (
     generated_stage_has_content,
@@ -62,10 +61,7 @@ class PlanningBatchTaskExecutor:
             world,
             data_provider=data,
         )
-        session, stage, approved = PlanningPlanContext(
-            context.db,
-            data_provider=data,
-        ).session_and_stage(
+        session, stage, approved = planning.stage_for_generation(
             session_id,
             stage_number,
         )

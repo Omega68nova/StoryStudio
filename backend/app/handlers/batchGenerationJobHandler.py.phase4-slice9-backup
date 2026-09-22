@@ -173,8 +173,7 @@ class BatchGenerationJobHandler(BaseJobHandler):
                 data_provider=data,
             )
             session = planning.prepare_image_stage(
-                str(prompt.get("planning_session_id") or ""),
-                generation_plan_id=plan_id,
+                str(prompt.get("planning_session_id") or "")
             )
             result = {
                 "json": session["stages"][7].get("draft") or {},

@@ -1,0 +1,15 @@
+            connection.execute(
+                "UPDATE planning_stages SET status='approved',draft_json=?,raw_draft_text=NULL,validation_error=NULL,approved_json=?,transaction_id=?,approved_revision_hash=?,active_job_id=NULL,dependency_snapshot_json=?,published_domains_json=?,replaces_revision_hash=NULL,updated_at=? WHERE id=?",
+                (json.dumps(draft), json.dumps(draft), transaction["id"], digest, json.dumps(dependencies), json.dumps(domains), utc_now(), stage["id"]),
+            )
+            changed = {domain for domain, value in domains.items() if old_domains.get(domain) != value}
+            if old_domains and changed:
+                for later in connection.execute("SELECT id,stage_number,status FROM planning_stages WHERE session_id=? AND stage_number>? ORDER BY stage_number", (session_id, stage_number)).fetchall():
+                    if later["status"] == "approved" and STAGE_CONSUMES[int(later["stage_number"])] & changed:
+                        connection.execute("UPDATE planning_stages SET status='stale',updated_at=? WHERE id=?", (utc_now(), later["id"]))
+                        changed.update(published_domains(int(later["stage_number"]), json.loads((connection.execute("SELECT approved_json FROM planning_stages WHERE id=?", (later["id"],)).fetchone()["approved_json"] or "{}"))).keys())
+            unresolved = connection.execute("SELECT MIN(stage_number) n FROM planning_stages WHERE session_id=? AND status NOT IN ('approved','skipped')", (session_id,)).fetchone()["n"]
+            next_stage = int(unresolved or len(PLANNING_STAGES))
+            connection.execute("UPDATE planning_sessions SET current_stage=?,status=?,updated_at=? WHERE id=?", (next_stage, "completed" if unresolved is None else "active", utc_now(), session_id))
+            connection.execute("DELETE FROM planning_approval_claims WHERE stage_id=?", (stage["id"],))
+        return {"transaction": transaction, "session": self.get_session(session_id)}

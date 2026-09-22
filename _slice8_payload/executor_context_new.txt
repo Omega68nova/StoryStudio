@@ -1,0 +1,7 @@
+        session, stage, approved = PlanningPlanContext(
+            context.db,
+            data_provider=data,
+        ).session_and_stage(
+            session_id,
+            stage_number,
+        )

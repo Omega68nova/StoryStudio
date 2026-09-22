@@ -1,0 +1,4 @@
+        await api(`/planning/${session!.id}/stages/${stage}`, {
+          method: "PUT",
+          body: JSON.stringify({ draft }),
+        });

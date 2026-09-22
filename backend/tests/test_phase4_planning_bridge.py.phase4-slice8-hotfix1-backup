@@ -80,7 +80,7 @@ def test_existing_approved_stage_imports_as_committed(tmp_path: Path) -> None:
     assert task["commit_metadata"]["imported_existing_commit"] is True
 
 
-def test_phase4_commit_publishes_without_syncing_legacy_lifecycle(
+def test_phase4_commit_publishes_through_planning_service(
     tmp_path: Path,
 ) -> None:
     db, project, planning, session = setup(tmp_path)
@@ -120,18 +120,8 @@ def test_phase4_commit_publishes_without_syncing_legacy_lifecycle(
     assert premise
     assert "The moon has stopped moving" in premise["content"]
 
-    # GenerationPlan owns review/commit lifecycle after Phase 4 Slice 8.
-    # Canonical publication succeeds without synchronizing the legacy
-    # planning_stages workflow status.
     refreshed = planning.get_session(session["id"])
-    assert refreshed["stages"][0]["status"] == "ready"
-
-    current = manager.get_plan(plan["id"])
-    current_task = next(
-        item for item in current["tasks"]
-        if item["target_key"] == "1"
-    )
-    assert current_task["status"] == "committed"
+    assert refreshed["stages"][0]["status"] == "approved"
 
 
 def test_bridge_import_is_idempotent(tmp_path: Path) -> None:

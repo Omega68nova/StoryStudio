@@ -416,7 +416,7 @@ class PlanningService:
 
     def approve_stage(self, session_id: str, stage_number: int, draft: dict[str, Any], resolutions: dict[str, dict[str, Any]] | None = None,
                       *, finalize: bool = True, next_draft: dict[str, Any] | None = None,
-                      sync_legacy_state: bool = True, generation_plan_id: str | None = None) -> dict[str, Any]:
+                      sync_legacy_state: bool = True) -> dict[str, Any]:
         session = self.db.fetch_one("SELECT * FROM planning_sessions WHERE id = ?", (session_id,))
         stage = self.db.fetch_one("SELECT * FROM planning_stages WHERE session_id = ? AND stage_number = ?", (session_id, stage_number))
         if not session or not stage:
@@ -436,7 +436,6 @@ class PlanningService:
         )}
         existing_keys.update({row["entity_key"]: row["entity_id"] for row in self.db.fetch_all("SELECT * FROM planning_entity_keys WHERE session_id = ?", (session_id,))})
         resolutions = resolutions or {}
-        provenance_owner = generation_plan_id or session_id
         conflicts = {item["entity_key"]: item for item in self.preflight(session_id, stage_number, draft)}
         omitted: set[str] = set()
         preserve_manual: set[str] = set()
@@ -489,7 +488,7 @@ class PlanningService:
         for relation in proposed_relations:
             if relation.get("source_key") in omitted or relation.get("target_key") in omitted:
                 continue
-            relation_id = resolve_resource(self.db, provenance_owner, relation.get("key"), "relationship") if relation.get("key") else None
+            relation_id = resolve_resource(self.db, session_id, relation.get("key"), "relationship") if relation.get("key") else None
             current_relation = base_projection["relations"].get(relation_id) if relation_id else None
             source_id = existing_keys.get(relation.get("source_key"), relation.get("source_key"))
             target_id = existing_keys.get(relation.get("target_key"), relation.get("target_key"))
@@ -516,8 +515,8 @@ class PlanningService:
         try:
             transaction = self.world.commit_root(session["project_id"], normalized, provenance="planning", summary=str(draft.get("summary", "")))
             if stage_number == 1: apply_foundation(self.db, session["project_id"], draft)
-            elif stage_number == 2: apply_weather(self.db, session["project_id"], provenance_owner, stage_number, draft)
-            elif stage_number == 4: apply_rules(self.db, session["project_id"], provenance_owner, stage_number, draft)
+            elif stage_number == 2: apply_weather(self.db, session["project_id"], session_id, stage_number, draft)
+            elif stage_number == 4: apply_rules(self.db, session["project_id"], session_id, stage_number, draft)
             elif stage_number == 5:
                 pov_key = str(draft.get("default_pov_character_key") or "")
                 pov_id = combined_keys.get(pov_key) if pov_key else None
@@ -525,8 +524,8 @@ class PlanningService:
                     character = self.world.projection(session["project_id"], use_cache=False)["entities"].get(pov_id)
                     if not character or not character.get("state", {}).get("player_controlled"): raise WorldValidationError("Default POV must be a playable character")
                     self.db.execute("UPDATE project_story_defaults SET pov_character_id=?,updated_at=? WHERE project_id=?", (pov_id, utc_now(), session["project_id"]))
-            elif stage_number == 6: apply_outfits(self.db, session["project_id"], provenance_owner, stage_number, draft)
-            elif stage_number == 7: apply_runtime(self.db, session["project_id"], provenance_owner, draft)
+            elif stage_number == 6: apply_outfits(self.db, session["project_id"], session_id, stage_number, draft)
+            elif stage_number == 7: apply_runtime(self.db, session["project_id"], session_id, draft)
             # Stage 8 plans are updated as immediate subresources. Approval records
             # the reviewed snapshot but deliberately starts and rewrites no jobs.
             self.db.finish_transaction(commit=True)
@@ -670,11 +669,11 @@ class PlanningService:
         self.repo.revalidate_stage(stage["id"], current)
         return self.get_session(session_id)
 
-    def prepare_image_stage(self, session_id: str, *, generation_plan_id: str | None = None) -> dict[str, Any]:
+    def prepare_image_stage(self, session_id: str) -> dict[str, Any]:
         session = self.db.fetch_one("SELECT * FROM planning_sessions WHERE id=?", (session_id,)); stage = self.db.fetch_one("SELECT * FROM planning_stages WHERE session_id=? AND stage_number=8", (session_id,))
         if not session or not stage: raise WorldValidationError("Planning image stage not found")
         draft = json.loads(stage.get("draft_json") or stage.get("approved_json") or "null") or empty_draft(8)
-        plans = prepare_image_plans(self.db, session["project_id"], generation_plan_id or session_id, draft)
+        plans = prepare_image_plans(self.db, session["project_id"], session_id, draft)
         draft["assets"] = [{key: plan.get(key) for key in ("resource_key", "prompt", "negative_prompt", "workflow_preset_id", "width", "height")} for plan in plans]
         self.db.execute("UPDATE planning_stages SET draft_json=?,status='ready',raw_draft_text=NULL,validation_error=NULL,updated_at=? WHERE id=?", (json.dumps(draft), utc_now(), stage["id"]))
         return self.get_session(session_id)

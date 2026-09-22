@@ -100,22 +100,6 @@ class GenerationPlanApiService:
             )
         return plan, task
 
-    def save_planning_result(
-        self,
-        session_id: str,
-        stage_number: int,
-        draft: dict[str, Any],
-    ) -> dict[str, Any]:
-        plan, task = self.planning_task(
-            session_id,
-            stage_number,
-        )
-        return self.replace_generated_result(
-            plan["id"],
-            task["task_key"],
-            {"json": draft},
-        )
-
     def replace_generated_result(
         self,
         plan_id: str,

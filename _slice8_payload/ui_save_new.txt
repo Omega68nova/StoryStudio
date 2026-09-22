@@ -1,0 +1,4 @@
+    await api(`/generation-plans/planning/${session!.id}/tasks/${stage}/result`, {
+      method: "PUT",
+      body: JSON.stringify({ draft }),
+    });

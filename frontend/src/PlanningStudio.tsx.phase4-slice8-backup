@@ -292,10 +292,7 @@ export function PlanningStudio({
     }
   }
   async function saveStageDraft(stage: number, draft: any) {
-    await api(`/generation-plans/planning/${session!.id}/tasks/${stage}/result`, {
-      method: "PUT",
-      body: JSON.stringify({ draft }),
-    });
+    await api(`/planning/${session!.id}/stages/${stage}`, { method: "PUT", body: JSON.stringify({ draft }) });
     clearDirty(stage);
     setDrafts((current) => ({ ...current, [stage]: JSON.stringify(draft, null, 2) }));
   }
@@ -367,7 +364,7 @@ export function PlanningStudio({
           }),
         });
       } else {
-        await api(`/generation-plans/planning/${session!.id}/tasks/${stage}/result`, {
+        await api(`/planning/${session!.id}/stages/${stage}`, {
           method: "PUT",
           body: JSON.stringify({ draft }),
         });

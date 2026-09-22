@@ -1,0 +1,2 @@
+    refreshed = planning.get_session(session["id"])
+    assert refreshed["stages"][0]["status"] == "approved"

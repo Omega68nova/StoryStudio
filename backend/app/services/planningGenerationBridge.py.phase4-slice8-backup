@@ -70,15 +70,7 @@ class PlanningGenerationBridge:
             session_id,
         )
         if existing:
-            if int(existing.get("legacy_import_complete") or 0):
-                return self.batch.get_plan(existing["id"])
-            plan = self.sync_session(existing["id"], session_id)
-            self.db.execute(
-                "UPDATE generation_plans SET legacy_import_complete=1 "
-                "WHERE id=?",
-                (existing["id"],),
-            )
-            return self.batch.get_plan(existing["id"])
+            return self.sync_session(existing["id"], session_id)
 
         tasks: list[GenerationTaskDefinition] = []
         previous_key: str | None = None
@@ -130,13 +122,7 @@ class PlanningGenerationBridge:
                 "planning_stage",
                 stage["id"],
             )
-        imported = self.sync_session(plan["id"], session_id)
-        self.db.execute(
-            "UPDATE generation_plans SET legacy_import_complete=1 "
-            "WHERE id=?",
-            (plan["id"],),
-        )
-        return self.batch.get_plan(plan["id"])
+        return self.sync_session(plan["id"], session_id)
 
     def sync_session(
         self,
@@ -277,11 +263,9 @@ class PlanningStageCommitter(BatchTaskCommitter):
             stage_number,
             draft,
             resolutions,
-            sync_legacy_state=False,
-            generation_plan_id=plan["id"],
         )
         if stage_number == 7:
-            self.planning.prepare_image_stage(session_id, generation_plan_id=plan["id"])
+            self.planning.prepare_image_stage(session_id)
 
         tx = committed.get("transaction") or {}
         return BatchCommitResult(
