@@ -96,7 +96,6 @@ from app.services.environment import EnvironmentService
 from app.data.dataProvider import DataProvider
 from app.services.routeDataService import RouteDataService
 from app.services.generationPlanApiService import GenerationPlanApiService
-from app.services.planning import PlanningService
 from app.services.batchGenerationApiService import BatchGenerationApiService
 from app.services.batchGeneration import GenerationPlanError
 
@@ -111,7 +110,6 @@ environment = EnvironmentService(db)
 data = DataProvider(db)
 route_data = RouteDataService(data)
 generation_api = GenerationPlanApiService(db, data_provider=data, world=scheduler.world)
-planning = PlanningService(db, scheduler.world, data_provider=data)
 batch_api = BatchGenerationApiService(db, data_provider=data, world=scheduler.world)
 current_user_context: ContextVar[AuthUser | None] = ContextVar("current_user", default=None)
 BUILD_VERSION = "0.17.0-environment"
@@ -164,7 +162,7 @@ def _resource_project_id(path: str) -> str | None:
         (r"^/api/suggestions/([^/]+)", "SELECT n.project_id FROM image_suggestions s JOIN story_nodes n ON n.id=s.story_node_id WHERE s.id=?"),
         (r"^/api/minigames/sessions/([^/]+)", "SELECT project_id FROM minigame_sessions WHERE id=?"),
         (r"^/api/jobs/([^/]+)", "SELECT project_id FROM generation_jobs WHERE id=?"),
-        (r"^/api/generation-plans/planning/([^/]+)", "SELECT project_id FROM planning_sessions WHERE id=?"),
+        (r"^/api/generation-plans/planning/([^/]+)", "SELECT project_id FROM generation_plans WHERE id=?"),
         (r"^/api/generation-plans/([^/]+)", "SELECT project_id FROM generation_plans WHERE id=?"),
         (r"^/api/entities/([^/]+)", "SELECT project_id FROM world_entities WHERE id=?"),
     )
@@ -831,7 +829,7 @@ async def project_delete_impact(project_id: str) -> dict[str, Any]:
     for name, query in {
         "story_nodes": "SELECT COUNT(*) n FROM story_nodes WHERE project_id=?",
         "entities": "SELECT COUNT(*) n FROM world_entities WHERE project_id=?",
-        "planning_sessions": "SELECT COUNT(*) n FROM planning_sessions WHERE project_id=?",
+        "planning_sessions": "SELECT COUNT(*) n FROM generation_plans WHERE project_id=? AND source_kind='planning_workspace'",
         "jobs": "SELECT COUNT(*) n FROM generation_jobs WHERE project_id=?",
         "media": "SELECT COUNT(*) n FROM entity_media_assets WHERE project_id=?",
         "minigame_sessions": "SELECT COUNT(*) n FROM minigame_sessions WHERE project_id=?",
@@ -2172,7 +2170,7 @@ async def import_bible(project_id: str) -> dict[str, Any]:
 @app.post("/api/projects/{project_id}/planning", status_code=201)
 async def create_planning_session(project_id: str, request: PlanningSessionCreate) -> dict[str, Any]:
     require_project(project_id)
-    return planning.create_session(project_id, request.model_dump())
+    return generation_api.workspace.create(project_id, request.model_dump())
 
 
 
@@ -2440,35 +2438,21 @@ async def update_project_story_defaults(project_id: str, request: ProjectStoryDe
 @app.get("/api/projects/{project_id}/planning")
 async def get_planning_session(project_id: str) -> dict[str, Any] | None:
     require_project(project_id)
-    session_id = data.planning.latest_session_id(project_id)
-    return batch_api.planning_session_view(session_id) if session_id else None
+    plan_id = generation_api.workspace.latest_plan_id(project_id)
+    return generation_api.workspace.view(plan_id) if plan_id else None
 
 
 
 
 
 
-
-
-@app.post("/api/planning/{session_id}/stages/{stage_number}/accept-batch")
-async def accept_planning_stage_batch(session_id: str, stage_number: int, request: PlanningBatchAcceptRequest) -> dict[str, Any]:
-    try:
-        _, stage, _ = planning.stage_for_generation(session_id, stage_number)
-        if stage["status"] in {"queued", "generating"}:
-            raise HTTPException(409, "Wait for or cancel the active generation before accepting this set")
-        result = planning.accept_stage_batch(session_id, stage_number, request.focus, request.draft)
-    except WorldValidationError as exc:
-        raise HTTPException(422, {"message": str(exc), "recovery_actions": ["edit_current_set"]}) from exc
-    await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "ready", "accepted_focus": request.focus})
-    await events.publish("memory_changed", {"transaction_id": result["transaction"]["id"]})
-    return result
 
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/reopen")
 async def reopen_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
     try:
-        result = planning.reopen_stage(session_id, stage_number)
-    except WorldValidationError as exc:
+        result = generation_api.workspace.reopen(session_id, stage_number)
+    except (GenerationPlanError, WorldValidationError) as exc:
         raise HTTPException(422, str(exc)) from exc
     await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "ready"})
     return result
@@ -2476,31 +2460,38 @@ async def reopen_planning_stage(session_id: str, stage_number: int) -> dict[str,
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/skip")
 async def skip_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
-    try: result = planning.skip_stage(session_id, stage_number)
-    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
+    try:
+        result = generation_api.workspace.skip(session_id, stage_number)
+    except (GenerationPlanError, WorldValidationError) as exc:
+        raise HTTPException(422, str(exc)) from exc
     await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "skipped"})
     return result
 
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/revalidate")
 async def revalidate_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
-    try: result = planning.revalidate_stage(session_id, stage_number)
-    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
+    try:
+        result = generation_api.workspace.revalidate(session_id, stage_number)
+    except (GenerationPlanError, WorldValidationError) as exc:
+        raise HTTPException(422, str(exc)) from exc
     await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "approved"})
     return result
 
 
 @app.get("/api/planning/{session_id}/stages/{stage_number}/dependency-impact")
 async def planning_dependency_impact(session_id: str, stage_number: int) -> dict[str, Any]:
-    try: return planning.dependency_impact(session_id, stage_number)
-    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
+    try:
+        return generation_api.workspace.dependency_impact(session_id, stage_number)
+    except GenerationPlanError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.get("/api/planning/{session_id}/revisions")
 async def planning_revision_history(session_id: str) -> list[dict[str, Any]]:
-    if not data.planning.session_exists(session_id):
-        raise HTTPException(404, "Planning session not found")
-    return data.planning.revision_history(session_id)
+    try:
+        return generation_api.workspace.revisions(session_id)
+    except GenerationPlanError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @app.patch("/api/planning/image-plans/{plan_id}")
@@ -2508,7 +2499,7 @@ async def update_planning_image_plan(
     plan_id: str,
     request: PlanningImagePlanUpdate,
 ) -> dict[str, Any]:
-    plan = data.planning.image_plan(plan_id)
+    plan = generation_api.workspace.image_plan(plan_id)
     if not plan:
         raise HTTPException(404, "Planning image not found")
     if plan["status"] == "queued":
@@ -2530,7 +2521,7 @@ async def update_planning_image_plan(
             separators=(",", ":"),
         ).encode()
     ).hexdigest()
-    return data.planning.update_image_plan(
+    return generation_api.workspace.update_image_plan(
         plan_id,
         prompt=request.prompt,
         negative_prompt=request.negative_prompt,
@@ -2544,16 +2535,16 @@ async def update_planning_image_plan(
 
 @app.delete("/api/planning/image-plans/{plan_id}", status_code=204)
 async def delete_planning_image_plan(plan_id: str) -> None:
-    plan = data.planning.image_plan(plan_id)
+    plan = generation_api.workspace.image_plan(plan_id)
     if not plan:
         raise HTTPException(404, "Planning image not found")
     if plan["status"] == "queued":
         raise HTTPException(409, "Wait for or cancel the active image job")
-    data.planning.delete_image_plan(plan_id)
+    generation_api.workspace.delete_image_plan(plan_id)
 
 
 async def _queue_planning_image(plan_id: str) -> dict[str, Any]:
-    plan = db.fetch_one("SELECT * FROM planning_image_plans WHERE id=?", (plan_id,))
+    plan = db.fetch_one("SELECT * FROM generation_image_plans WHERE id=?", (plan_id,))
     if not plan: raise HTTPException(404, "Planning image not found")
     if plan["status"] == "queued" and plan.get("generation_job_id"):
         job = db.get_job(plan["generation_job_id"])
@@ -2575,7 +2566,7 @@ async def _queue_planning_image(plan_id: str) -> dict[str, Any]:
     payload = job.get("payload") or {}
     payload["planning_image_plan_id"] = plan_id
     db.execute("UPDATE generation_jobs SET payload_json=? WHERE id=?", (json.dumps(payload), job["id"]))
-    data.planning.mark_image_plan_queued(plan_id, media_asset_id=asset_id, generation_job_id=job["id"])
+    generation_api.workspace.mark_image_plan_queued(plan_id, media_asset_id=asset_id, generation_job_id=job["id"])
     return job
 
 
@@ -2589,10 +2580,12 @@ async def generate_planning_images(
     session_id: str,
     request: PlanningImageGenerateBatch,
 ) -> dict[str, Any]:
-    if not data.planning.session_exists(session_id):
-        raise HTTPException(404, "Planning session not found")
-    ids = request.plan_ids or data.planning.ready_image_plan_ids(session_id)
-    known = data.planning.image_plan_ids(session_id)
+    try:
+        generation_api.workspace.plan(session_id)
+    except GenerationPlanError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    ids = request.plan_ids or generation_api.workspace.ready_image_plan_ids(session_id)
+    known = generation_api.workspace.image_plan_ids(session_id)
     if not set(ids) <= known:
         raise HTTPException(
             422,
@@ -2610,30 +2603,54 @@ async def generate_planning_images(
 
 @app.post("/api/planning/{session_id}/stages/{stage_number}/reset")
 async def reset_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
-    _, stage, _ = planning.stage_for_generation(session_id, stage_number)
-    if stage["status"] in {"queued", "generating"}:
-        raise HTTPException(409, {"message": "Cancel active generation before resetting this stage", "recovery_actions": ["cancel_job"]})
-    if stage["status"] == "approved":
-        return planning.reopen_stage(session_id, stage_number)
-    data.planning.reset_stage(stage["id"])
-    return planning.get_session(session_id)
+    try:
+        return generation_api.workspace.reopen(session_id, stage_number)
+    except GenerationPlanError as exc:
+        raise HTTPException(409, str(exc)) from exc
 
 
 @app.get("/api/planning/{session_id}/delete-impact")
 async def planning_delete_impact(session_id: str) -> dict[str, Any]:
-    session = db.fetch_one("SELECT * FROM planning_sessions WHERE id=?", (session_id,))
-    if not session:
-        raise HTTPException(404, "Planning session not found")
-    stages = db.fetch_all("SELECT stage_number,transaction_id,legacy_link_state FROM planning_stages WHERE session_id=? AND transaction_id IS NOT NULL", (session_id,))
-    tx_ids = [stage["transaction_id"] for stage in stages]
+    try:
+        plan = generation_api.workspace.plan(session_id)
+    except GenerationPlanError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    tx_ids = [
+        str((task.get("commit_metadata") or {}).get("transaction_id"))
+        for task in plan["tasks"]
+        if (task.get("commit_metadata") or {}).get("transaction_id")
+    ]
+    tx_ids = list(dict.fromkeys(tx_ids))
     placeholders = ",".join("?" for _ in tx_ids)
     entities = relations = lore = 0
     if tx_ids:
-        entities = int((db.fetch_one(f"SELECT COUNT(DISTINCT entity_id) n FROM world_events WHERE transaction_id IN ({placeholders}) AND entity_id IS NOT NULL", tx_ids) or {"n": 0})["n"])
-        relations = int((db.fetch_one(f"SELECT COUNT(*) n FROM world_events WHERE transaction_id IN ({placeholders}) AND event_type LIKE 'relationship.%'", tx_ids) or {"n": 0})["n"])
-        lore = int((db.fetch_one(f"SELECT COUNT(*) n FROM lore_card_versions WHERE transaction_id IN ({placeholders})", tx_ids) or {"n": 0})["n"])
-    return {"session_id": session_id, "confirmation": "DELETE PLANNING", "ambiguous": any(stage["legacy_link_state"] == "ambiguous" for stage in stages),
-            "counts": {"transactions": len(tx_ids), "entities": entities, "relations": relations, "lore_versions": lore}, "stages": stages}
+        entities = int((db.fetch_one(
+            f"SELECT COUNT(DISTINCT entity_id) n FROM world_events "
+            f"WHERE transaction_id IN ({placeholders}) AND entity_id IS NOT NULL",
+            tx_ids,
+        ) or {"n": 0})["n"])
+        relations = int((db.fetch_one(
+            f"SELECT COUNT(*) n FROM world_events "
+            f"WHERE transaction_id IN ({placeholders}) AND event_type LIKE 'relationship.%'",
+            tx_ids,
+        ) or {"n": 0})["n"])
+        lore = int((db.fetch_one(
+            f"SELECT COUNT(*) n FROM lore_card_versions "
+            f"WHERE transaction_id IN ({placeholders})",
+            tx_ids,
+        ) or {"n": 0})["n"])
+    return {
+        "session_id": session_id,
+        "confirmation": "DELETE PLANNING",
+        "ambiguous": False,
+        "counts": {
+            "transactions": len(tx_ids),
+            "entities": entities,
+            "relations": relations,
+            "lore_versions": lore,
+        },
+        "transaction_ids": tx_ids,
+    }
 
 
 @app.delete("/api/planning/{session_id}")
@@ -2641,41 +2658,52 @@ async def delete_planning_session(session_id: str, request: PlanningDeleteReques
     impact = await planning_delete_impact(session_id)
     if request.confirmation != impact["confirmation"]:
         raise HTTPException(422, f"Type {impact['confirmation']} to confirm")
-    session = db.fetch_one("SELECT * FROM planning_sessions WHERE id=?", (session_id,)) or {}
+    plan = generation_api.workspace.plan(session_id)
     try:
-        lifecycle.require_idle(session.get("project_id"))
+        lifecycle.require_idle(plan["project_id"])
     except LifecycleConflict as exc:
         raise HTTPException(409, {"message": str(exc), "recovery_actions": exc.actions}) from exc
-    if request.mode == "remove_world" and impact["ambiguous"]:
-        raise HTTPException(409, {"message": "Legacy transaction links are ambiguous; world data cannot be removed automatically", "recovery_actions": ["keep_world", "inspect_memory_audit"]})
-    tx_ids = [item["transaction_id"] for item in impact["stages"]]
+    tx_ids = impact["transaction_ids"]
     with db._lock, db.connect() as connection:
         if request.mode == "remove_world" and tx_ids:
             placeholders = ",".join("?" for _ in tx_ids)
-            version_ids = [row["id"] for row in connection.execute(f"SELECT id FROM lore_card_versions WHERE transaction_id IN ({placeholders})", tx_ids)]
+            version_ids = [
+                row["id"]
+                for row in connection.execute(
+                    f"SELECT id FROM lore_card_versions WHERE transaction_id IN ({placeholders})",
+                    tx_ids,
+                )
+            ]
             if version_ids:
                 version_placeholders = ",".join("?" for _ in version_ids)
-                connection.execute(f"DELETE FROM lore_card_search WHERE version_id IN ({version_placeholders})", version_ids)
-            connection.execute(f"DELETE FROM world_transactions WHERE id IN ({placeholders})", tx_ids)
-            connection.execute("DELETE FROM world_entities WHERE project_id=? AND id NOT IN (SELECT DISTINCT entity_id FROM world_events WHERE entity_id IS NOT NULL)", (session["project_id"],))
-        connection.execute("DELETE FROM planning_sessions WHERE id=?", (session_id,))
-        connection.execute("DELETE FROM world_projection_cache WHERE project_id=?", (session["project_id"],))
+                connection.execute(
+                    f"DELETE FROM lore_card_search WHERE version_id IN ({version_placeholders})",
+                    version_ids,
+                )
+            connection.execute(
+                f"DELETE FROM world_transactions WHERE id IN ({placeholders})",
+                tx_ids,
+            )
+            connection.execute(
+                "DELETE FROM world_entities WHERE project_id=? "
+                "AND id NOT IN (SELECT DISTINCT entity_id FROM world_events WHERE entity_id IS NOT NULL)",
+                (plan["project_id"],),
+            )
+        connection.execute("DELETE FROM generation_plans WHERE id=?", (session_id,))
+        connection.execute(
+            "DELETE FROM world_projection_cache WHERE project_id=?",
+            (plan["project_id"],),
+        )
     return {"deleted": True, "mode": request.mode, "impact": impact}
 
 
 @app.delete("/api/planning/{session_id}/revisions")
 async def clear_planning_revisions(session_id: str) -> dict[str, int]:
-    session = data.planning.session(session_id)
-    if not session:
-        raise HTTPException(404, "Planning session not found")
     try:
-        lifecycle.require_idle(session["project_id"])
-    except LifecycleConflict as exc:
-        raise HTTPException(
-            409,
-            {"message": str(exc), "recovery_actions": exc.actions},
-        ) from exc
-    return {"removed": data.planning.clear_revisions(session_id)}
+        return {"removed": generation_api.workspace.clear_revisions(session_id)}
+    except GenerationPlanError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
 
 
 @app.get("/api/projects/{project_id}/reviews")
