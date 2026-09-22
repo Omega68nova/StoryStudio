@@ -107,6 +107,22 @@ WHERE NOT EXISTS (
     AND t.target_key = CAST(s.stage_number AS TEXT)
 );
 
+-- Preserve historical publication receipts before planning_stages disappears.
+UPDATE generation_plan_tasks
+SET commit_metadata_json = json_object(
+      'source', 'legacy_planning',
+      'stage_number', CAST(target_key AS INTEGER),
+      'transaction_id', (
+        SELECT ps.transaction_id
+        FROM planning_stages ps
+        WHERE ps.id = generation_plan_tasks.source_id
+      )
+    ),
+    committed_at = COALESCE(committed_at, updated_at)
+WHERE status = 'committed'
+  AND source_kind = 'legacy_planning_stage'
+  AND commit_metadata_json IS NULL;
+
 -- Normalize already-imported tasks away from bridge-only prompt/settings keys.
 UPDATE generation_plan_tasks
 SET prompt_json = json_remove(prompt_json, '$.planning_session_id'),
