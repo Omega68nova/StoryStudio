@@ -106,13 +106,11 @@ class GenerationScheduler:
             from app.handlers.imageJobHandler import ImageJobHandler
             from app.handlers.planningJobHandler import PlanningJobHandler
             from app.handlers.storyJobHandler import StoryJobHandler
-            from app.handlers.batchGenerationJobHandler import BatchGenerationJobHandler
 
             self.handlers.update({
                 "story": StoryJobHandler(),
                 "image": ImageJobHandler(),
                 "planning": PlanningJobHandler(),
-                "batch_generation": BatchGenerationJobHandler(),
             })
 
     async def _runtime_transition(
