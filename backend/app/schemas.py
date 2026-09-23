@@ -475,7 +475,7 @@ class NpcSettingsUpdate(BaseModel):
 class OutfitCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=5000)
-    imagegen_description: str = Field(default="", max_length=5000)
+    appearance: str = Field(default="", max_length=5000)
     equipment: list[str] = Field(default_factory=list, max_length=100)
 
 
