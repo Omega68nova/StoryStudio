@@ -240,8 +240,6 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
           workflow_preset_id: workflow.id,
           prompt,
           negative_prompt: asset.negative_prompt ?? "",
-          width: workflow.mappings.width ? 1024 : null,
-          height: workflow.mappings.height ? 1024 : null,
         }),
       });
       const slot = `${kind}:${outfitId ?? "default"}`;
