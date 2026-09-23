@@ -1,7 +1,7 @@
 -- Phase 6: canonical Character / Stat / Outfit domain contract.
 
 ALTER TABLE entity_outfits
-ADD COLUMN imagegen_description TEXT NOT NULL DEFAULT '';
+ADD COLUMN appearance TEXT NOT NULL DEFAULT '';
 
 ALTER TABLE stat_definitions
 ADD COLUMN description TEXT NOT NULL DEFAULT '';
