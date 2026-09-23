@@ -177,7 +177,7 @@ export function CharacterEditorForm({
   const compatibleTargets = relationDefinition
     ? entities.filter(item =>
       item.id !== draft.id
-      && relationDefinition.kinds.includes(item.kind as never)
+      && (relationDefinition.kinds as readonly string[]).includes(item.kind)
       && !item.state.archived)
     : [];
 
@@ -744,11 +744,19 @@ function CharacterStatRail({
         const { minimum, maximum, minKey, maxKey } = bounds(definition);
         const span = maximum - minimum;
         const ratio = span > 0 ? Math.max(0, Math.min(1, (value - minimum) / span)) : 0;
-        const bar = Boolean(
-          definition.maximum_stat_key
+        const bar = definition.display_style === "compact" ? false : Boolean(
+          definition.display_style === "bar"
+          || definition.maximum_stat_key
           || definition.minimum_stat_key
-          || /^(hp|mp|health|mana|stamina|energy)$/i.test(definition.stat_key),
+          || /^(hp|mp|health|mana|stamina|energy)$/i.test(definition.stat_key)
         );
+        const minimumColor = definition.minimum_color
+          ?? (minKey ? definitionsByKey[minKey]?.color : null)
+          ?? "#b94a48";
+        const maximumColor = definition.maximum_color
+          ?? (maxKey ? definitionsByKey[maxKey]?.color : null)
+          ?? definition.color
+          ?? "#5a9b63";
         const tooltip = [
           `${definition.label}: ${value}`,
           `Minimum: ${minKey ? `${minKey} = ` : ""}${minimum}`,
@@ -794,7 +802,7 @@ function CharacterStatRail({
                 className="character-stat-fill"
                 style={{
                   width: `${ratio * 100}%`,
-                  background: `linear-gradient(90deg, ${definition.minimum_color ?? "#b94a48"}, ${definition.maximum_color ?? "#5a9b63"})`,
+                  background: `linear-gradient(90deg, ${minimumColor}, ${maximumColor})`,
                 }}
               />
             </span>}
@@ -823,7 +831,10 @@ function LinkedResourceList({
       {ids.map(id => {
         const item = options.find(option => option.id === id);
         return <div className="character-linked-card" key={id}>
-          <span className="character-linked-icon">{item?.name?.slice(0, 1).toUpperCase() ?? "?"}</span>
+          <ResourceIcon
+            name={item?.name ?? id}
+            url={typeof item?.state.icon_url === "string" ? item.state.icon_url : undefined}
+          />
           <span><b>{item?.name ?? `Unavailable (${id})`}</b><small>{item?.kind ?? "item"}</small></span>
           <Button color="error" onClick={() => onRemove(id)}>Remove</Button>
         </div>;
@@ -848,7 +859,10 @@ function AbilityList({
       {keys.map(key => {
         const ability = abilities.find(item => item.ability_key === key);
         return <div className="character-linked-card" key={key}>
-          <span className="character-linked-icon">{ability?.name?.slice(0, 1).toUpperCase() ?? "?"}</span>
+          <ResourceIcon
+            name={ability?.name ?? key}
+            url={ability?.icon_url ?? undefined}
+          />
           <span>
             <b>{ability?.name ?? key}</b>
             <small>{ability?.description || ability?.target_type || "Ability"}</small>
@@ -858,4 +872,13 @@ function AbilityList({
       })}
     </div>
   </div>;
+}
+
+
+function ResourceIcon({ name, url }: { name: string; url?: string }) {
+  return <span className="character-linked-icon">
+    {url
+      ? <img src={url} alt="" />
+      : name.slice(0, 1).toUpperCase()}
+  </span>;
 }
