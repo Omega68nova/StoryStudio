@@ -47,6 +47,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
     setDraft(next);
     setInitial(JSON.stringify(next));
     setError("");
+    setMediaJobs({});
     try {
       const [events, nextOutfits, assets] = await Promise.all([
         api<Array<Record<string, unknown>>>(`/projects/${projectId}/entities/${entity.id}/history`),
@@ -65,7 +66,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
     }
   }
   function createCharacter() { const state = { player_controlled: false, autonomy_enabled: false, intervention_frequency: "normal", goals: [], secrets: [], character_secrets: [], secrets_to_character: [], equipment: [], inventory: [], abilities: [], knowledge: [], faction_ids: [], bullethell_skill_ids: [] }; const next: CharacterEditorDraft = { kind: "character", name: "", aliases: [], tags: [], state, advancedState: JSON.stringify(state, null, 2) }; setDraft(next); setInitial(JSON.stringify(next)); setHistory([]); setOutfits([]); setMedia([]); }
-  function close(force = false) { if (!force && dirty && !window.confirm("Discard unsaved character changes?")) return; setDraft(null); setInitial(""); setError(""); setOutfitDraft(null); }
+  function close(force = false) { if (!force && dirty && !window.confirm("Discard unsaved character changes?")) return; setDraft(null); setInitial(""); setError(""); setOutfitDraft(null); setMediaJobs({}); }
   async function save() { if (!draft || !draft.name.trim()) return setError("Name is required"); try { const normalized = applyAdvancedState(draft, draft.advancedState) as CharacterEditorDraft; if (normalized.state.player_controlled && normalized.state.autonomy_enabled) throw new Error("Player-controlled characters cannot enable NPC autonomy"); if (draft.id) await api(`/projects/${projectId}/entities/${draft.id}`, { method: "PATCH", body: JSON.stringify({ name: draft.name.trim(), aliases: draft.aliases, tags: draft.tags, patch: normalized.state }) }); else await api(`/projects/${projectId}/entities`, { method: "POST", body: JSON.stringify({ kind: "character", name: draft.name.trim(), aliases: draft.aliases, tags: draft.tags, state: normalized.state }) }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
   async function archive() { if (!draft?.id) return; try { await api(`/projects/${projectId}/entities/${draft.id}/${draft.state.archived ? "restore" : "archive"}`, { method: "POST" }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
   async function remove() { if (!draft?.id) return; try { const impact = await api<{ confirmation: string }>(`/projects/${projectId}/entities/${draft.id}/delete-impact`); if (window.prompt(`Type ${impact.confirmation} to permanently delete this character`) !== impact.confirmation) return; await api(`/projects/${projectId}/entities/${draft.id}`, { method: "DELETE", body: JSON.stringify({ confirmation: impact.confirmation }) }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
