@@ -65,7 +65,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       setMedia([]);
     }
   }
-  function createCharacter() { const state = { player_controlled: false, autonomy_enabled: false, intervention_frequency: "normal", goals: [], secrets: [], character_secrets: [], secrets_to_character: [], equipment: [], inventory: [], abilities: [], knowledge: [], faction_ids: [], bullethell_skill_ids: [] }; const next: CharacterEditorDraft = { kind: "character", name: "", aliases: [], tags: [], state, advancedState: JSON.stringify(state, null, 2) }; setDraft(next); setInitial(JSON.stringify(next)); setHistory([]); setOutfits([]); setMedia([]); }
+  function createCharacter() { const state = { description: "", imagegen_description: "", appearance: "", personality: "", wardrobe_notes: "", full_body_height_factor: 0.5, player_controlled: false, autonomy_enabled: false, intervention_frequency: "normal", goals: [], secrets: [], character_secrets: [], secrets_to_character: [], equipment: [], inventory: [], abilities: [], knowledge: [], faction_ids: [], bullethell_skill_ids: [] }; const next: CharacterEditorDraft = { kind: "character", name: "", aliases: [], tags: [], state, advancedState: JSON.stringify(state, null, 2) }; setDraft(next); setInitial(JSON.stringify(next)); setHistory([]); setOutfits([]); setMedia([]); }
   function close(force = false) { if (!force && dirty && !window.confirm("Discard unsaved character changes?")) return; setDraft(null); setInitial(""); setError(""); setOutfitDraft(null); setMediaJobs({}); }
   async function save() { if (!draft || !draft.name.trim()) return setError("Name is required"); try { const normalized = applyAdvancedState(draft, draft.advancedState) as CharacterEditorDraft; if (normalized.state.player_controlled && normalized.state.autonomy_enabled) throw new Error("Player-controlled characters cannot enable NPC autonomy"); if (draft.id) await api(`/projects/${projectId}/entities/${draft.id}`, { method: "PATCH", body: JSON.stringify({ name: draft.name.trim(), aliases: draft.aliases, tags: draft.tags, patch: normalized.state }) }); else await api(`/projects/${projectId}/entities`, { method: "POST", body: JSON.stringify({ kind: "character", name: draft.name.trim(), aliases: draft.aliases, tags: draft.tags, state: normalized.state }) }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
   async function archive() { if (!draft?.id) return; try { await api(`/projects/${projectId}/entities/${draft.id}/${draft.state.archived ? "restore" : "archive"}`, { method: "POST" }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
@@ -98,10 +98,17 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
         body: JSON.stringify({
           stat_key: definition.stat_key,
           label: definition.label,
+          description: definition.description ?? "",
           scope: definition.scope,
           default_value: definition.default_value,
           minimum: patch.minimum ?? definition.minimum,
           maximum: patch.maximum ?? definition.maximum,
+          minimum_stat_key: definition.minimum_stat_key ?? null,
+          maximum_stat_key: definition.maximum_stat_key ?? null,
+          color: definition.color ?? null,
+          minimum_color: definition.minimum_color ?? null,
+          maximum_color: definition.maximum_color ?? null,
+          display_style: definition.display_style ?? "compact",
           integer_only: Boolean(definition.integer_only),
           visibility: definition.visibility,
         }),
@@ -111,9 +118,9 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       setError(String(cause));
     }
   }
-  async function saveOutfit() { if (!outfitDraft || !outfitDraft.name.trim()) return; try { await api(outfitDraft.id ? `/outfits/${outfitDraft.id}` : `/entities/${outfitDraft.entity_id}/outfits`, { method: outfitDraft.id ? "PUT" : "POST", body: JSON.stringify({ name: outfitDraft.name, description: outfitDraft.description, equipment: outfitDraft.equipment }) }); setOutfits(await api(`/entities/${outfitDraft.entity_id}/outfits`)); setOutfitDraft(null); } catch (cause) { setError(String(cause)); } }
+  async function saveOutfit() { if (!outfitDraft || !outfitDraft.name.trim()) return; try { await api(outfitDraft.id ? `/outfits/${outfitDraft.id}` : `/entities/${outfitDraft.entity_id}/outfits`, { method: outfitDraft.id ? "PUT" : "POST", body: JSON.stringify({ name: outfitDraft.name, description: outfitDraft.description, imagegen_description: outfitDraft.imagegen_description, equipment: outfitDraft.equipment }) }); setOutfits(await api(`/entities/${outfitDraft.entity_id}/outfits`)); setOutfitDraft(null); } catch (cause) { setError(String(cause)); } }
   async function deleteOutfit(outfit: Outfit) { if (!window.confirm(`Delete outfit ${outfit.name}?`)) return; try { await api(`/outfits/${outfit.id}`, { method: "DELETE" }); setOutfits(await api(`/entities/${outfit.entity_id}/outfits`)); } catch (cause) { setError(String(cause)); } }
-  async function activateOutfit(outfit: Outfit) { try { await api(`/outfits/${outfit.id}/activate`, { method: "POST" }); const patch = { active_outfit_id: outfit.id, wardrobe: outfit.description, equipment: outfit.equipment }; if (draft) setDraft(updateDraftState(draft, patch) as CharacterEditorDraft); setInitial(previous => { if (!previous) return previous; const baseline = JSON.parse(previous) as CharacterEditorDraft; return JSON.stringify(updateDraftState(baseline, patch)); }); await load(); } catch (cause) { setError(String(cause)); } }
+  async function activateOutfit(outfit: Outfit) { try { await api(`/outfits/${outfit.id}/activate`, { method: "POST" }); const patch = { active_outfit_id: outfit.id, equipment: outfit.equipment }; if (draft) setDraft(updateDraftState(draft, patch) as CharacterEditorDraft); setInitial(previous => { if (!previous) return previous; const baseline = JSON.parse(previous) as CharacterEditorDraft; return JSON.stringify(updateDraftState(baseline, patch)); }); await load(); } catch (cause) { setError(String(cause)); } }
   async function refreshMedia(entityId: string) {
     const assets = await api<MediaAsset[]>(`/entities/${entityId}/media`);
     setMedia(assets);
@@ -180,14 +187,20 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       ? outfits.find(item => item.id === outfitId)
       : null;
     const appearance = String(
-      draft?.state.appearance
-      ?? draft?.state.description
-      ?? "",
+      draft?.state.imagegen_description
+      || draft?.state.appearance
+      || draft?.state.description
+      || "",
+    ).trim();
+    const outfitVisual = String(
+      outfit?.imagegen_description
+      || outfit?.description
+      || "",
     ).trim();
     const parts = [
       draft?.name ? `Character: ${draft.name}` : "",
       appearance,
-      outfit?.description ? `Outfit: ${outfit.description}` : "",
+      outfitVisual ? `Outfit: ${outfitVisual}` : "",
       kind === "portrait"
         ? "character portrait, focus on face and upper body"
         : "full body character image, show the complete character",
