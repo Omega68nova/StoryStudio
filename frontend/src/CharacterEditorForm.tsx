@@ -622,6 +622,19 @@ export function CharacterEditorForm({
         </div>}
 
         {tab === 6 && <div className="character-fields">
+          <TextField
+            type="number"
+            label="Full-body height factor"
+            value={Number(state.full_body_height_factor ?? 0.5)}
+            inputProps={{ min: 0, max: 1, step: 0.05 }}
+            helperText="0 = child canvas (784×1552), 1 = tall canvas (784×2048); values between interpolate the height."
+            onChange={event => {
+              const value = Number(event.target.value);
+              if (Number.isFinite(value)) {
+                setState({ full_body_height_factor: Math.max(0, Math.min(1, value)) });
+              }
+            }}
+          />
           <CreatableBoxedMultiselect
             label="Tags"
             options={draft.tags}
