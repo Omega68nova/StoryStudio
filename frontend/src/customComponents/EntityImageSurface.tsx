@@ -39,6 +39,7 @@ export function EntityImageSurface({
       type="button"
       className={`entity-image-surface ${className}`}
       aria-label={`${alt} image actions`}
+      disabled={loading}
       onClick={event => setAnchor(event.currentTarget)}
     >
       {asset?.file_path
