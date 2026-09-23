@@ -160,7 +160,6 @@ class InventoryEntry(DomainModel):
 
 class CharacterState(DomainModel):
     description: str = ""
-    imagegen_description: str = ""
     pronouns: str = ""
     appearance: str = ""
     personality: str = ""
