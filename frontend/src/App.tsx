@@ -92,6 +92,9 @@ const defaultSettings: RuntimeSettings = {
   context_tokens: 8192,
   planning_context_tokens: 8192,
   memory_provider: "builtin",
+  portrait_prompt_prefix: "portrait, anime style, full color, clean lineart, soft shading, looking at viewer, simple background, white background,",
+  full_body_prompt_prefix: "full body, standing, anime style, full color, clean lineart, soft shading, looking at viewer, simple background, white background,",
+  icon_prompt_prefix: "(((no humans))),simple background, white background,",
 };
 const expectedBackendVersion = "0.17.0-environment";
 
@@ -2489,6 +2492,31 @@ function SettingsPanel({
             />
           </label>
         </div>
+        <h3>Semantic image profiles</h3>
+        <label>
+          Portrait required prefix
+          <textarea
+            value={settings.portrait_prompt_prefix}
+            onChange={(e) => set("portrait_prompt_prefix", e.target.value)}
+          />
+        </label>
+        <label>
+          Full-body required prefix
+          <textarea
+            value={settings.full_body_prompt_prefix}
+            onChange={(e) => set("full_body_prompt_prefix", e.target.value)}
+          />
+        </label>
+        <label>
+          Icon required prefix
+          <textarea
+            value={settings.icon_prompt_prefix}
+            onChange={(e) => set("icon_prompt_prefix", e.target.value)}
+          />
+        </label>
+        <p className="muted">
+          StoryStudio prepends these to typed portrait, full-body, and icon prompts. Portraits, full-body images, and icons require the workflow&apos;s transparent output; backgrounds use the normal output.
+        </p>
         <label>
           Story context tokens
           <input
