@@ -106,6 +106,7 @@ from app.services.routeDataService import RouteDataService
 from app.services.generationPlanApiService import GenerationPlanApiService
 from app.services.batchGenerationApiService import BatchGenerationApiService
 from app.services.batchGeneration import GenerationPlanError
+from app.domain.adapters import outfit_from_record, stat_from_record
 
 
 db = Database()
@@ -1292,7 +1293,7 @@ async def update_environment_settings(project_id: str, request: EnvironmentSetti
 async def create_weather(project_id: str, request: WeatherDefinitionUpdate) -> dict[str, Any]:
     require_project(project_id); now, weather_id = utc_now(), new_id()
     try:
-        db.execute("INSERT INTO weather_definitions(id,project_id,name,description,imagegen_description,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (weather_id, project_id, request.name.strip(), request.description, request.imagegen_description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), now, now))
+        db.execute("INSERT INTO weather_definitions(id,project_id,name,description,appearance,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (weather_id, project_id, request.name.strip(), request.description, request.appearance, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), now, now))
     except Exception as exc:
         raise HTTPException(409, "A weather definition with that name already exists") from exc
     await events.publish("environment", {"project_id": project_id, "action": "weather_changed"})
@@ -1307,7 +1308,7 @@ async def update_weather(project_id: str, weather_id: str, request: WeatherDefin
     settings = db.fetch_one("SELECT initial_weather_id FROM project_environment_settings WHERE project_id=?", (project_id,)) or {}
     if not request.enabled and settings.get("initial_weather_id") == weather_id:
         raise HTTPException(422, "The initial weather cannot be disabled")
-    db.execute("UPDATE weather_definitions SET name=?,description=?,imagegen_description=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=?", (request.name.strip(), request.description, request.imagegen_description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), utc_now(), weather_id))
+    db.execute("UPDATE weather_definitions SET name=?,description=?,appearance=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=?", (request.name.strip(), request.description, request.appearance, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), utc_now(), weather_id))
     if not request.enabled:
         project = require_project(project_id)
         projection = scheduler.world.projection(project_id)
@@ -1359,9 +1360,9 @@ async def update_time_phases(project_id: str, request: TimePhasesUpdate) -> dict
         for position, item in enumerate(request.phases):
             phase_id = item.id or new_id()
             if phase_id in existing:
-                connection.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,position=?,enabled=? WHERE id=? AND project_id=?", (item.name.strip(), item.duration_minutes, item.description, item.imagegen_description, position, int(item.enabled), phase_id, project_id))
+                connection.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,appearance=?,position=?,enabled=? WHERE id=? AND project_id=?", (item.name.strip(), item.duration_minutes, item.description, item.appearance, position, int(item.enabled), phase_id, project_id))
             else:
-                connection.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, item.name.strip(), item.duration_minutes, item.description, item.imagegen_description, position, int(item.enabled)))
+                connection.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,appearance,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, item.name.strip(), item.duration_minutes, item.description, item.appearance, position, int(item.enabled)))
         for removed_id in existing - requested_ids:
             connection.execute("DELETE FROM time_phases WHERE id=? AND project_id=?", (removed_id, project_id))
         connection.execute("UPDATE project_environment_settings SET revision=revision+1,updated_at=? WHERE project_id=?", (utc_now(), project_id))
@@ -1373,7 +1374,7 @@ async def update_time_phases(project_id: str, request: TimePhasesUpdate) -> dict
 async def create_time_phase(project_id: str, request: TimePhaseItem) -> dict[str, Any]:
     require_project(project_id); phase_id = new_id()
     position = int((db.fetch_one("SELECT COALESCE(MAX(position),-1)+1 position FROM time_phases WHERE project_id=?", (project_id,)) or {"position": 0})["position"])
-    db.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, request.name.strip(), request.duration_minutes, request.description, request.imagegen_description, position, int(request.enabled)))
+    db.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,appearance,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, request.name.strip(), request.duration_minutes, request.description, request.appearance, position, int(request.enabled)))
     await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
     return next(item for item in environment.settings(project_id)["time_phases"] if item["id"] == phase_id)
 
@@ -1383,7 +1384,7 @@ async def update_time_phase(project_id: str, phase_id: str, request: TimePhaseIt
     require_project(project_id)
     if not db.fetch_one("SELECT id FROM time_phases WHERE id=? AND project_id=?", (phase_id, project_id)): raise HTTPException(404, "Time phase not found")
     if not request.enabled and (db.fetch_one("SELECT COUNT(*) n FROM time_phases WHERE project_id=? AND enabled=1 AND id<>?", (project_id, phase_id)) or {"n": 0})["n"] == 0: raise HTTPException(422, "At least one time phase must be enabled")
-    db.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,enabled=? WHERE id=? AND project_id=?", (request.name.strip(), request.duration_minutes, request.description, request.imagegen_description, int(request.enabled), phase_id, project_id))
+    db.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,appearance=?,enabled=? WHERE id=? AND project_id=?", (request.name.strip(), request.duration_minutes, request.description, request.appearance, int(request.enabled), phase_id, project_id))
     await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
     return next(item for item in environment.settings(project_id)["time_phases"] if item["id"] == phase_id)
 
@@ -1411,7 +1412,7 @@ async def reorder_time_phases(project_id: str, request: TimePhaseOrderUpdate) ->
 def _location_state(request: EnvironmentLocationUpdate) -> dict[str, Any]:
     return {
         "parent_location_id": request.parent_location_id, "exposure": request.exposure,
-        "description": request.description, "imagegen_description": request.imagegen_description,
+        "description": request.description, "appearance": request.appearance,
         "image_tags": request.image_tags, "enabled": request.enabled,
         "random_encounter": request.random_encounter, "discovered": request.discovered,
         "x": request.x, "y": request.y,
@@ -1806,35 +1807,84 @@ async def update_npc_settings(project_id: str, entity_id: str, request: NpcSetti
 
 @app.get("/api/entities/{entity_id}/outfits")
 async def list_outfits(entity_id: str) -> list[dict[str, Any]]:
-    rows = db.fetch_all("SELECT * FROM entity_outfits WHERE entity_id = ? ORDER BY name", (entity_id,))
-    for row in rows: row["equipment"] = json.loads(row.pop("equipment_json"))
-    return rows
+    rows = db.fetch_all(
+        "SELECT * FROM entity_outfits WHERE entity_id = ? ORDER BY name",
+        (entity_id,),
+    )
+    return [
+        outfit_from_record(row).model_dump(mode="json")
+        for row in rows
+    ]
 
 
 @app.post("/api/entities/{entity_id}/outfits", status_code=201)
 async def create_outfit(entity_id: str, request: OutfitCreate) -> dict[str, Any]:
-    entity = db.fetch_one("SELECT * FROM world_entities WHERE id = ? AND kind = 'character'", (entity_id,))
-    if not entity: raise HTTPException(404, "Character not found")
+    entity = db.fetch_one(
+        "SELECT * FROM world_entities WHERE id = ? AND kind = 'character'",
+        (entity_id,),
+    )
+    if not entity:
+        raise HTTPException(404, "Character not found")
     outfit_id, now = new_id(), utc_now()
     try:
-        db.execute("INSERT INTO entity_outfits(id, entity_id, name, description, equipment_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                   (outfit_id, entity_id, request.name.strip(), request.description, json.dumps(request.equipment), now, now))
+        db.execute(
+            "INSERT INTO entity_outfits("
+            "id,entity_id,name,description,appearance,equipment_json,"
+            "created_at,updated_at"
+            ") VALUES (?,?,?,?,?,?,?,?)",
+            (
+                outfit_id,
+                entity_id,
+                request.name.strip(),
+                request.description,
+                request.appearance,
+                json.dumps(request.equipment),
+                now,
+                now,
+            ),
+        )
     except Exception as exc:
-        raise HTTPException(409, "An outfit with that name already exists") from exc
-    return {"id": outfit_id, "entity_id": entity_id, **request.model_dump()}
+        raise HTTPException(
+            409,
+            "An outfit with that name already exists",
+        ) from exc
+    row = db.fetch_one(
+        "SELECT * FROM entity_outfits WHERE id=?",
+        (outfit_id,),
+    ) or {}
+    return outfit_from_record(row).model_dump(mode="json")
 
 
 @app.put("/api/outfits/{outfit_id}")
 async def update_outfit(outfit_id: str, request: OutfitCreate) -> dict[str, Any]:
-    if not db.fetch_one("SELECT id FROM entity_outfits WHERE id = ?", (outfit_id,)):
+    if not db.fetch_one(
+        "SELECT id FROM entity_outfits WHERE id = ?",
+        (outfit_id,),
+    ):
         raise HTTPException(404, "Outfit not found")
     try:
-        db.execute("UPDATE entity_outfits SET name = ?, description = ?, equipment_json = ?, updated_at = ? WHERE id = ?", (request.name.strip(), request.description, json.dumps(request.equipment), utc_now(), outfit_id))
+        db.execute(
+            "UPDATE entity_outfits SET name=?,description=?,"
+            "appearance=?,equipment_json=?,updated_at=? WHERE id=?",
+            (
+                request.name.strip(),
+                request.description,
+                request.appearance,
+                json.dumps(request.equipment),
+                utc_now(),
+                outfit_id,
+            ),
+        )
     except Exception as exc:
-        raise HTTPException(409, "An outfit with that name already exists") from exc
-    row = db.fetch_one("SELECT * FROM entity_outfits WHERE id = ?", (outfit_id,)) or {}
-    row["equipment"] = json.loads(row.pop("equipment_json", "[]"))
-    return row
+        raise HTTPException(
+            409,
+            "An outfit with that name already exists",
+        ) from exc
+    row = db.fetch_one(
+        "SELECT * FROM entity_outfits WHERE id=?",
+        (outfit_id,),
+    ) or {}
+    return outfit_from_record(row).model_dump(mode="json")
 
 
 @app.delete("/api/outfits/{outfit_id}", status_code=204)
@@ -1879,7 +1929,7 @@ async def activate_outfit(outfit_id: str) -> dict[str, Any]:
     outfit = db.fetch_one("SELECT o.*, e.project_id FROM entity_outfits o JOIN world_entities e ON e.id = o.entity_id WHERE o.id = ?", (outfit_id,))
     if not outfit: raise HTTPException(404, "Outfit not found")
     project = require_project(outfit["project_id"])
-    mutation = scheduler.world.normalize_mutations(outfit["project_id"], project.get("active_node_id"), [{"tool": "updateEntity", "arguments": {"entity_id": outfit["entity_id"], "patch": {"active_outfit_id": outfit_id, "wardrobe": outfit["description"], "equipment": json.loads(outfit["equipment_json"])}}}], provenance="author")
+    mutation = scheduler.world.normalize_mutations(outfit["project_id"], project.get("active_node_id"), [{"tool": "updateEntity", "arguments": {"entity_id": outfit["entity_id"], "patch": {"active_outfit_id": outfit_id, "equipment": json.loads(outfit["equipment_json"])}}}], provenance="author")
     transaction = scheduler.world.commit_to_existing_node(outfit["project_id"], project["active_node_id"], mutation, provenance="author", summary=f"Changed outfit to {outfit['name']}") if project.get("active_node_id") else scheduler.world.commit_root(outfit["project_id"], mutation, provenance="author", summary=f"Changed outfit to {outfit['name']}")
     await events.publish("memory_changed", {"project_id": outfit["project_id"], "transaction_id": transaction["id"]})
     return scheduler.world.entity_card(outfit["project_id"], outfit["entity_id"])
@@ -2197,19 +2247,91 @@ async def update_project_music(project_id: str, request: ProjectMusicUpdate) -> 
 @app.get("/api/projects/{project_id}/rules")
 async def get_rules(project_id: str) -> dict[str, Any]:
     require_project(project_id)
-    stats = db.fetch_all("SELECT * FROM stat_definitions WHERE project_id = ? ORDER BY label", (project_id,))
+    stat_rows = db.fetch_all(
+        "SELECT * FROM stat_definitions WHERE project_id = ? ORDER BY label",
+        (project_id,),
+    )
+    stats = [
+        stat_from_record(row).model_dump(mode="json")
+        for row in stat_rows
+    ]
     abilities = db.fetch_all("SELECT * FROM ability_definitions WHERE project_id = ? ORDER BY name", (project_id,))
     for ability in abilities:
         for field in ("requirements_json", "costs_json", "effects_json", "minigame_profile_json"): ability[field.removesuffix("_json")] = json.loads(ability.pop(field))
     return {"stats": stats, "abilities": abilities}
 
 
+def _validate_stat_bound_references(
+    project_id: str,
+    request: StatDefinitionCreate,
+    *,
+    current_id: str | None = None,
+) -> None:
+    for field in ("minimum_stat_key", "maximum_stat_key"):
+        key = getattr(request, field)
+        if not key:
+            continue
+        row = db.fetch_one(
+            "SELECT id,scope FROM stat_definitions "
+            "WHERE project_id=? AND stat_key=?",
+            (project_id, key),
+        )
+        if not row:
+            raise HTTPException(
+                422,
+                f"{field} references an unknown stat: {key}",
+            )
+        if row["scope"] != request.scope:
+            raise HTTPException(
+                422,
+                f"{field} must reference a {request.scope} stat",
+            )
+        if current_id and row["id"] == current_id:
+            raise HTTPException(422, f"{field} cannot reference itself")
+
+
 @app.post("/api/projects/{project_id}/stats", status_code=201)
 async def create_stat(project_id: str, request: StatDefinitionCreate) -> dict[str, Any]:
-    require_project(project_id); now = utc_now(); stat_id = new_id()
-    try: db.execute("INSERT INTO stat_definitions(id, project_id, stat_key, label, scope, default_value, minimum, maximum, integer_only, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (stat_id, project_id, request.stat_key, request.label, request.scope, request.default_value, request.minimum, request.maximum, request.integer_only, request.visibility, now, now))
-    except Exception as exc: raise HTTPException(422, str(exc)) from exc
-    return db.fetch_one("SELECT * FROM stat_definitions WHERE id = ?", (stat_id,)) or {}
+    require_project(project_id)
+    _validate_stat_bound_references(project_id, request)
+    now, stat_id = utc_now(), new_id()
+    try:
+        db.execute(
+            "INSERT INTO stat_definitions("
+            "id,project_id,stat_key,label,description,scope,default_value,"
+            "minimum,maximum,minimum_stat_key,maximum_stat_key,color,"
+            "minimum_color,maximum_color,display_style,integer_only,"
+            "visibility,created_at,updated_at"
+            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                stat_id,
+                project_id,
+                request.stat_key,
+                request.label,
+                request.description,
+                request.scope,
+                request.default_value,
+                request.minimum,
+                request.maximum,
+                request.minimum_stat_key,
+                request.maximum_stat_key,
+                request.color,
+                request.minimum_color,
+                request.maximum_color,
+                request.display_style,
+                request.integer_only,
+                request.visibility,
+                now,
+                now,
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+    row = db.fetch_one(
+        "SELECT * FROM stat_definitions WHERE id=?",
+        (stat_id,),
+    ) or {}
+    return stat_from_record(row).model_dump(mode="json")
 
 
 @app.post("/api/projects/{project_id}/stats/adjust")
@@ -2226,10 +2348,49 @@ async def manually_adjust_stat(project_id: str, request: StatAdjustmentRequest) 
 
 @app.put("/api/projects/{project_id}/stats/{stat_id}")
 async def update_stat(project_id: str, stat_id: str, request: StatDefinitionCreate) -> dict[str, Any]:
-    if not db.fetch_one("SELECT id FROM stat_definitions WHERE id = ? AND project_id = ?", (stat_id, project_id)): raise HTTPException(404, "Stat definition not found")
-    try: db.execute("UPDATE stat_definitions SET stat_key=?, label=?, scope=?, default_value=?, minimum=?, maximum=?, integer_only=?, visibility=?, updated_at=? WHERE id=?", (request.stat_key, request.label, request.scope, request.default_value, request.minimum, request.maximum, request.integer_only, request.visibility, utc_now(), stat_id))
-    except Exception as exc: raise HTTPException(422, str(exc)) from exc
-    return db.fetch_one("SELECT * FROM stat_definitions WHERE id = ?", (stat_id,)) or {}
+    if not db.fetch_one(
+        "SELECT id FROM stat_definitions WHERE id=? AND project_id=?",
+        (stat_id, project_id),
+    ):
+        raise HTTPException(404, "Stat definition not found")
+    _validate_stat_bound_references(
+        project_id,
+        request,
+        current_id=stat_id,
+    )
+    try:
+        db.execute(
+            "UPDATE stat_definitions SET stat_key=?,label=?,description=?,"
+            "scope=?,default_value=?,minimum=?,maximum=?,minimum_stat_key=?,"
+            "maximum_stat_key=?,color=?,minimum_color=?,maximum_color=?,"
+            "display_style=?,integer_only=?,visibility=?,updated_at=? WHERE id=?",
+            (
+                request.stat_key,
+                request.label,
+                request.description,
+                request.scope,
+                request.default_value,
+                request.minimum,
+                request.maximum,
+                request.minimum_stat_key,
+                request.maximum_stat_key,
+                request.color,
+                request.minimum_color,
+                request.maximum_color,
+                request.display_style,
+                request.integer_only,
+                request.visibility,
+                utc_now(),
+                stat_id,
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+    row = db.fetch_one(
+        "SELECT * FROM stat_definitions WHERE id=?",
+        (stat_id,),
+    ) or {}
+    return stat_from_record(row).model_dump(mode="json")
 
 
 @app.post("/api/projects/{project_id}/abilities", status_code=201)
@@ -2273,6 +2434,21 @@ async def delete_stat(project_id: str, stat_id: str) -> None:
     require_idle_project(project_id)
     definition = db.fetch_one("SELECT * FROM stat_definitions WHERE id = ? AND project_id = ?", (stat_id, project_id))
     if not definition: raise HTTPException(404, "Stat definition not found")
+    referenced_bound = db.fetch_one(
+        "SELECT id,label FROM stat_definitions WHERE project_id=? "
+        "AND id<>? AND (minimum_stat_key=? OR maximum_stat_key=?) LIMIT 1",
+        (
+            project_id,
+            stat_id,
+            definition["stat_key"],
+            definition["stat_key"],
+        ),
+    )
+    if referenced_bound:
+        raise HTTPException(
+            409,
+            f"Stat is used as a bound by {referenced_bound['label']}",
+        )
     abilities = db.fetch_all("SELECT costs_json, effects_json FROM ability_definitions WHERE project_id = ?", (project_id,))
     if any(definition["stat_key"] in json.loads(row["costs_json"]) or any(effect.get("stat_key") == definition["stat_key"] for effect in json.loads(row["effects_json"])) for row in abilities):
         raise HTTPException(409, "Stat is referenced by an ability")

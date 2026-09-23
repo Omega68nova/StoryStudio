@@ -353,7 +353,13 @@ def test_world_engine_typed_entity_is_branch_aware_and_read_only(
     assert isinstance(right_character, Character)
     assert left_character.state.wardrobe == "red armor"
     assert right_character.state.wardrobe == "green cloak"
-    assert entity_to_projection(left_character) == before["entities"][character_id]
+    canonical = entity_to_projection(left_character)
+    assert canonical["state"]["wardrobe_notes"] == "red armor"
+    assert "wardrobe" not in canonical["state"]
+    assert canonical["id"] == before["entities"][character_id]["id"]
+    assert canonical["name"] == before["entities"][character_id]["name"]
+    # Typed reads canonicalize legacy field names but never mutate the
+    # branch projection they were built from.
     assert world.projection(project["id"], left_node["id"]) == before
 
 

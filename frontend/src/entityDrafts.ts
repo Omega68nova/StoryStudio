@@ -11,6 +11,34 @@ export function normalizeStringList(values: unknown[]): string[] {
 
 export function entityToDraft(entity: WorldEntity): EntityEditorDraft {
   const state = structuredClone(entity.state ?? {});
+  if (entity.kind === "character") {
+    if (!String(state.description ?? "").trim() && state.identity) {
+      state.description = state.identity;
+    }
+    if (!String(state.personality ?? "").trim() && state.core_personality) {
+      state.personality = state.core_personality;
+    }
+    if (!String(state.wardrobe_notes ?? "").trim() && state.wardrobe) {
+      state.wardrobe_notes = state.wardrobe;
+    }
+    if (!Array.isArray(state.secrets_to_character) || !state.secrets_to_character.length) {
+      if (Array.isArray(state.secrets)) {
+        state.secrets_to_character = state.secrets;
+      } else if (String(state.secrets ?? "").trim()) {
+        state.secrets_to_character = [String(state.secrets)];
+      }
+    }
+    delete state.secrets;
+    delete state.identity;
+    delete state.core_personality;
+    delete state.wardrobe;
+    if (state.full_body_height_factor == null) {
+      state.full_body_height_factor = 0.5;
+    }
+    if (state.imagegen_description == null) {
+      state.imagegen_description = "";
+    }
+  }
   return { id: entity.id, kind: entity.kind, name: entity.name, aliases: normalizeStringList(entity.aliases ?? []), tags: normalizeStringList(entity.tags ?? []), state, advancedState: JSON.stringify(state, null, 2) };
 }
 
