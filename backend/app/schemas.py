@@ -475,6 +475,7 @@ class NpcSettingsUpdate(BaseModel):
 class OutfitCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=5000)
+    imagegen_description: str = Field(default="", max_length=5000)
     equipment: list[str] = Field(default_factory=list, max_length=100)
 
 
@@ -636,12 +637,38 @@ class LocationBackgroundCreate(BaseModel):
 class StatDefinitionCreate(BaseModel):
     stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     label: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=5000)
     scope: Literal["character", "relationship"] = "character"
     default_value: float = 0
     minimum: float = 0
     maximum: float = 100
+    minimum_stat_key: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{0,63}$",
+    )
+    maximum_stat_key: str | None = Field(
+        default=None,
+        pattern=r"^[a-z][a-z0-9_]{0,63}$",
+    )
+    color: str | None = Field(default=None, max_length=64)
+    minimum_color: str | None = Field(default=None, max_length=64)
+    maximum_color: str | None = Field(default=None, max_length=64)
+    display_style: Literal["compact", "bar"] = "compact"
     integer_only: bool = True
     visibility: Literal["public", "private", "narrator"] = "public"
+
+    @model_validator(mode="after")
+    def validate_bound_shape(self) -> "StatDefinitionCreate":
+        if self.minimum > self.maximum:
+            raise ValueError("minimum cannot exceed maximum")
+        if self.minimum_stat_key == self.stat_key:
+            raise ValueError("minimum_stat_key cannot reference itself")
+        if self.maximum_stat_key == self.stat_key:
+            raise ValueError("maximum_stat_key cannot reference itself")
+        if not self.minimum_stat_key and not self.maximum_stat_key:
+            if self.default_value < self.minimum or self.default_value > self.maximum:
+                raise ValueError("default_value must be inside numeric bounds")
+        return self
 
 
 class StatAdjustmentRequest(BaseModel):
