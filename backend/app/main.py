@@ -32,6 +32,9 @@ from app.schemas import (
     GenerationTaskReviewRequest,
     GenerationTaskRejectRequest,
     GenerationResultUpdate,
+    GenerationPlanTaskCreate,
+    GenerationPlanTaskUpdate,
+    GenerationDependenciesUpdate,
     PlanningSessionCreate,
     RandomPlanningDirectionRequest,
     PlanningImagePlanUpdate,
@@ -52,6 +55,7 @@ from app.schemas import (
     StorySettingsUpdate,
     WorldEntityCreate,
     WorldEntityUpdate,
+    WorldCloneRequest,
     HardDeleteConfirm,
     WorldHeadUpdate,
     WorldMutationBatch,
@@ -79,6 +83,7 @@ from app.schemas import (
     ProjectAssignmentsUpdate,
     EnvironmentSettingsUpdate, WeatherDefinitionUpdate, WeatherTransitionsUpdate, TimePhasesUpdate, TimePhaseItem, TimePhaseOrderUpdate,
     AmbientPreferenceUpdate, AmbientVariantCreate, AmbientAssignmentCreate, AmbientSoundSetsUpdate, WeatherProposalDecision,
+    NoisePreferenceUpdate, NoiseVariantUpdate,
     SceneEnvironmentUpdate,
     LocationBackgroundCreate, EnvironmentLocationUpdate,
 )
@@ -90,9 +95,11 @@ from app.services.image_prompt import ImagePromptReferenceError, expand_image_pr
 from app.services.scheduler import GenerationScheduler, read_settings
 from app.services.workflow import WorkflowValidationError, normalize_workflow_graph, prune_workflow_graph, validate_workflow
 from app.services.world import WorldValidationError
+from app.services.worldClone import WorldCloneService
 from app.services.lifecycle import DataLifecycle, LifecycleConflict, TERMINAL_JOB_STATUSES
 from app.services.auth import AuthError, AuthService, AuthUser, COOKIE_NAME, SESSION_DAYS
 from app.services.environment import EnvironmentService
+from app.managers.soundManager import SoundManager
 from app.data.dataProvider import DataProvider
 from app.services.routeDataService import RouteDataService
 from app.services.generationPlanApiService import GenerationPlanApiService
@@ -108,9 +115,11 @@ lifecycle = DataLifecycle(db)
 auth = AuthService(db)
 environment = EnvironmentService(db)
 data = DataProvider(db)
+sound = SoundManager(db, events=events, data_provider=data)
 route_data = RouteDataService(data)
 generation_api = GenerationPlanApiService(db, data_provider=data, world=scheduler.world)
 batch_api = BatchGenerationApiService(db, data_provider=data, world=scheduler.world)
+world_clone = WorldCloneService(scheduler.world)
 current_user_context: ContextVar[AuthUser | None] = ContextVar("current_user", default=None)
 BUILD_VERSION = "0.17.0-environment"
 
@@ -180,7 +189,7 @@ def _member_route_allowed(method: str, path: str, user: AuthUser) -> bool:
         return True
     if method == "GET" and path == "/api/projects":
         return True
-    if path == "/api/preferences/ambient" and method in {"GET", "PUT"}:
+    if path in {"/api/preferences/ambient", "/api/preferences/noises"} and method in {"GET", "PUT"}:
         return True
     direct_project = _path_project_id(path)
     if direct_project:
@@ -198,6 +207,10 @@ def _member_route_allowed(method: str, path: str, user: AuthUser) -> bool:
             method in {"GET", "PUT"} and re.fullmatch(r"/api/projects/[^/]+/music/playback", path)
         ) or (
             method == "GET" and re.fullmatch(r"/api/projects/[^/]+/environment/(scene|map)", path)
+        ) or (
+            method == "GET" and re.fullmatch(r"/api/projects/[^/]+/noises", path)
+        ) or (
+            method == "POST" and re.fullmatch(r"/api/projects/[^/]+/noises/[^/]+/play", path)
         )
         return bool(allowed and auth.assigned(user.id, direct_project))
     indirect_project = _resource_project_id(path)
@@ -1221,6 +1234,24 @@ async def update_ambient_preferences(request: AmbientPreferenceUpdate) -> dict[s
     return environment.user_preferences(user.id)
 
 
+@app.get("/api/preferences/noises")
+async def get_noise_preferences() -> dict[str, Any]:
+    return sound.noise_preferences(current_user().id)
+
+
+@app.put("/api/preferences/noises")
+async def update_noise_preferences(
+    request: NoisePreferenceUpdate,
+) -> dict[str, Any]:
+    user = current_user()
+    data.sound.set_noise_preferences(
+        user.id,
+        enabled=request.enabled,
+        master_volume=request.master_volume,
+    )
+    return sound.noise_preferences(user.id)
+
+
 @app.get("/api/projects/{project_id}/environment/scene")
 async def get_scene_environment(project_id: str) -> dict[str, Any]:
     require_project(project_id)
@@ -1463,6 +1494,50 @@ async def list_ambient(project_id: str) -> dict[str, Any]:
     return {"variants": variants, "assignments": db.fetch_all("SELECT * FROM ambient_assignments WHERE project_id=? ORDER BY owner_type,owner_id", (project_id,))}
 
 
+@app.get("/api/projects/{project_id}/noises")
+async def list_noises(project_id: str) -> list[dict[str, Any]]:
+    require_project(project_id)
+    return sound.list_noises(project_id, refresh=True)
+
+
+@app.put("/api/projects/{project_id}/noises/{noise_id}")
+async def update_noise(
+    project_id: str,
+    noise_id: str,
+    request: NoiseVariantUpdate,
+) -> dict[str, Any]:
+    require_project(project_id)
+    if not data.sound.noise_variant(project_id, noise_id):
+        raise HTTPException(404, "Noise not found")
+    data.sound.update_noise_variant(
+        project_id,
+        noise_id,
+        label=request.label,
+        playback_rate=request.playback_rate,
+        default_gain=request.default_gain,
+        tags=request.tags,
+        enabled=request.enabled,
+    )
+    return next(
+        item
+        for item in sound.list_noises(project_id)
+        if item["id"] == noise_id
+    )
+
+
+@app.post("/api/projects/{project_id}/noises/{noise_id}/play")
+async def play_noise(project_id: str, noise_id: str) -> dict[str, Any]:
+    require_project(project_id)
+    payload = await sound.play_noise(
+        project_id,
+        noise_id,
+        source="manual",
+    )
+    if not payload:
+        raise HTTPException(422, "Noise is disabled or unavailable")
+    return payload
+
+
 @app.post("/api/projects/{project_id}/environment/ambient/variants", status_code=201)
 async def create_ambient_variant(project_id: str, request: AmbientVariantCreate) -> dict[str, Any]:
     require_project(project_id)
@@ -1566,6 +1641,18 @@ async def create_world_entity(project_id: str, request: WorldEntityCreate) -> di
     entity_id = mutations[0].arguments["entity_id"]
     await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
     return scheduler.world.entity_card(project_id, entity_id)
+
+
+@app.post("/api/projects/{project_id}/world/clone", status_code=201)
+async def clone_world_subgraph(project_id: str, request: WorldCloneRequest) -> dict[str, Any]:
+    require_project(project_id)
+    require_project(request.source_project_id)
+    try:
+        result = world_clone.clone(project_id, **request.model_dump())
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": result["transaction_id"]})
+    return result
 
 
 @app.patch("/api/projects/{project_id}/entities/{entity_id}")
@@ -2189,6 +2276,43 @@ async def get_generation_plan(plan_id: str) -> dict[str, Any]:
         raise HTTPException(404, str(exc)) from exc
 
 
+@app.post("/api/generation-plans/{plan_id}/tasks", status_code=201)
+async def create_generation_plan_task(plan_id: str, request: GenerationPlanTaskCreate) -> dict[str, Any]:
+    try:
+        return generation_api.batch.create_task(plan_id, request.model_dump())
+    except (GenerationPlanError, ValueError, KeyError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.patch("/api/generation-plans/{plan_id}/tasks/{task_key}")
+async def update_generation_plan_task(plan_id: str, task_key: str, request: GenerationPlanTaskUpdate) -> dict[str, Any]:
+    try:
+        patch = request.model_dump(exclude_unset=True)
+        patch = {
+            key: value for key, value in patch.items()
+            if value is not None or key == "target_key"
+        }
+        return generation_api.batch.update_task(plan_id, task_key, patch)
+    except (GenerationPlanError, ValueError, KeyError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.put("/api/generation-plans/{plan_id}/tasks/{task_key}/dependencies")
+async def update_generation_plan_dependencies(plan_id: str, task_key: str, request: GenerationDependenciesUpdate) -> dict[str, Any]:
+    try:
+        return generation_api.batch.replace_dependencies(plan_id, task_key, [item.model_dump() for item in request.dependencies])
+    except (GenerationPlanError, ValueError, KeyError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.delete("/api/generation-plans/{plan_id}/tasks/{task_key}")
+async def delete_generation_plan_task(plan_id: str, task_key: str) -> dict[str, Any]:
+    try:
+        return generation_api.batch.delete_task(plan_id, task_key)
+    except (GenerationPlanError, ValueError, KeyError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.post("/api/projects/{project_id}/generation-plans/random-direction", status_code=202)
 async def generation_plan_random_direction(
     project_id: str,
@@ -2215,12 +2339,12 @@ async def import_planning_generation_plan(session_id: str) -> dict[str, Any]:
 
 
 @app.post(
-    "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/generate",
+    "/api/generation-plans/planning/{session_id}/tasks/{task_number}/generate",
     status_code=202,
 )
 async def generate_generation_plan_planning_task(
     session_id: str,
-    stage_number: int,
+    task_number: int,
     request: GenerationTaskGenerateRequest | None = None,
 ) -> dict[str, Any]:
     request = request or GenerationTaskGenerateRequest()
@@ -2228,7 +2352,7 @@ async def generate_generation_plan_planning_task(
     try:
         result = generation_api.queue_planning_task(
             session_id,
-            stage_number,
+            task_number,
             human_prompt=request.prompt.strip(),
             repair=request.repair,
             append=request.append,
@@ -2249,17 +2373,17 @@ async def generate_generation_plan_planning_task(
 
 
 @app.put(
-    "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/result"
+    "/api/generation-plans/planning/{session_id}/tasks/{task_number}/result"
 )
 async def save_generation_plan_planning_result(
     session_id: str,
-    stage_number: int,
+    task_number: int,
     request: PlanningDraftUpdate,
 ) -> dict[str, Any]:
     try:
         return generation_api.save_planning_result(
             session_id,
-            stage_number,
+            task_number,
             request.draft,
         )
     except (GenerationPlanError, ValueError) as exc:
@@ -2267,18 +2391,18 @@ async def save_generation_plan_planning_result(
 
 
 @app.post(
-    "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/preflight"
+    "/api/generation-plans/planning/{session_id}/tasks/{task_number}/preflight"
 )
 async def preflight_generation_plan_planning_task(
     session_id: str,
-    stage_number: int,
+    task_number: int,
     request: PlanningDraftUpdate,
 ) -> dict[str, Any]:
     try:
         return {
             "conflicts": generation_api.preflight_planning(
                 session_id,
-                stage_number,
+                task_number,
                 request.draft,
             )
         }
@@ -2287,17 +2411,17 @@ async def preflight_generation_plan_planning_task(
 
 
 @app.post(
-    "/api/generation-plans/planning/{session_id}/tasks/{stage_number}/approve"
+    "/api/generation-plans/planning/{session_id}/tasks/{task_number}/approve"
 )
 async def approve_generation_plan_planning_task(
     session_id: str,
-    stage_number: int,
+    task_number: int,
     request: PlanningApprovalRequest,
 ) -> dict[str, Any]:
     try:
         plan = generation_api.approve_and_commit_planning(
             session_id,
-            stage_number,
+            task_number,
             draft=request.draft,
             resolutions={
                 key: value.model_dump(exclude_none=True)
@@ -2312,7 +2436,7 @@ async def approve_generation_plan_planning_task(
         "planning",
         {
             "session_id": session_id,
-            "stage_number": stage_number,
+            "task_number": task_number,
             "status": "approved",
         },
     )
@@ -2448,40 +2572,40 @@ async def get_planning_session(project_id: str) -> dict[str, Any] | None:
 
 
 
-@app.post("/api/planning/{session_id}/stages/{stage_number}/reopen")
-async def reopen_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
+@app.post("/api/planning/{session_id}/tasks/{task_number}/reopen")
+async def reopen_planning_stage(session_id: str, task_number: int) -> dict[str, Any]:
     try:
-        result = generation_api.workspace.reopen(session_id, stage_number)
+        result = generation_api.workspace.reopen(session_id, task_number)
     except (GenerationPlanError, WorldValidationError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "ready"})
+    await events.publish("planning", {"session_id": session_id, "task_number": task_number, "status": "ready"})
     return result
 
 
-@app.post("/api/planning/{session_id}/stages/{stage_number}/skip")
-async def skip_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
+@app.post("/api/planning/{session_id}/tasks/{task_number}/skip")
+async def skip_planning_stage(session_id: str, task_number: int) -> dict[str, Any]:
     try:
-        result = generation_api.workspace.skip(session_id, stage_number)
+        result = generation_api.workspace.skip(session_id, task_number)
     except (GenerationPlanError, WorldValidationError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "skipped"})
+    await events.publish("planning", {"session_id": session_id, "task_number": task_number, "status": "skipped"})
     return result
 
 
-@app.post("/api/planning/{session_id}/stages/{stage_number}/revalidate")
-async def revalidate_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
+@app.post("/api/planning/{session_id}/tasks/{task_number}/revalidate")
+async def revalidate_planning_stage(session_id: str, task_number: int) -> dict[str, Any]:
     try:
-        result = generation_api.workspace.revalidate(session_id, stage_number)
+        result = generation_api.workspace.revalidate(session_id, task_number)
     except (GenerationPlanError, WorldValidationError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    await events.publish("planning", {"session_id": session_id, "stage_number": stage_number, "status": "approved"})
+    await events.publish("planning", {"session_id": session_id, "task_number": task_number, "status": "approved"})
     return result
 
 
-@app.get("/api/planning/{session_id}/stages/{stage_number}/dependency-impact")
-async def planning_dependency_impact(session_id: str, stage_number: int) -> dict[str, Any]:
+@app.get("/api/planning/{session_id}/tasks/{task_number}/dependency-impact")
+async def planning_dependency_impact(session_id: str, task_number: int) -> dict[str, Any]:
     try:
-        return generation_api.workspace.dependency_impact(session_id, stage_number)
+        return generation_api.workspace.dependency_impact(session_id, task_number)
     except GenerationPlanError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -2601,10 +2725,10 @@ async def generate_planning_images(
     return {"jobs": jobs, "failures": failures}
 
 
-@app.post("/api/planning/{session_id}/stages/{stage_number}/reset")
-async def reset_planning_stage(session_id: str, stage_number: int) -> dict[str, Any]:
+@app.post("/api/planning/{session_id}/tasks/{task_number}/reset")
+async def reset_planning_stage(session_id: str, task_number: int) -> dict[str, Any]:
     try:
-        return generation_api.workspace.reopen(session_id, stage_number)
+        return generation_api.workspace.reopen(session_id, task_number)
     except GenerationPlanError as exc:
         raise HTTPException(409, str(exc)) from exc
 

@@ -32,7 +32,7 @@ class PlanningBatchTaskExecutor:
         plan_id = str(task.get("plan_id") or "")
         try:
             stage_number = int(
-                prompt.get("planning_stage_number")
+                prompt.get("planning_task_number")
                 or task.get("target_key")
             )
         except (TypeError, ValueError) as exc:
@@ -246,8 +246,8 @@ class PlanningBatchTaskExecutor:
                 "raw": raw,
                 "validation_error": generation_error,
                 "invalid_structured_output": True,
-                "stage_number": stage_number,
-                "session_id": session_id,
+                "task_number": stage_number,
+                "plan_id": plan_id,
             }
 
         validation_error: WorldValidationError | None = None
@@ -340,14 +340,14 @@ class PlanningBatchTaskExecutor:
                 "raw": raw,
                 "validation_error": str(validation_error),
                 "invalid_structured_output": True,
-                "stage_number": stage_number,
-                "session_id": session_id,
+                "task_number": stage_number,
+                "plan_id": plan_id,
             }
 
         return {
             "json": draft,
             "raw": raw,
-            "stage_number": stage_number,
-            "session_id": session_id,
+            "task_number": stage_number,
+            "plan_id": plan_id,
             "invalid_structured_output": False,
         }

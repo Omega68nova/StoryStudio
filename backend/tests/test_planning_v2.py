@@ -25,11 +25,11 @@ def test_workspace_projects_eight_generation_tasks(tmp_path: Path) -> None:
     view = workspace.view(plan["id"])
 
     assert view["schema_version"] == 3
-    assert len(view["stages"]) == 8
-    assert view["stages"][0]["status"] == "ready"
+    assert len(view["tasks"]) == 8
+    assert view["tasks"][0]["status"] == "ready"
     assert all(
         stage["status"] == "pending"
-        for stage in view["stages"][1:]
+        for stage in view["tasks"][1:]
     )
 
 

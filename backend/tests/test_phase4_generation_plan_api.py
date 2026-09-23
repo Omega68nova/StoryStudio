@@ -12,9 +12,7 @@ def test_old_planning_generation_aliases_are_removed() -> None:
     main = app_file("main.py").read_text(encoding="utf-8")
 
     assert '/projects/{project_id}/planning/random-direction' not in main
-    assert '/planning/{session_id}/stages/{stage_number}/generate' not in main
-    assert '/planning/{session_id}/stages/{stage_number}/preflight' not in main
-    assert '/planning/{session_id}/stages/{stage_number}/approve' not in main
+    assert '/planning/{session_id}/stages/{stage_number}' not in main
 
 
 def test_generation_plan_routes_exist() -> None:
@@ -24,9 +22,9 @@ def test_generation_plan_routes_exist() -> None:
         '/api/projects/{project_id}/generation-plans',
         '/api/generation-plans/{plan_id}',
         '/api/generation-plans/{plan_id}/generate-ready',
-        '/api/generation-plans/planning/{session_id}/tasks/{stage_number}/generate',
-        '/api/generation-plans/planning/{session_id}/tasks/{stage_number}/preflight',
-        '/api/generation-plans/planning/{session_id}/tasks/{stage_number}/approve',
+        '/api/generation-plans/planning/{session_id}/tasks/{task_number}/generate',
+        '/api/generation-plans/planning/{session_id}/tasks/{task_number}/preflight',
+        '/api/generation-plans/planning/{session_id}/tasks/{task_number}/approve',
         '/api/generation-plans/{plan_id}/tasks/{task_key}/revisions',
     )
     for route in required:

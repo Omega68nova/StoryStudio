@@ -6,6 +6,8 @@ from typing import Any
 
 from app.data.dataProvider import DataProvider
 from app.database import Database
+from app.domain.adapters import entity_from_projection
+from app.domain.world import Character, Location, Weather
 
 
 def _json(value: str | None) -> list[Any]:
@@ -132,6 +134,19 @@ class EnvironmentService:
         )
         return focus, location if location and location.get("kind") == "location" else None
 
+    def location_models(
+        self,
+        projection: dict[str, Any],
+    ) -> tuple[Character | None, Location | None]:
+        """Resolve the scene focus and location as typed read-only views."""
+        focus, location = self._location(projection)
+        typed_focus = entity_from_projection(focus) if focus else None
+        typed_location = entity_from_projection(location) if location else None
+        return (
+            typed_focus if isinstance(typed_focus, Character) else None,
+            typed_location if isinstance(typed_location, Location) else None,
+        )
+
     def _weather(
         self,
         project_id: str,
@@ -146,6 +161,20 @@ class EnvironmentService:
             row["tags"] = _json(row.pop("tags_json"))
             row["image_tags"] = _json(row.pop("image_tags_json"))
         return row
+
+    @staticmethod
+    def weather_model(
+        project_id: str,
+        weather: dict[str, Any] | None,
+    ) -> Weather | None:
+        """Create a typed view while preserving the existing scene payload."""
+        if not weather:
+            return None
+        return Weather.model_validate({
+            **weather,
+            "project_id": project_id,
+            "enabled": bool(weather.get("enabled", True)),
+        })
 
     def _ancestry(
         self,
@@ -424,32 +453,40 @@ class EnvironmentService:
                 "ambient": [],
             }
 
-        focus, location = self._location(projection)
+        focus_model, location_model = self.location_models(projection)
+        location = (
+            projection["entities"].get(location_model.id)
+            if location_model else None
+        )
         weather = self._weather(project_id, projection)
+        weather_model = self.weather_model(project_id, weather)
         phase = self.phase(project_id, projection.get("elapsed_minutes", 0))
         next_weather = self.repo.allowed_next_weather(
             project_id,
-            (weather or {}).get("id"),
+            weather_model.id if weather_model else None,
         )
 
         location_data = None
-        if location:
-            state = location.get("state", {})
+        if location_model:
+            state = location_model.state
             location_data = {
-                "id": location["id"],
-                "name": location["name"],
-                "description": state.get("description") or state.get("summary") or "",
-                "tags": location.get("tags", []),
-                "exposure": state.get("exposure", "outdoor"),
-                "parent_location_id": state.get("parent_location_id"),
+                "id": location_model.id,
+                "name": location_model.name,
+                "description": (
+                    state.description
+                    or str(getattr(state, "summary", "") or "")
+                ),
+                "tags": location_model.tags,
+                "exposure": state.exposure,
+                "parent_location_id": state.parent_location_id,
             }
 
         return {
             "enabled": True,
             "revision": settings.get("revision", 1),
             "focused_character": (
-                {"id": focus["id"], "name": focus["name"]}
-                if focus else None
+                {"id": focus_model.id, "name": focus_model.name}
+                if focus_model else None
             ),
             "player_action": projection.get("player_action") or "standing",
             "location": location_data,
@@ -459,8 +496,8 @@ class EnvironmentService:
             "allowed_next_weather": next_weather,
             "background": self.background(
                 project_id,
-                (location or {}).get("id"),
-                (weather or {}).get("id"),
+                location_model.id if location_model else None,
+                weather_model.id if weather_model else None,
                 (phase or {}).get("id"),
             ),
             "ambient": self.resolved_ambient(

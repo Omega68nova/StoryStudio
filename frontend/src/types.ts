@@ -175,13 +175,15 @@ export type WorldRelationship = {
 export type PlanningScalePreset = "intimate" | "local" | "regional" | "global";
 export type PlanningStageKind = "foundation" | "macro_world" | "detailed_locations" | "systems" | "cast" | "character_details" | "runtime_presentation" | "images";
 export type PlanningStageStatus = "pending" | "ready" | "queued" | "generating" | "approved" | "skipped" | "stale" | "failed" | "cancelled";
-export type PlanningResourceReference = { resource_key: string; resource_type: string; resource_id: string; stage_number: number; fingerprint: string };
-export type PlanningDependencyImpact = { stage_number: number; changed_domains: string[]; affected_stages: Array<{ stage_number: number; kind: PlanningStageKind; status: PlanningStageStatus }> };
+export type PlanningResourceReference = { resource_key: string; resource_type: string; resource_id: string; task_number: number; fingerprint: string };
+export type PlanningDependencyImpact = { task_number: number; changed_domains: string[]; affected_tasks: Array<{ task_number: number; kind: PlanningStageKind; status: PlanningStageStatus }> };
 export type PlanningAssetPlan = { id: string; generation_plan_id: string; legacy_session_id?: string | null; resource_key: string; entity_id: string; outfit_id?: string | null; kind: "portrait" | "full_body" | "location"; prompt: string; negative_prompt: string; workflow_preset_id?: string | null; width?: number | null; height?: number | null; status: "draft" | "ready" | "queued" | "generated" | "failed"; media_asset_id?: string | null; generation_job_id?: string | null; error?: string | null };
 
 export type PlanningStage = {
   id: string;
-  stage_number: number;
+  task_number: number;
+  task_key: string;
+  dependencies: Array<{ task_key: string; required_state: "generated" | "approved" | "committed" }>;
   kind: PlanningStageKind;
   status: PlanningStageStatus;
   draft: Record<string, unknown> | null;
@@ -211,10 +213,10 @@ export type PlanningSession = {
   id: string;
   project_id: string;
   status: string;
-  current_stage: number;
+  current_task: number;
   schema_version: number;
   settings: { scale_preset: PlanningScalePreset; major_locations: number; minor_locations: number; rooms: number; characters: number; direction: string };
-  stages: PlanningStage[];
+  tasks: PlanningStage[];
   image_plans: PlanningAssetPlan[];
   recovery_warnings?: RecoveryWarning[];
 };
@@ -254,8 +256,11 @@ export type EnvironmentSettings = { project_id: string; enabled: boolean; ai_cre
 export type SceneEnvironment = { enabled: boolean; revision: number; focused_character?: { id: string; name: string } | null; player_action?: string; location?: { id: string; name: string; description: string; tags: string[]; exposure: "indoor" | "outdoor" | "isolated"; parent_location_id?: string | null } | null; location_ancestry?: Array<{ id: string; name: string }>; weather?: WeatherDefinition | null; time_phase?: TimePhase | null; allowed_next_weather?: Array<{ id: string; name: string }>; background?: { id: string; url: string } | null; ambient: AmbientVariant[] };
 export type LocationMapLayer = { parent?: { id: string; name: string; parent_id?: string | null } | null; breadcrumbs: Array<{ id: string; name: string }>; locations: Array<{ id: string; name: string; x: number; y: number; has_children: boolean; exposure: string; enabled: boolean; effectively_enabled: boolean }>; routes: Array<{ id: string; source_id: string; target_id: string }> };
 export type UserAmbientPreferences = { enabled: boolean; master_volume: number };
+export type UserNoisePreferences = { enabled: boolean; master_volume: number };
+export type NoiseVariant = { id: string; source_path: string; url: string; label: string; playback_rate: number; default_gain: number; tags: string[]; enabled: boolean; available: boolean };
+export type NoiseEvent = { project_id: string; noise_id: string; label: string; url: string; playback_rate: number; gain: number; source: string };
 export type StatDefinition = { id: string; stat_key: string; label: string; scope: "character" | "relationship"; default_value: number; minimum: number; maximum: number; integer_only: number; visibility: string };
-export type AbilityDefinition = { id: string; ability_key: string; name: string; description: string; target_type: "self" | "character" | "relationship"; requirements?: Record<string, unknown>; costs: Record<string, number>; effects: Array<Record<string, unknown>>; minigame_profile?: { timed_attack?: { line_count: number; damage_per_line: number }; bullethell_skill_ids?: string[] } };
+export type AbilityDefinition = { id: string; ability_key: string; name: string; description: string; target_type: "self" | "character" | "choice" | "relationship" | "location" | "all" | "party" | "allies" | "enemies" | "nearby_enemies" | "faction_members" | "random"; requirements?: Record<string, unknown>; costs: Record<string, number>; effects: Array<Record<string, unknown>>; minigame_profile?: { timed_attack?: { line_count: number; damage_per_line: number }; bullethell_skill_ids?: string[] } };
 
 export type GenerationTaskStatus =
   | "pending" | "blocked" | "ready" | "queued" | "running"

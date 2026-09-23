@@ -39,7 +39,7 @@ class BatchGenerationApiService:
         )
 
     def planning_session_view(self, plan_id: str) -> dict[str, Any]:
-        # Temporary UI-shape adapter; the id is a GenerationPlan id.
+        # Deprecated Python-call alias; the returned wire shape is task-native.
         return self.workspace.view(plan_id)
 
     def queue_random_direction(

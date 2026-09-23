@@ -1,0 +1,426 @@
+from __future__ import annotations
+
+from enum import StrEnum
+from typing import Annotated, Any, Literal, NewType, TypeAlias
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+
+
+def _non_blank_identifier(value: str) -> str:
+    if not value.strip():
+        raise ValueError("domain id must not be blank")
+    return value
+
+
+DomainIdValue = NewType("DomainId", str)
+DomainId: TypeAlias = Annotated[
+    DomainIdValue,
+    AfterValidator(_non_blank_identifier),
+]
+Number: TypeAlias = int | float
+
+
+class EntityKind(StrEnum):
+    CHARACTER = "character"
+    LOCATION = "location"
+    FACTION = "faction"
+    ITEM = "item"
+    LORE_SYSTEM = "lore_system"
+    FACT = "fact"
+    RELATIONSHIP = "relationship"
+    PLOT_BEAT = "plot_beat"
+
+
+class DomainKind(StrEnum):
+    CHARACTER = "character"
+    LOCATION = "location"
+    FACTION = "faction"
+    ITEM = "item"
+    LORE_SYSTEM = "lore_system"
+    FACT = "fact"
+    RELATIONSHIP = "relationship"
+    PLOT_BEAT = "plot_beat"
+    WEATHER = "weather"
+    STAT = "stat"
+    ABILITY = "ability"
+
+
+class Exposure(StrEnum):
+    INDOOR = "indoor"
+    OUTDOOR = "outdoor"
+    ISOLATED = "isolated"
+
+
+class StatScope(StrEnum):
+    CHARACTER = "character"
+    RELATIONSHIP = "relationship"
+
+
+class StatVisibility(StrEnum):
+    PUBLIC = "public"
+    PRIVATE = "private"
+    NARRATOR = "narrator"
+
+
+class AbilityTarget(StrEnum):
+    SELF = "self"
+    CHARACTER = "character"
+    CHOICE = "choice"
+    RELATIONSHIP = "relationship"
+    LOCATION = "location"
+    ALL = "all"
+    PARTY = "party"
+    ALLIES = "allies"
+    ENEMIES = "enemies"
+    NEARBY_ENEMIES = "nearby_enemies"
+    FACTION_MEMBERS = "faction_members"
+    RANDOM = "random"
+
+
+class EffectOperation(StrEnum):
+    ADD = "add"
+    SUBTRACT = "subtract"
+    SET = "set"
+    MULTIPLY = "multiply"
+    MOVE = "move"
+    CREATE = "create"
+    REMOVE = "remove"
+    APPLY_STATUS = "apply_status"
+    REVEAL_KNOWLEDGE = "reveal_knowledge"
+    CHANGE_RELATIONSHIP = "change_relationship"
+    ADVANCE_TIME = "advance_time"
+    PLAY_NOISE = "play_noise"
+
+
+class EffectTarget(StrEnum):
+    ACTOR = "actor"
+    TARGET = "target"
+    PARTY = "party"
+    LOCATION = "location"
+    NEARBY_ENEMIES = "nearby_enemies"
+    FACTION_MEMBERS = "faction_members"
+    RELATIONSHIP_TARGET = "relationship_target"
+    ALLIES = "allies"
+    ENEMIES = "enemies"
+    ALL = "all"
+    RANDOM = "random"
+
+
+class RequirementKind(StrEnum):
+    AND = "and"
+    OR = "or"
+    NOT = "not"
+    COMPARE = "compare"
+    HAS_ITEM = "has_item"
+    HAS_TAG = "has_tag"
+    RELATIONSHIP = "relationship"
+    LOCATION = "location"
+    TIME = "time"
+    WEATHER = "weather"
+
+
+class ComparisonOperator(StrEnum):
+    EQ = "eq"
+    NE = "ne"
+    LT = "lt"
+    LTE = "lte"
+    GT = "gt"
+    GTE = "gte"
+
+
+class DomainModel(BaseModel):
+    """Base model that preserves extension data without weakening known fields."""
+
+    model_config = ConfigDict(
+        extra="allow",
+        use_enum_values=True,
+        validate_default=True,
+    )
+
+
+class DomainReference(DomainModel):
+    """A resolved reference to canonical persistent identity."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        use_enum_values=True,
+        validate_default=True,
+        frozen=True,
+    )
+
+    id: DomainId
+    kind: DomainKind
+
+
+class InventoryEntry(DomainModel):
+    item_id: DomainId
+    quantity: int
+
+
+class CharacterState(DomainModel):
+    description: str = ""
+    identity: str = ""
+    pronouns: str = ""
+    appearance: str = ""
+    personality: str = ""
+    core_personality: str = ""
+    goals: list[str] = Field(default_factory=list)
+    secrets: str = ""
+    character_secrets: list[str] = Field(default_factory=list)
+    secrets_to_character: list[str] = Field(default_factory=list)
+    cast_role: str = "supporting"
+    player_controlled: bool = False
+    autonomy_enabled: bool = False
+    intervention_frequency: str = "normal"
+    current_location_id: DomainId | None = None
+    wardrobe: str = ""
+    equipment: list[str] = Field(default_factory=list)
+    inventory: list[InventoryEntry] = Field(default_factory=list)
+    abilities: list[str] = Field(default_factory=list)
+    faction_ids: list[DomainId] = Field(default_factory=list)
+    party_ids: list[DomainId] = Field(default_factory=list)
+    known_character_ids: list[DomainId] = Field(default_factory=list)
+    known_faction_ids: list[DomainId] = Field(default_factory=list)
+    active_outfit_id: DomainId | None = None
+    archived: bool = False
+    visibility: str = "public"
+
+    @property
+    def current_location(self) -> DomainReference | None:
+        if self.current_location_id is None:
+            return None
+        return DomainReference(
+            id=self.current_location_id,
+            kind=DomainKind.LOCATION,
+        )
+
+
+class LocationState(DomainModel):
+    description: str = ""
+    imagegen_description: str = ""
+    image_tags: list[str] = Field(default_factory=list)
+    parent_location_id: DomainId | None = None
+    exposure: Exposure = Exposure.OUTDOOR
+    x: Number | None = None
+    y: Number | None = None
+    enabled: bool = True
+    random_encounter: bool = False
+    discovered: bool = True
+    important: bool = False
+    planning_tier: str = "minor"
+    archived: bool = False
+    visibility: str = "public"
+
+    @property
+    def parent_location(self) -> DomainReference | None:
+        if self.parent_location_id is None:
+            return None
+        return DomainReference(
+            id=self.parent_location_id,
+            kind=DomainKind.LOCATION,
+        )
+
+
+class WorldEntity(DomainModel):
+    id: DomainId
+    kind: EntityKind
+    name: str = Field(min_length=1)
+    aliases: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    stats: dict[str, Number] = Field(default_factory=dict)
+    active_effects: list[dict[str, Any]] = Field(default_factory=list)
+    last_changed_sequence: int | None = None
+
+    @property
+    def reference(self) -> DomainReference:
+        return DomainReference(id=self.id, kind=DomainKind(self.kind))
+
+
+class GenericWorldEntity(WorldEntity):
+    state: dict[str, Any] = Field(default_factory=dict)
+
+
+class Character(WorldEntity):
+    kind: Literal["character"]
+    state: CharacterState = Field(default_factory=CharacterState)
+
+
+class Location(WorldEntity):
+    kind: Literal["location"]
+    state: LocationState = Field(default_factory=LocationState)
+
+
+TypedWorldEntity: TypeAlias = Character | Location | GenericWorldEntity
+
+
+class Relationship(DomainModel):
+    id: DomainId
+    source_id: DomainId
+    target_id: DomainId
+    relation: str = Field(min_length=1)
+    stats: dict[str, Number] = Field(default_factory=dict)
+    active_effects: list[dict[str, Any]] = Field(default_factory=list)
+
+    @property
+    def reference(self) -> DomainReference:
+        return DomainReference(
+            id=self.id,
+            kind=DomainKind.RELATIONSHIP,
+        )
+
+
+class Weather(DomainModel):
+    id: DomainId
+    project_id: DomainId
+    name: str = Field(min_length=1)
+    description: str = ""
+    imagegen_description: str = ""
+    tags: list[str] = Field(default_factory=list)
+    image_tags: list[str] = Field(default_factory=list)
+    enabled: bool = True
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @property
+    def reference(self) -> DomainReference:
+        return DomainReference(id=self.id, kind=DomainKind.WEATHER)
+
+
+class Stat(DomainModel):
+    id: DomainId
+    project_id: DomainId
+    stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    label: str = Field(min_length=1)
+    scope: StatScope = StatScope.CHARACTER
+    default_value: Number = 0
+    minimum: Number = 0
+    maximum: Number = 100
+    integer_only: bool = True
+    visibility: StatVisibility = StatVisibility.PUBLIC
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @property
+    def reference(self) -> DomainReference:
+        return DomainReference(id=self.id, kind=DomainKind.STAT)
+
+
+class RequirementExpression(DomainModel):
+    """Recursive requirement tree with legacy leaf compatibility."""
+
+    tags: list[str] = Field(default_factory=list)
+    min_stats: dict[str, Number] = Field(default_factory=dict)
+    kind: RequirementKind | None = None
+    children: list[RequirementExpression] = Field(default_factory=list)
+    child: RequirementExpression | None = None
+    target: str = EffectTarget.ACTOR
+    stat_key: str | None = None
+    comparison: ComparisonOperator = ComparisonOperator.GTE
+    value: Number | str | bool | None = None
+    item_id: DomainId | None = None
+    tag: str | None = None
+    relation: str | None = None
+    location_id: DomainId | None = None
+    time_phase_id: DomainId | None = None
+    weather_id: DomainId | None = None
+
+    @model_validator(mode="after")
+    def validate_tree_shape(self) -> RequirementExpression:
+        if self.kind in {RequirementKind.AND, RequirementKind.OR} and not self.children:
+            raise ValueError("and/or requirements need children")
+        if self.kind == RequirementKind.NOT and self.child is None:
+            raise ValueError("not requirement needs a child")
+        if self.kind == RequirementKind.COMPARE and not self.stat_key:
+            raise ValueError("compare requirement needs stat_key")
+        if self.kind == RequirementKind.COMPARE and self.value is None:
+            raise ValueError("compare requirement needs value")
+        if self.kind == RequirementKind.HAS_ITEM and not self.item_id:
+            raise ValueError("has_item requirement needs item_id")
+        if self.kind == RequirementKind.HAS_TAG and not self.tag:
+            raise ValueError("has_tag requirement needs tag")
+        if self.kind == RequirementKind.RELATIONSHIP and not self.relation:
+            raise ValueError("relationship requirement needs relation")
+        if self.kind == RequirementKind.LOCATION and not self.location_id:
+            raise ValueError("location requirement needs location_id")
+        if self.kind == RequirementKind.TIME and not self.time_phase_id:
+            raise ValueError("time requirement needs time_phase_id")
+        if self.kind == RequirementKind.WEATHER and not self.weather_id:
+            raise ValueError("weather requirement needs weather_id")
+        return self
+
+
+class ActionEffect(DomainModel):
+    """A typed stat, world-state, relationship, time, or noise effect."""
+
+    # Unknown legacy target labels historically behaved like "target". Keep
+    # accepting them unless a separate migration slice changes that contract.
+    target: str = EffectTarget.TARGET
+    stat_key: str | None = None
+    operation: EffectOperation = EffectOperation.ADD
+    amount: Number = 0
+    # Unknown duration labels historically meant an immediate effect.
+    duration_type: str | None = None
+    duration_value: int = 0
+    destination_id: DomainId | None = None
+    entity_kind: EntityKind | None = None
+    name: str | None = None
+    state: dict[str, Any] = Field(default_factory=dict)
+    status: str | None = None
+    fact_id: DomainId | None = None
+    relation: str | None = None
+    minutes: int = 0
+    noise_id: DomainId | None = None
+
+    @model_validator(mode="after")
+    def validate_operation_shape(self) -> ActionEffect:
+        if int(self.duration_value or 0) < 0:
+            raise ValueError("effect duration cannot be negative")
+        if self.operation in {
+            EffectOperation.ADD,
+            EffectOperation.SUBTRACT,
+            EffectOperation.SET,
+            EffectOperation.MULTIPLY,
+        } and not self.stat_key:
+            raise ValueError("stat effect needs stat_key")
+        if self.operation == EffectOperation.MOVE and not self.destination_id:
+            raise ValueError("move effect needs destination_id")
+        if self.operation == EffectOperation.CREATE and (
+            self.entity_kind is None or not (self.name or "").strip()
+        ):
+            raise ValueError("create effect needs entity_kind and name")
+        if self.operation == EffectOperation.REVEAL_KNOWLEDGE and not self.fact_id:
+            raise ValueError("reveal_knowledge effect needs fact_id")
+        if self.operation == EffectOperation.CHANGE_RELATIONSHIP and not self.relation:
+            raise ValueError("change_relationship effect needs relation")
+        if self.operation == EffectOperation.PLAY_NOISE and not self.noise_id:
+            raise ValueError("play_noise effect needs noise_id")
+        if self.operation == EffectOperation.ADVANCE_TIME and int(
+            self.minutes or self.amount
+        ) < 0:
+            raise ValueError("advance_time effect cannot move backward")
+        if self.operation == EffectOperation.APPLY_STATUS and not (
+            self.status or self.name
+        ):
+            raise ValueError("apply_status effect needs status")
+        return self
+
+
+class Ability(DomainModel):
+    id: DomainId
+    project_id: DomainId
+    ability_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    name: str = Field(min_length=1)
+    description: str = ""
+    target_type: AbilityTarget = AbilityTarget.SELF
+    requirements: RequirementExpression = Field(
+        default_factory=RequirementExpression,
+    )
+    costs: dict[str, Number] = Field(default_factory=dict)
+    effects: list[ActionEffect] = Field(default_factory=list)
+    minigame_profile: dict[str, Any] = Field(default_factory=dict)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @property
+    def reference(self) -> DomainReference:
+        return DomainReference(id=self.id, kind=DomainKind.ABILITY)

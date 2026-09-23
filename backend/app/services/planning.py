@@ -133,8 +133,9 @@ def stage_prompt(
             "Define reusable lore systems, stat definitions, abilities, and only important system-linked items. "
             "Every lore system requires a clear state.description plus its rules, limits, costs, and secrets. "
             "Stats and abilities are separate layers: define and save stats before generating abilities. "
-            "Abilities must use target_type (self, character, or relationship), a costs object, and an effects array. "
-            "Each effect uses target (actor or target), stat_key, operation (add, subtract, or set), and a fixed numeric amount. "
+            "Abilities use a typed target_type, recursive requirements, a costs object, and an effects array. "
+            "Effects may select actor, target, party, location, allies, enemies, faction members, all, or a resolved random target. "
+            "Supported operations include bounded stat changes, move, create/remove, status, knowledge, relationship, time, and one-shot noise. "
             "Every referenced stat_key must be defined; dynamic formulas such as damage='atk' are unsupported."
         ),
         5: (

@@ -10,6 +10,19 @@ from typing import Any, Iterable
 
 from app.database import Database, new_id, utc_now
 from app.data.dataProvider import DataProvider
+from app.domain.adapters import (
+    ability_from_record,
+    entity_from_projection,
+    stat_from_record,
+)
+from app.domain.operations import (
+    DomainOperationError,
+    EffectExecutor,
+    RequirementEvaluator,
+    StatAdjustmentExecutor,
+    TargetResolver,
+)
+from app.domain.world import Character, TypedWorldEntity
 
 
 ENTITY_KINDS = {"character", "location", "faction", "item", "lore_system", "fact", "relationship", "plot_beat"}
@@ -21,7 +34,7 @@ READ_TOOLS = {
 WRITE_TOOLS = {
     "createEntity", "updateEntity", "moveCharacter", "setRelationship", "revealKnowledge", "advanceTime", "updatePlotBeat",
     "removeRelationship", "adjustStat", "useAbility", "selectTheme",
-    "adjustInventory", "setSceneEnvironment", "proposeWeather",
+    "adjustInventory", "setSceneEnvironment", "proposeWeather", "playNoise",
 }
 MAJOR_PATCH_FIELDS = {"identity", "alive", "permanent_injuries", "core_personality", "player_decision", "world_laws", "destroyed"}
 
@@ -260,6 +273,9 @@ class WorldEngine:
                 arguments["aliases"] = list(dict.fromkeys(arguments.get("aliases", [])))
                 arguments["tags"] = list(dict.fromkeys(arguments.get("tags", [])))
                 arguments["state"] = arguments.get("state") or {}
+                if provenance != "clone":
+                    arguments.pop("stats", None)
+                    arguments.pop("active_effects", None)
                 if kind == "character" and arguments["state"].get("player_controlled") and arguments["state"].get("autonomy_enabled"):
                     raise WorldValidationError("Player-controlled characters cannot enable NPC autonomy")
                 if kind == "location":
@@ -396,6 +412,21 @@ class WorldEngine:
                 mode = self.db.fetch_one("SELECT mode FROM project_music_settings WHERE project_id = ?", (project_id,)) or {"mode": "disabled"}
                 if not allowed or (provenance == "ai" and mode["mode"] != "ai_managed"):
                     raise WorldValidationError("Theme is not enabled for AI selection in this project")
+            elif tool == "playNoise":
+                noise_id = str(arguments.get("noise_id") or "")
+                noise = self.data.sound.noise_variant(
+                    project_id,
+                    noise_id,
+                    playable_only=True,
+                )
+                if not noise:
+                    raise WorldValidationError(
+                        "Noise is not enabled or available for this story"
+                    )
+                arguments = {
+                    "noise_id": noise_id,
+                    "noise_label": noise["label"],
+                }
             elif tool == "adjustInventory":
                 character = self._entity(projection, arguments.get("character_id"), "character")
                 item = self._entity(projection, arguments.get("item_id"), "item")
@@ -420,97 +451,130 @@ class WorldEngine:
         return definition
 
     def _normalize_stat_adjustment(self, project_id: str, projection: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
-        target_key = "entity_id" if arguments.get("entity_id") else "relation_id"
-        target_id = str(arguments.get(target_key, ""))
-        container = projection["entities"].get(target_id) if target_key == "entity_id" else projection["relations"].get(target_id)
-        scope = "character" if target_key == "entity_id" else "relationship"
-        if not container or (scope == "character" and container.get("kind") != "character"):
-            raise WorldValidationError("Stat target is not available")
-        definition = self._stat_definition(project_id, str(arguments.get("stat_key", "")), scope)
-        current = float(container.get("stats", {}).get(definition["stat_key"], definition["default_value"]))
-        amount, operation = float(arguments.get("amount", 0)), arguments.get("operation", "add")
-        if operation not in {"add", "subtract", "set"}:
-            raise WorldValidationError("Stat operation must be add, subtract, or set")
-        value = amount if operation == "set" else current + amount * (1 if operation == "add" else -1)
-        value = max(float(definition["minimum"]), min(float(definition["maximum"]), value))
-        if definition["integer_only"]:
-            value = int(round(value))
-        return {target_key: target_id, "stat_key": definition["stat_key"], "value": value, "previous_value": current}
+        def stat_lookup(key: str, scope: str):
+            return stat_from_record(
+                self._stat_definition(project_id, key, scope)
+            )
+
+        try:
+            return StatAdjustmentExecutor().normalize(
+                projection=projection,
+                entity_id=arguments.get("entity_id"),
+                relation_id=arguments.get("relation_id"),
+                stat_key=str(arguments.get("stat_key", "")),
+                operation=str(arguments.get("operation", "add")),
+                amount=arguments.get("amount", 0),
+                stat_lookup=stat_lookup,
+            )
+        except DomainOperationError as exc:
+            raise WorldValidationError(str(exc)) from exc
 
     def _normalize_ability(self, project_id: str, projection: dict[str, Any], arguments: dict[str, Any], provenance: str) -> dict[str, Any]:
-        actor = self._entity(projection, arguments.get("actor_id"), "character")
-        if actor.get("state", {}).get("player_controlled") and provenance not in {"player", "author"}:
+        actor_raw = self._entity(
+            projection,
+            arguments.get("actor_id"),
+            "character",
+        )
+        actor = entity_from_projection(actor_raw)
+        if not isinstance(actor, Character):
+            raise WorldValidationError("Ability actor is not a character")
+        if actor.state.player_controlled and provenance not in {"player", "author"}:
             raise WorldValidationError("Player-character abilities require an explicit player request")
         row = self.db.fetch_one("SELECT * FROM ability_definitions WHERE project_id = ? AND ability_key = ?", (project_id, arguments.get("ability_key")))
         if not row:
             raise WorldValidationError("Unknown ability")
-        known = actor.get("state", {}).get("abilities", [])
-        if row["ability_key"] not in known and row["name"] not in known:
-            raise WorldValidationError(f"{actor['name']} does not know {row['name']}")
-        requirements = json.loads(row["requirements_json"])
-        if not set(requirements.get("tags", [])).issubset(set(actor.get("tags", []))):
-            raise WorldValidationError(f"{actor['name']} does not meet the ability requirements")
-        actor_effective = self.effective_stats(project_id, actor)
-        for key, minimum in requirements.get("min_stats", {}).items():
-            definition = self._stat_definition(project_id, key, "character")
-            if float(actor_effective.get(key, definition["default_value"])) < float(minimum):
-                raise WorldValidationError(f"{actor['name']} does not meet the {definition['label']} requirement")
-        target_id = arguments.get("target_id") or actor["id"]
-        if row["target_type"] in {"self", "character"}:
-            target = self._entity(projection, target_id, "character")
-            if row["target_type"] == "self" and target["id"] != actor["id"]:
-                raise WorldValidationError("This ability can target only its actor")
-        elif target_id not in projection["relations"]:
-            raise WorldValidationError("Ability relationship target is unavailable")
-        costs, effects = json.loads(row["costs_json"]), json.loads(row["effects_json"])
-        working_values: dict[tuple[str, str, str], float] = {}
+        try:
+            ability = ability_from_record(row)
+        except ValueError as exc:
+            raise WorldValidationError(
+                f"Ability definition is structurally invalid: {exc}"
+            ) from exc
+        known = actor.state.abilities
+        if ability.ability_key not in known and ability.name not in known:
+            raise WorldValidationError(
+                f"{actor.name} does not know {ability.name}"
+            )
 
-        def base_value(scope: str, container_id: str, definition: dict[str, Any]) -> float:
-            key = (scope, container_id, definition["stat_key"])
-            if key not in working_values:
-                container = projection["relations"].get(container_id) if scope == "relationship" else projection["entities"].get(container_id)
-                working_values[key] = float(container.get("stats", {}).get(definition["stat_key"], definition["default_value"]))
-            return working_values[key]
+        def stat_lookup(key: str, scope: str):
+            return stat_from_record(
+                self._stat_definition(project_id, key, scope)
+            )
 
-        normalized_costs = []
-        for key, cost in costs.items():
-            definition = self._stat_definition(project_id, key, "character")
-            cost = float(cost)
-            if cost < 0:
-                raise WorldValidationError("Ability costs cannot be negative")
-            current = base_value("character", actor["id"], definition)
-            available = self.effective_stats(project_id, actor).get(key, current)
-            if available < cost:
-                raise WorldValidationError(f"{actor['name']} lacks enough {definition['label']}")
-            value = max(float(definition["minimum"]), min(float(definition["maximum"]), current - cost))
-            if definition["integer_only"]: value = int(round(value))
-            working_values[("character", actor["id"], key)] = value
-            normalized_costs.append({"entity_id": actor["id"], "stat_key": key, "value": value, "previous_value": current})
-        normalized_effects = []
-        for effect in effects:
-            resolved_target = actor["id"] if effect.get("target", "target") == "actor" else target_id
-            scope = "relationship" if row["target_type"] == "relationship" and resolved_target == target_id else "character"
-            definition = self._stat_definition(project_id, str(effect.get("stat_key", "")), scope)
-            current = base_value(scope, resolved_target, definition)
-            operation, amount = effect.get("operation", "add"), float(effect.get("amount", 0))
-            if operation not in {"add", "subtract", "set"}:
-                raise WorldValidationError("Ability effect operation must be add, subtract, or set")
-            value = amount if operation == "set" else current + amount * (1 if operation == "add" else -1)
-            value = max(float(definition["minimum"]), min(float(definition["maximum"]), value))
-            if definition["integer_only"]:
-                value = int(round(value))
-            target_key = "relation_id" if scope == "relationship" else "entity_id"
-            normalized = {"stat_key": definition["stat_key"], "operation": operation, "amount": amount,
-                          "previous_value": current, "value": value, target_key: resolved_target}
-            duration_type, duration = effect.get("duration_type"), int(effect.get("duration_value", 0) or 0)
-            if duration_type == "turns" and duration > 0:
-                normalized["expires_sequence"] = int(projection.get("_next_sequence", 0)) + duration
-            elif duration_type == "minutes" and duration > 0:
-                normalized["expires_elapsed_minutes"] = int(projection.get("elapsed_minutes", 0)) + duration
-            else:
-                working_values[(scope, resolved_target, definition["stat_key"])] = value
-            normalized_effects.append(normalized)
-        return {"actor_id": actor["id"], "target_id": target_id, "ability_key": row["ability_key"], "ability_name": row["name"], "costs": normalized_costs, "effects": normalized_effects}
+        def effective_stats(character: Character) -> dict[str, float]:
+            raw = projection["entities"].get(character.id, actor_raw)
+            return self.effective_stats(project_id, raw)
+
+        targets = TargetResolver()
+        try:
+            phases = self.data.environment.phases(
+                project_id,
+                enabled_only=True,
+            )
+            total = sum(int(item["duration_minutes"]) for item in phases)
+            if total > 0:
+                offset = int(projection.get("elapsed_minutes", 0)) % total
+                for phase in phases:
+                    if offset < int(phase["duration_minutes"]):
+                        projection["current_time_phase_id"] = phase["id"]
+                        break
+                    offset -= int(phase["duration_minutes"])
+            primary_target = targets.resolve_ability_target(
+                projection,
+                actor,
+                ability,
+                arguments.get("target_id"),
+            )
+            RequirementEvaluator().ensure_satisfied(
+                actor,
+                ability,
+                projection=projection,
+                primary_target=primary_target,
+                stat_lookup=stat_lookup,
+                effective_stats=effective_stats,
+            )
+            proposed_names = {
+                str(entity.get("name", "")).casefold()
+                for entity in projection["entities"].values()
+                if not entity.get("state", {}).get("archived")
+            }
+            for effect in ability.effects:
+                if effect.destination_id:
+                    self._entity(projection, effect.destination_id, "location")
+                if effect.fact_id:
+                    self._entity(projection, effect.fact_id, "fact")
+                if str(effect.operation) == "play_noise" and not self.data.sound.noise_variant(
+                    project_id, str(effect.noise_id), playable_only=True
+                ):
+                    raise WorldValidationError("Ability noise is not enabled or available")
+                if str(effect.operation) == "create":
+                    proposed = str(effect.name or "").casefold()
+                    if proposed in proposed_names:
+                        raise WorldValidationError(
+                            f"An entity named '{effect.name}' already exists on this branch"
+                        )
+                    proposed_names.add(proposed)
+            execution = EffectExecutor(targets).normalize(
+                projection=projection,
+                actor=actor,
+                primary_target=primary_target,
+                ability=ability,
+                next_sequence=int(projection.get("_next_sequence", 0)),
+                elapsed_minutes=int(projection.get("elapsed_minutes", 0)),
+                stat_lookup=stat_lookup,
+                effective_stats=effective_stats,
+                id_factory=new_id,
+            )
+        except DomainOperationError as exc:
+            raise WorldValidationError(str(exc)) from exc
+
+        return {
+            "actor_id": actor.id,
+            "target_id": primary_target.id,
+            "ability_key": ability.ability_key,
+            "ability_name": ability.name,
+            "costs": execution.costs,
+            "effects": execution.effects,
+        }
 
     @staticmethod
     def _entity(projection: dict[str, Any], entity_id: Any, expected_kind: str | None = None) -> dict[str, Any]:
@@ -589,6 +653,10 @@ class WorldEngine:
                 "id": args["entity_id"], "kind": args["kind"], "name": args["name"],
                 "aliases": args.get("aliases", []), "tags": args.get("tags", []), "state": args.get("state", {}),
             }
+            if "stats" in args:
+                entity["stats"] = args["stats"]
+            if "active_effects" in args:
+                entity["active_effects"] = args["active_effects"]
             return [("entity.created", entity["id"], {"entity": entity})]
         if tool == "updateEntity":
             return [("entity.updated", args["entity_id"], {key: args[key] for key in ("patch", "name", "tags", "aliases") if key in args})]
@@ -611,15 +679,25 @@ class WorldEngine:
             return [("stat.changed", args.get("entity_id"), args)]
         if tool == "selectTheme":
             return [("theme.selected", None, args)]
+        if tool == "playNoise":
+            return [("noise.played", None, args)]
         if tool == "useAbility":
             rows: list[tuple[str, str | None, dict[str, Any]]] = [("ability.used", args["actor_id"], args)]
             rows.extend(("stat.changed", cost.get("entity_id"), cost) for cost in args.get("costs", []))
             for effect in args.get("effects", []):
                 payload = {**effect, "ability_key": args["ability_key"]}
-                if "expires_sequence" in effect or "expires_elapsed_minutes" in effect:
-                    rows.append(("effect.applied", payload.get("entity_id"), payload))
-                else:
-                    rows.append(("stat.changed", payload.get("entity_id"), payload))
+                event_type = str(payload.pop("event_type", "stat.changed"))
+                if event_type == "stat.changed" and (
+                    "expires_sequence" in effect or "expires_elapsed_minutes" in effect
+                ):
+                    event_type = "effect.applied"
+                if event_type == "entity.created":
+                    entity = {key: payload[key] for key in (
+                        "entity_id", "kind", "name", "aliases", "tags", "state"
+                    ) if key in payload}
+                    entity["id"] = entity.pop("entity_id")
+                    payload = {"entity": entity, "ability_key": args["ability_key"]}
+                rows.append((event_type, effect.get("entity_id"), payload))
             return rows
         if tool == "adjustInventory":
             return [("inventory.adjusted", args["character_id"], args)]
@@ -754,7 +832,12 @@ class WorldEngine:
             key = effect.get("stat_key")
             if key not in values: continue
             operation, amount = effect.get("operation", "add"), float(effect.get("amount", 0))
-            values[key] = amount if operation == "set" else values[key] + amount * (1 if operation == "add" else -1)
+            if operation == "set":
+                values[key] = amount
+            elif operation == "multiply":
+                values[key] *= amount
+            else:
+                values[key] += amount * (1 if operation == "add" else -1)
             values[key] = max(float(by_key[key]["minimum"]), min(float(by_key[key]["maximum"]), values[key]))
             if by_key[key]["integer_only"]: values[key] = int(round(values[key]))
         return values
@@ -788,11 +871,26 @@ class WorldEngine:
                     raise WorldValidationError(f"Location containment cycle involving {location['name']}")
                 visited.add(parent)
                 parent = entities[parent].get("state", {}).get("parent_location_id")
+        for relation in projection["relations"].values():
+            if relation.get("source_id") not in entities or relation.get("target_id") not in entities:
+                raise WorldValidationError("Relationship references an unavailable entity")
 
     def entity_card(self, project_id: str, entity_id: str, head_node_id: str | None = None) -> dict[str, Any]:
         projection = self.projection(project_id, head_node_id)
         entity = self._entity(projection, entity_id)
         return {**entity, "card": make_lore_card(entity, projection)}
+
+    def typed_entity(
+        self,
+        project_id: str,
+        entity_id: str,
+        head_node_id: str | None = None,
+    ) -> TypedWorldEntity:
+        """Return an opt-in typed view without changing projection storage."""
+        projection = self.projection(project_id, head_node_id)
+        return entity_from_projection(
+            self._entity(projection, entity_id)
+        )
 
     def visible(
         self, entity: dict[str, Any], pov_character_id: str | None, narration_mode: str,
@@ -884,18 +982,24 @@ class WorldEngine:
         pinned_ids: set[str] = set()
         if pov_character_id and pov_character_id in projection["entities"]:
             pov = projection["entities"][pov_character_id]
+            typed_pov = entity_from_projection(pov)
             pinned.append({**pov, "card": make_lore_card(pov, projection), "reason": "point_of_view"})
             pinned_ids.add(pov_character_id)
-            location_id = pov.get("state", {}).get("current_location_id")
+            location_id = (
+                typed_pov.state.current_location_id
+                if isinstance(typed_pov, Character)
+                else pov.get("state", {}).get("current_location_id")
+            )
             if location_id in projection["entities"]:
                 location = projection["entities"][location_id]
                 pinned.append({**location, "card": make_lore_card(location, projection), "reason": "current_location"})
                 pinned_ids.add(location_id)
             for entity in projection["entities"].values():
-                if entity["kind"] == "character" and entity.get("state", {}).get("current_location_id") == location_id and entity["id"] not in pinned_ids:
+                typed_entity = entity_from_projection(entity)
+                if isinstance(typed_entity, Character) and typed_entity.state.current_location_id == location_id and typed_entity.id not in pinned_ids:
                     if self.visible(entity, pov_character_id, narration_mode, projection):
                         pinned.append({**entity, "card": make_lore_card(entity, projection), "reason": "present"})
-                        pinned_ids.add(entity["id"])
+                        pinned_ids.add(typed_entity.id)
         candidates = self.search(project_id, user_text, head_node_id=head_node_id, pov_character_id=pov_character_id,
                                  narration_mode=narration_mode, limit=30)
         graph_neighbors: list[dict[str, Any]] = []
@@ -948,16 +1052,17 @@ class WorldEngine:
         # narrator receives only secrets it is explicitly allowed to know.
         narrative_secrets = []
         for entity in selected:
-            if entity.get("kind") != "character":
+            typed_entity = entity_from_projection(entity)
+            if not isinstance(typed_entity, Character):
                 continue
-            state = entity.get("state", {})
-            for secret in state.get("secrets_to_character", []) if isinstance(state.get("secrets_to_character"), list) else []:
+            state = typed_entity.state
+            for secret in state.secrets_to_character:
                 if str(secret).strip():
-                    narrative_secrets.append({"character_id": entity["id"], "character_name": entity["name"], "secret": str(secret), "known_to_character": False})
+                    narrative_secrets.append({"character_id": typed_entity.id, "character_name": typed_entity.name, "secret": str(secret), "known_to_character": False})
             if narration_mode == "third_omniscient":
-                for secret in state.get("character_secrets", []) if isinstance(state.get("character_secrets"), list) else []:
+                for secret in state.character_secrets:
                     if str(secret).strip():
-                        narrative_secrets.append({"character_id": entity["id"], "character_name": entity["name"], "secret": str(secret), "known_to_character": True})
+                        narrative_secrets.append({"character_id": typed_entity.id, "character_name": typed_entity.name, "secret": str(secret), "known_to_character": True})
         if narrative_secrets:
             result["narrative_secrets"] = narrative_secrets[:40]
         result["entities"] = [
@@ -1045,7 +1150,19 @@ class WorldEngine:
             entity = self._entity(self.projection(project_id, head_node_id), arguments.get("entity_id"), "character")
             return self.effective_stats(project_id, entity)
         if tool == "getAbilities":
-            return self.db.fetch_all("SELECT ability_key, name, description, target_type, costs_json, effects_json FROM ability_definitions WHERE project_id = ?", (project_id,))
+            return [
+                ability_from_record(row).model_dump(
+                    mode="json",
+                    include={
+                        "ability_key", "name", "description", "target_type",
+                        "requirements", "costs", "effects", "minigame_profile",
+                    },
+                )
+                for row in self.db.fetch_all(
+                    "SELECT * FROM ability_definitions WHERE project_id = ?",
+                    (project_id,),
+                )
+            ]
         kind = "fact" if tool == "getKnownFacts" else "plot_beat"
         return self.search(project_id, str(arguments.get("query", "")), head_node_id=head_node_id,
                            pov_character_id=pov_character_id, narration_mode=narration_mode, kinds=[kind], limit=12)

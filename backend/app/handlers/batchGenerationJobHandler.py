@@ -177,7 +177,7 @@ class BatchGenerationJobHandler(BaseJobHandler):
             )
             result = {
                 "json": prepared["draft"],
-                "stage_number": 8,
+                "task_number": 8,
                 "plan_id": plan_id,
             }
             repo.finish_task(

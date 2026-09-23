@@ -80,7 +80,7 @@ class PlanningWorkspaceService:
                     target_kind="planning_stage",
                     target_key=str(number),
                     prompt={
-                        "planning_stage_number": int(number),
+                        "planning_task_number": int(number),
                         "human_prompt": "",
                     },
                     settings={
@@ -160,7 +160,7 @@ class PlanningWorkspaceService:
 
     def view(self, plan_id: str) -> dict[str, Any]:
         plan = self.plan(plan_id)
-        stages: list[dict[str, Any]] = []
+        tasks: list[dict[str, Any]] = []
         by_number = {
             int(item[0]): (str(item[1]), str(item[2]))
             for item in PLANNING_STAGES
@@ -192,10 +192,12 @@ class PlanningWorkspaceService:
                             "created_at", "updated_at",
                         )
                     }
-            stages.append(
+            tasks.append(
                 {
                     "id": task["id"],
-                    "stage_number": number,
+                    "task_number": number,
+                    "task_key": task["task_key"],
+                    "dependencies": task.get("dependencies", []),
                     "kind": kind,
                     "description": description,
                     "status": self._stage_status(task),
@@ -214,11 +216,11 @@ class PlanningWorkspaceService:
                 }
             )
 
-        current_stage = next(
+        current_task = next(
             (
-                stage["stage_number"]
-                for stage in stages
-                if stage["status"] not in {"approved", "skipped"}
+                task["task_number"]
+                for task in tasks
+                if task["status"] not in {"approved", "skipped"}
             ),
             8,
         )
@@ -232,10 +234,10 @@ class PlanningWorkspaceService:
             "generation_plan_id": plan_id,
             "project_id": plan["project_id"],
             "status": "completed" if plan["status"] == "completed" else "active",
-            "current_stage": current_stage,
+            "current_task": current_task,
             "schema_version": 3,
             "settings": dict(plan.get("settings") or {}),
-            "stages": stages,
+            "tasks": tasks,
             "image_plans": image_plans,
             "recovery_warnings": [],
         }
@@ -268,7 +270,7 @@ class PlanningWorkspaceService:
             )
             return {
                 "deterministic": True,
-                "stage": self.view(plan_id)["stages"][7],
+                "task": self.view(plan_id)["tasks"][7],
                 "image_plans": prepared["image_plans"],
             }
 
@@ -286,7 +288,7 @@ class PlanningWorkspaceService:
         task_prompt = dict(task.get("prompt") or {})
         task_prompt.update(
             {
-                "planning_stage_number": stage_number,
+                "planning_task_number": stage_number,
                 "human_prompt": human_prompt,
                 "append": append,
                 "focus": focus,
@@ -408,11 +410,11 @@ class PlanningWorkspaceService:
         descendants = descendant_keys(task["task_key"], deps)
         by_key = {item["task_key"]: item for item in plan["tasks"]}
         return {
-            "stage_number": stage_number,
+            "task_number": stage_number,
             "changed_domains": [],
-            "affected_stages": [
+            "affected_tasks": [
                 {
-                    "stage_number": int(by_key[key].get("target_key") or 0),
+                    "task_number": int(by_key[key].get("target_key") or 0),
                     "kind": str(by_key[key].get("label") or ""),
                     "status": self._stage_status(by_key[key]),
                 }
@@ -431,7 +433,7 @@ class PlanningWorkspaceService:
                 result.append(
                     {
                         **revision,
-                        "stage_number": int(task.get("target_key") or 0),
+                        "task_number": int(task.get("target_key") or 0),
                         "task_key": task["task_key"],
                     }
                 )

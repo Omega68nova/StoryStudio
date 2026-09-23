@@ -16,12 +16,13 @@ def _json_list(value: str | None) -> list[Any]:
 
 
 class SoundManager:
-    """Owns ambient/environment sound discovery and resolution."""
+    """Owns stored ambient loops and the separate one-shot noise catalog."""
 
     def __init__(
         self,
         db: Any,
         sound_root: Path | None = None,
+        events: Any | None = None,
         *,
         data_provider: DataProvider | None = None,
     ) -> None:
@@ -29,6 +30,7 @@ class SoundManager:
         self.data = data_provider or DataProvider(db)
         self.repo = self.data.sound
         self.sound_root = sound_root or Path(__file__).resolve().parents[3] / "public" / "sounds"
+        self.events = events
 
     def index_sources(self, project_id: str) -> None:
         present: set[str] = set()
@@ -37,6 +39,8 @@ class SoundManager:
                 if not path.is_file() or path.suffix.lower() not in {".mp3", ".wav", ".ogg", ".m4a"}:
                     continue
                 relative = path.relative_to(self.sound_root).as_posix()
+                if relative.startswith("noises/"):
+                    continue
                 present.add(relative)
                 row = self.repo.source_variant(project_id, relative)
                 if row:
@@ -152,3 +156,113 @@ class SoundManager:
             "enabled": bool(row["enabled"]) if row else True,
             "master_volume": float(row["master_volume"]) if row else 1.0,
         }
+
+    def index_noises(self, project_id: str) -> None:
+        noise_root = self.sound_root / "noises"
+        present: set[str] = set()
+        if noise_root.is_dir():
+            for path in noise_root.rglob("*"):
+                if (
+                    not path.is_file()
+                    or path.suffix.lower()
+                    not in {".mp3", ".wav", ".ogg", ".m4a"}
+                ):
+                    continue
+                relative = path.relative_to(self.sound_root).as_posix()
+                present.add(relative)
+                row = self.repo.noise_source(project_id, relative)
+                if row:
+                    self.repo.set_noise_available(row["id"], True)
+                    continue
+                label = path.stem.replace("-", " ").replace("_", " ").title()
+                tags = [
+                    part.lower()
+                    for part in path.relative_to(noise_root).parts[:-1]
+                ]
+                self.repo.create_noise_source(
+                    project_id=project_id,
+                    source_path=relative,
+                    label=label,
+                    tags=tags,
+                )
+        for row in self.repo.noise_sources(project_id):
+            self.repo.set_noise_available(
+                row["id"],
+                row["source_path"] in present,
+            )
+
+    def list_noises(
+        self,
+        project_id: str,
+        *,
+        refresh: bool = False,
+    ) -> list[dict[str, Any]]:
+        if refresh:
+            self.index_noises(project_id)
+        rows = self.repo.noise_variants(project_id)
+        for row in rows:
+            row["tags"] = _json_list(row.pop("tags_json", "[]"))
+            row["enabled"] = bool(row["enabled"])
+            row["available"] = bool(row["available"])
+            row["url"] = "/sounds/" + row["source_path"]
+        return rows
+
+    def noise_preferences(self, user_id: str) -> dict[str, Any]:
+        row = self.repo.noise_preferences(user_id)
+        return {
+            "enabled": bool(row["enabled"]) if row else True,
+            "master_volume": float(row["master_volume"]) if row else 1.0,
+        }
+
+    async def play_noise(
+        self,
+        project_id: str,
+        noise_id: str,
+        *,
+        source: str,
+    ) -> dict[str, Any] | None:
+        row = self.repo.noise_variant(
+            project_id,
+            noise_id,
+            playable_only=True,
+        )
+        if not row:
+            return None
+        payload = {
+            "project_id": project_id,
+            "noise_id": row["id"],
+            "label": row["label"],
+            "url": "/sounds/" + row["source_path"],
+            "playback_rate": float(row["playback_rate"]),
+            "gain": float(row["default_gain"]),
+            "source": source,
+        }
+        if self.events is not None:
+            await self.events.publish("noise", payload)
+        return payload
+
+    async def apply_story_mutations(
+        self,
+        project_id: str,
+        mutations: list[Any],
+    ) -> list[dict[str, Any]]:
+        played: list[dict[str, Any]] = []
+        for mutation in mutations:
+            noise_ids: list[str] = []
+            if mutation.tool == "playNoise":
+                noise_ids.append(str(mutation.arguments.get("noise_id") or ""))
+            elif mutation.tool == "useAbility":
+                noise_ids.extend(
+                    str(effect.get("noise_id") or "")
+                    for effect in mutation.arguments.get("effects", [])
+                    if effect.get("event_type") == "noise.played"
+                )
+            for noise_id in noise_ids:
+                payload = await self.play_noise(
+                    project_id,
+                    noise_id,
+                    source="ability" if mutation.tool == "useAbility" else "story",
+                )
+                if payload:
+                    played.append(payload)
+        return played

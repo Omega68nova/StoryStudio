@@ -194,3 +194,27 @@ class ImageManager:
             progress=progress,
             filename_prefix=filename_prefix,
         )
+
+    async def generate_generic(
+        self,
+        workflow: ImageWorkflow,
+        request: ImageGenerationRequest,
+        *,
+        cancel_event: asyncio.Event | None = None,
+        progress: ProgressCallback | None = None,
+        filename_prefix: str | None = None,
+    ) -> list[tuple[bytes, str]]:
+        """Run an already-resolved request under ImageManager ownership.
+
+        Job payload resolution is compatibility-sensitive. This adapter keeps
+        legacy generic requests unchanged while preventing job handlers from
+        bypassing the semantic manager.
+        """
+        return await generate_image(
+            self.ai_manager,
+            workflow,
+            request,
+            cancel_event=cancel_event,
+            progress=progress,
+            filename_prefix=filename_prefix,
+        )

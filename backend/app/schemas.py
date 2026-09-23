@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from app.domain.world import ActionEffect, RequirementExpression
 
 
 class LoginRequest(BaseModel):
@@ -390,6 +391,35 @@ class GenerationResultUpdate(BaseModel):
     result: dict[str, Any]
 
 
+class GenerationDependencyUpdate(BaseModel):
+    task_key: str = Field(min_length=1, max_length=120)
+    required_state: Literal["generated", "approved", "committed"] = "generated"
+
+
+class GenerationPlanTaskCreate(BaseModel):
+    task_key: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,119}$")
+    label: str = Field(default="", max_length=200)
+    generator_kind: Literal["text", "image", "deterministic"]
+    target_kind: str = Field(min_length=1, max_length=120)
+    target_key: str | None = Field(default=None, max_length=200)
+    prompt: dict[str, Any] = Field(default_factory=dict)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    dependencies: list[GenerationDependencyUpdate] = Field(default_factory=list)
+
+
+class GenerationPlanTaskUpdate(BaseModel):
+    label: str | None = Field(default=None, max_length=200)
+    generator_kind: Literal["text", "image", "deterministic"] | None = None
+    target_kind: str | None = Field(default=None, min_length=1, max_length=120)
+    target_key: str | None = Field(default=None, max_length=200)
+    prompt: dict[str, Any] | None = None
+    settings: dict[str, Any] | None = None
+
+
+class GenerationDependenciesUpdate(BaseModel):
+    dependencies: list[GenerationDependencyUpdate] = Field(default_factory=list)
+
+
 
 class WorldEntityCreate(BaseModel):
     kind: Literal["character", "location", "faction", "item", "lore_system", "fact", "relationship", "plot_beat"]
@@ -404,6 +434,16 @@ class WorldEntityUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
     aliases: list[str] | None = None
     tags: list[str] | None = None
+
+
+class WorldCloneRequest(BaseModel):
+    source_project_id: str = Field(min_length=1)
+    entity_ids: list[str] = Field(min_length=1, max_length=500)
+    include_children: bool = True
+    include_relationships: bool = True
+    include_referenced_entities: bool = True
+    include_rules: bool = True
+    max_depth: int = Field(default=8, ge=0, le=32)
 
 
 class HardDeleteConfirm(BaseModel):
@@ -498,6 +538,19 @@ class AmbientPreferenceUpdate(BaseModel):
     master_volume: float = Field(default=1, ge=0, le=1)
 
 
+class NoisePreferenceUpdate(BaseModel):
+    enabled: bool = True
+    master_volume: float = Field(default=1, ge=0, le=1)
+
+
+class NoiseVariantUpdate(BaseModel):
+    label: str = Field(min_length=1, max_length=160)
+    playback_rate: float = Field(default=1, ge=.25, le=4)
+    default_gain: float = Field(default=1, ge=0, le=1)
+    tags: list[str] = Field(default_factory=list, max_length=40)
+    enabled: bool = True
+
+
 class AmbientVariantCreate(BaseModel):
     source_path: str
     label: str = Field(min_length=1, max_length=160)
@@ -576,7 +629,7 @@ class StatAdjustmentRequest(BaseModel):
     entity_id: str | None = None
     relation_id: str | None = None
     stat_key: str
-    operation: Literal["add", "subtract", "set"] = "set"
+    operation: Literal["add", "subtract", "set", "multiply"] = "set"
     amount: float
 
 
@@ -584,7 +637,7 @@ class AbilityDefinitionCreate(BaseModel):
     ability_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=5000)
-    target_type: Literal["self", "character", "relationship"] = "self"
+    target_type: Literal["self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"] = "self"
     requirements: dict[str, Any] = Field(default_factory=dict)
     costs: dict[str, float] = Field(default_factory=dict)
     effects: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
@@ -625,13 +678,16 @@ class AbilityDefinitionCreate(BaseModel):
     @classmethod
     def validate_effects(cls, effects: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for effect in effects:
-            if effect.get("operation", "add") not in {"add", "subtract", "set"}:
-                raise ValueError("effect operation must be add, subtract, or set")
             if effect.get("duration_type") not in {None, "turns", "minutes"}:
                 raise ValueError("effect duration_type must be turns or minutes")
-            if int(effect.get("duration_value", 0) or 0) < 0:
-                raise ValueError("effect duration cannot be negative")
+            ActionEffect.model_validate(effect)
         return effects
+
+    @field_validator("requirements")
+    @classmethod
+    def validate_requirements(cls, requirements: dict[str, Any]) -> dict[str, Any]:
+        RequirementExpression.model_validate(requirements)
+        return requirements
 
 
 class WorldHeadUpdate(BaseModel):

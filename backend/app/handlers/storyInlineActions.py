@@ -5,6 +5,7 @@ from typing import Any
 
 from app.services.minigames import MinigameService
 from app.services.npc import NpcDirector
+from app.services.ai_world_tools import AIAliasResolver
 from app.services.world import (
     NormalizedMutation,
     WorldEngine,
@@ -28,6 +29,7 @@ INLINE_TOOL_NAMES = [
     "startMinigame",
     "setSceneEnvironment",
     "proposeWeather",
+    "playNoise",
 ]
 
 
@@ -304,13 +306,16 @@ class StoryInlineActions:
                     "requires an explicit player request"
                 )
 
+        alias_resolver = AIAliasResolver(
+            self.world.preview(job["project_id"], head_node_id, mutations)
+        )
         accepted = self.world.normalize_mutations(
             job["project_id"],
             head_node_id,
             [
                 {
                     "tool": name,
-                    "arguments": arguments,
+                    "arguments": alias_resolver.canonicalize(arguments),
                 }
             ],
             provenance="storyteller_inline",

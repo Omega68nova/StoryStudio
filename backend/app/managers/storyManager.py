@@ -337,12 +337,11 @@ class StoryManager:
                     or []
                 )
                 if raw_mutations:
-                    mutations = (
-                        self.world.normalize_mutations(
-                            request.project_id,
-                            request.head_node_id,
-                            raw_mutations,
-                        )
+                    mutations = self.story_planner.tools.normalize_writes(
+                        project_id=request.project_id,
+                        head_node_id=request.head_node_id,
+                        mutations=raw_mutations,
+                        provenance="ai",
                     )
 
             except TimeoutError:

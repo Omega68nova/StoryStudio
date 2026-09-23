@@ -163,7 +163,7 @@ async def test_planning_generation_continues_token_truncated_json(tmp_path: Path
     await asyncio.wait_for(scheduler.queue.join(), 2); await scheduler.stop()
 
     saved = db.get_job(job["id"])
-    planned = api.planning_session_view(plan["id"])["stages"][0]
+    planned = api.planning_session_view(plan["id"])["tasks"][0]
     assert saved and saved["status"] == "completed"
     assert planned["draft"]["summary"] == "A cut story"
     assert llama.stream_calls == [(None, True), (0.0, True)]

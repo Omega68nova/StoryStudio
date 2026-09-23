@@ -60,7 +60,11 @@ class EnvironmentManager:
         self.repo = self.data.environment
         self.world = world
         self.service = environment_service or EnvironmentService(db)
-        self.sound = sound_manager or SoundManager(db, data_provider=self.data)
+        self.sound = sound_manager or SoundManager(
+            db,
+            events=events,
+            data_provider=self.data,
+        )
         self.music = music_manager or MusicManager(db, world, events, data_provider=self.data)
 
     def resolve(self, project_id: str, projection: dict[str, Any] | None = None) -> ResolvedEnvironment:
@@ -84,21 +88,32 @@ class EnvironmentManager:
                 revision=revision,
             )
 
-        focus, location = self.service._location(projection)
+        focus_model, location_model = self.service.location_models(projection)
+        location = (
+            projection["entities"].get(location_model.id)
+            if location_model else None
+        )
         weather = self.service._weather(project_id, projection)
+        weather_model = self.service.weather_model(project_id, weather)
         phase = self.service.phase(project_id, projection.get("elapsed_minutes", 0))
-        next_weather = self.repo.allowed_next_weather(project_id, (weather or {}).get("id"))
+        next_weather = self.repo.allowed_next_weather(
+            project_id,
+            weather_model.id if weather_model else None,
+        )
 
         location_data = None
-        if location:
-            state = location.get("state", {})
+        if location_model:
+            state = location_model.state
             location_data = {
-                "id": location["id"],
-                "name": location["name"],
-                "description": state.get("description") or state.get("summary") or "",
-                "tags": location.get("tags", []),
-                "exposure": state.get("exposure", "outdoor"),
-                "parent_location_id": state.get("parent_location_id"),
+                "id": location_model.id,
+                "name": location_model.name,
+                "description": (
+                    state.description
+                    or str(getattr(state, "summary", "") or "")
+                ),
+                "tags": location_model.tags,
+                "exposure": state.exposure,
+                "parent_location_id": state.parent_location_id,
             }
 
         ambient = self.sound.resolve_ambient(
@@ -110,15 +125,18 @@ class EnvironmentManager:
         )
         background = self.service.background(
             project_id,
-            (location or {}).get("id"),
-            (weather or {}).get("id"),
+            location_model.id if location_model else None,
+            weather_model.id if weather_model else None,
             (phase or {}).get("id"),
         )
         music = self.music.project_state(project_id, head_node_id=projection.get("head_node_id"))
 
         return ResolvedEnvironment(
             enabled=True,
-            focused_character={"id": focus["id"], "name": focus["name"]} if focus else None,
+            focused_character=(
+                {"id": focus_model.id, "name": focus_model.name}
+                if focus_model else None
+            ),
             player_action=str(projection.get("player_action") or "standing"),
             location=location_data,
             location_ancestry=self.service._ancestry(projection, location),

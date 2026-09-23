@@ -4,7 +4,7 @@ import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api } from "./api";
 import { BoxedMultiselectFilter, CreatableBoxedMultiselect } from "./customComponents/BoxedMultiselect";
 import { RecordDrawer, ResourceButton, ResourceList } from "./customComponents/AdminResourceForms";
-import type { AmbientAssignment, AmbientSoundSet, AmbientVariant, EnvironmentLocation, EnvironmentSettings, LocationMapLayer, TimePhase, WeatherDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
+import type { AmbientAssignment, AmbientSoundSet, AmbientVariant, EnvironmentLocation, EnvironmentSettings, LocationMapLayer, NoiseVariant, TimePhase, WeatherDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
 
 type Editor = { kind: "weather"; value: WeatherDefinition } | { kind: "time"; value: TimePhase } | { kind: "location"; value: EnvironmentLocation };
 type AmbientData = { variants: AmbientVariant[]; assignments: AmbientAssignment[] };
@@ -42,6 +42,7 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
   const [map, setMap] = useState<LocationMapLayer | null>(null);
   const [parentId, setParentId] = useState<string | null>(null);
   const [ambient, setAmbient] = useState<AmbientData>({ variants: [], assignments: [] });
+  const [noises, setNoises] = useState<NoiseVariant[]>([]);
   const [world, setWorld] = useState<WorldProjection | null>(null);
   const [proposals, setProposals] = useState<Array<{ id: string; name: string; description: string; status: string }>>([]);
   const [editor, setEditor] = useState<Editor | null>(null);
@@ -54,13 +55,15 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
   const [background, setBackground] = useState({ weather_id: "", time_phase_id: "", prompt: "" });
 
   const load = useCallback(async () => {
-    const [nextSettings, nextMap, nextAmbient, nextWorld, nextProposals] = await Promise.all([
+    const [nextSettings, nextMap, nextAmbient, nextNoises, nextWorld, nextProposals] = await Promise.all([
       api<EnvironmentSettings>(`/projects/${projectId}/environment/settings`),
       api<LocationMapLayer>(`/projects/${projectId}/environment/map${parentId ? `?parent_id=${parentId}` : ""}`),
-      api<AmbientData>(`/projects/${projectId}/environment/ambient`), api<WorldProjection>(`/projects/${projectId}/world`),
+      api<AmbientData>(`/projects/${projectId}/environment/ambient`),
+      api<NoiseVariant[]>(`/projects/${projectId}/noises`),
+      api<WorldProjection>(`/projects/${projectId}/world`),
       api<Array<{ id: string; name: string; description: string; status: string }>>(`/projects/${projectId}/environment/weather-proposals`),
     ]);
-    setSettings(nextSettings); setMap(nextMap); setAmbient(nextAmbient); setWorld(nextWorld); setProposals(nextProposals);
+    setSettings(nextSettings); setMap(nextMap); setAmbient(nextAmbient); setNoises(nextNoises); setWorld(nextWorld); setProposals(nextProposals);
   }, [projectId, parentId]);
   useEffect(() => { void load().catch(cause => fail(String(cause))); }, [load, revision, fail]);
 
@@ -131,6 +134,7 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
   async function decideProposal(id: string, action: "approve" | "reject") { try { await api(`/projects/${projectId}/environment/weather-proposals/${id}`, { method: "PUT", body: JSON.stringify({ action }) }); await load(); } catch (cause) { fail(String(cause)); } }
   async function createDerived() { if (!derived.source_path || !derived.label) return; try { await api(`/projects/${projectId}/environment/ambient/variants`, { method: "POST", body: JSON.stringify({ ...derived, tags: [], enabled: true }) }); setDerived({ source_path: "", label: "", playback_rate: 2, default_gain: 1 }); await load(); } catch (cause) { fail(String(cause)); } }
   async function saveVariant(item: AmbientVariant, patch: Partial<AmbientVariant>) { try { await api(`/projects/${projectId}/environment/ambient/variants/${item.id}`, { method: "PUT", body: JSON.stringify({ ...item, ...patch }) }); await load(); } catch (cause) { fail(String(cause)); } }
+  async function saveNoise(item: NoiseVariant, patch: Partial<NoiseVariant>) { try { await api(`/projects/${projectId}/noises/${item.id}`, { method: "PUT", body: JSON.stringify({ ...item, ...patch }) }); await load(); } catch (cause) { fail(String(cause)); } }
   async function addActionRule() { if (!actionRule.owner_id.trim() || !actionRule.variant_id) return; try { await api(`/projects/${projectId}/environment/ambient/assignments`, { method: "POST", body: JSON.stringify({ owner_type: "action", owner_id: actionRule.owner_id.trim(), selector_type: "default", variant_id: actionRule.variant_id }) }); setActionRule({ owner_id: "", variant_id: "" }); await load(); } catch (cause) { fail(String(cause)); } }
   async function generateBackground() {
     const currentSettings = settings;
@@ -150,6 +154,7 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
     </div>
     <section className="panel map-panel"><div className="sheet-heading"><h2>{map?.parent?.name ?? "World locations"}</h2>{map?.parent && <Button onClick={() => setParentId(map.parent?.parent_id ?? null)}>Go back</Button>}</div><div className="environment-map"><MapEdges layer={map} />{map?.locations.map(item => <button className={!item.effectively_enabled ? "disabled" : ""} draggable key={item.id} style={{ left: `${10 + item.x * 21}%`, top: `${12 + item.y * 24}%` }} onDragEnd={e => void moveLocation(item.id, e.clientX, e.clientY, e.currentTarget)} onClick={() => { const entity = world?.entities[item.id]; if (entity) begin({ kind: "location", value: normalizedLocation(entity) }, "location", item.id); if (item.has_children) setParentId(item.id); }}><b>{item.name}</b><small>{item.exposure === "isolated" ? "sealed" : item.exposure}{item.has_children ? " · enter" : ""}</small></button>)}</div></section>
     <AmbientCatalog ambient={ambient} derived={derived} setDerived={setDerived} actionRule={actionRule} setActionRule={setActionRule} saveVariant={saveVariant} createDerived={createDerived} addActionRule={addActionRule} />
+    <NoiseCatalog noises={noises} saveNoise={saveNoise} />
     <RecordDrawer title={editor ? `${editor.value.id ? "Edit" : "Create"} ${editor.kind}` : ""} open={Boolean(editor)} dirty={dirty} error={formError} onClose={() => closeEditor()} onSave={saveEditor} onDelete={editor?.value.id ? deleteEditor : undefined}>{editor?.kind === "weather" && <WeatherForm value={editor.value} setValue={value => setEditor({ kind: "weather", value })} settings={settings} tags={allTags} soundSets={soundSets} setSoundSets={setSoundSets} variants={ambient.variants} />}{editor?.kind === "time" && <TimeForm value={editor.value} setValue={value => setEditor({ kind: "time", value })} settings={settings} soundSets={soundSets} setSoundSets={setSoundSets} variants={ambient.variants} />}{editor?.kind === "location" && <LocationForm value={editor.value} setValue={value => setEditor({ kind: "location", value })} locations={locations} settings={settings} tags={allTags} soundSets={soundSets} setSoundSets={setSoundSets} variants={ambient.variants} background={background} setBackground={setBackground} onGenerate={generateBackground} projectId={projectId} reload={load} />}</RecordDrawer>
   </div>;
 }
@@ -176,6 +181,10 @@ function SoundSetsEditor({ owner, sets, setSets, variants, settings }: { owner: 
 
 function AmbientCatalog({ ambient, derived, setDerived, actionRule, setActionRule, saveVariant, createDerived, addActionRule }: { ambient: AmbientData; derived: { source_path: string; label: string; playback_rate: number; default_gain: number }; setDerived: (value: { source_path: string; label: string; playback_rate: number; default_gain: number }) => void; actionRule: { owner_id: string; variant_id: string }; setActionRule: (value: { owner_id: string; variant_id: string }) => void; saveVariant: (item: AmbientVariant, patch: Partial<AmbientVariant>) => Promise<void>; createDerived: () => Promise<void>; addActionRule: () => Promise<void> }) {
   return <section className="panel"><h2>Ambient sound catalog</h2><p>Manage ambient loops here. Record links are edited in their drawers; Music is unaffected.</p>{ambient.variants.map(item => <div className="sound-row" key={item.id}><Button disabled={!item.available} onClick={() => { const audio = new Audio(item.url); audio.playbackRate = item.playback_rate; void audio.play(); window.setTimeout(() => audio.pause(), 4000); }}>Preview</Button><span>{item.label}<small>{item.source_path} · {item.playback_rate}×{!item.available ? " · missing" : ""}</small></span><Checkbox checked={item.enabled} onChange={e => void saveVariant(item, { enabled: e.target.checked })} /><TextField size="small" type="number" label="Gain" inputProps={{ min: 0, max: 1, step: .05 }} defaultValue={item.default_gain} onBlur={e => void saveVariant(item, { default_gain: Number(e.target.value) })} /></div>)}<Divider /><h3>Derived speed variant</h3><div className="route-form"><TextField select size="small" label="Source" value={derived.source_path} onChange={e => setDerived({ ...derived, source_path: e.target.value })}>{ambient.variants.filter(item => !item.derived).map(item => <MenuItem key={item.id} value={item.source_path}>{item.label}</MenuItem>)}</TextField><TextField size="small" label="New label" value={derived.label} onChange={e => setDerived({ ...derived, label: e.target.value })} /><TextField size="small" type="number" label="Speed" value={derived.playback_rate} onChange={e => setDerived({ ...derived, playback_rate: Number(e.target.value) })} /><Button onClick={() => void createDerived()}>Create variant</Button></div><h3>Action sounds</h3><div className="route-form"><TextField size="small" label="Action, e.g. running" value={actionRule.owner_id} onChange={e => setActionRule({ ...actionRule, owner_id: e.target.value })} /><TextField select size="small" label="Sound" value={actionRule.variant_id} onChange={e => setActionRule({ ...actionRule, variant_id: e.target.value })}>{ambient.variants.filter(item => item.enabled && item.available).map(item => <MenuItem key={item.id} value={item.id}>{item.label}</MenuItem>)}</TextField><Button onClick={() => void addActionRule()}>Assign</Button></div></section>;
+}
+
+function NoiseCatalog({ noises, saveNoise }: { noises: NoiseVariant[]; saveNoise: (item: NoiseVariant, patch: Partial<NoiseVariant>) => Promise<void> }) {
+  return <section className="panel"><h2>One-shot noise catalog</h2><p>Files under <code>public/sounds/noises</code> can be played once by story and minigame systems. Ambient loops and Music are unaffected.</p>{!noises.length && <p className="muted">Add audio files to the noises folder to index them.</p>}{noises.map(item => <div className="sound-row" key={item.id}><Button disabled={!item.available} onClick={() => { const audio = new Audio(item.url); audio.playbackRate = item.playback_rate; audio.volume = item.default_gain; void audio.play(); }}>Preview</Button><span>{item.label}<small>{item.source_path} · {item.playback_rate}×{!item.available ? " · missing" : ""}</small></span><Checkbox checked={item.enabled} onChange={event => void saveNoise(item, { enabled: event.target.checked })} /><TextField size="small" type="number" label="Gain" inputProps={{ min: 0, max: 1, step: .05 }} defaultValue={item.default_gain} onBlur={event => void saveNoise(item, { default_gain: Number(event.target.value) })} /></div>)}</section>;
 }
 
 function descendantsOf(locationId: string | undefined, locations: WorldEntity[]): Set<string> { if (!locationId) return new Set(); const blocked = new Set([locationId]); let changed = true; while (changed) { changed = false; locations.forEach(item => { if (!blocked.has(item.id) && blocked.has(String(item.state.parent_location_id || ""))) { blocked.add(item.id); changed = true; } }); } return blocked; }

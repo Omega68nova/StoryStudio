@@ -9,8 +9,8 @@ from app.database import utc_now
 from app.functions.imageGen import (
     ImageGenerationRequest,
     ImageWorkflow,
-    generate_image,
 )
+from app.managers.imageGenManager import ImageManager
 from app.schemas import WorkflowMappings
 from app.services.job_handlers import BaseJobHandler, JobExecutionContext
 from app.services.runtimes import RuntimeFailure
@@ -39,7 +39,8 @@ class ImageJobHandler(BaseJobHandler):
       * environment background-ready notification
       * image-domain cancellation/failure cleanup
 
-    GPU/model ownership remains in AIGeneratorManager/generate_image().
+    Semantic generation belongs to ImageManager; GPU/model ownership remains
+    in AIGeneratorManager and the generic image runtime.
     """
 
     async def run(self, context: JobExecutionContext) -> None:
@@ -69,8 +70,7 @@ class ImageJobHandler(BaseJobHandler):
                 },
             )
 
-        outputs = await generate_image(
-            context.ai,
+        outputs = await ImageManager(context.ai).generate_generic(
             resolved.workflow,
             resolved.request,
             cancel_event=context.cancel_event,

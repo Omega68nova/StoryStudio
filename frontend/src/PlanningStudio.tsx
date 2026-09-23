@@ -25,6 +25,14 @@ import AutoFixHighIcon from "@mui/icons-material/AutoFixHigh";
 import CasinoOutlinedIcon from "@mui/icons-material/CasinoOutlined";
 import { api } from "./api";
 import { BoxedMultiselectFilter, CreatableBoxedMultiselect } from "./customComponents/BoxedMultiselect";
+import {
+  clearPlanningTaskSection,
+  emptyPlanningTask,
+  planningGenerationPlanView,
+  PLANNING_TASK_NAMES,
+  PLANNING_TASK_SECTIONS,
+} from "./planningTaskModel";
+import type { PlanningGenerationPlanView } from "./planningTaskModel";
 import type {
   AmbientVariant,
   EnvironmentSettings,
@@ -35,7 +43,7 @@ import type {
   PlanningResolution,
   PlanningScalePreset,
   PlanningSession,
-  PlanningStage,
+  PlanningStage as PlanningTask,
   WorkflowPreset,
   WorldProjection,
 } from "./types";
@@ -84,44 +92,6 @@ const PRESETS: Record<
     characters: 30,
   },
 };
-const STAGE_NAMES = [
-  "Foundation",
-  "Macro world & weather",
-  "Detailed locations",
-  "Rules, stats & abilities",
-  "Cast",
-  "Character details & hooks",
-  "Runtime presentation",
-  "Images",
-];
-const STAGE_SECTIONS: Record<number, string[]> = {
-  2: ["locations", "weather", "factions", "routes"],
-  3: ["locations", "routes"],
-  4: ["stats", "abilities", "lore_systems", "items"],
-  5: ["characters", "factions", "facts"],
-  6: ["character_updates", "outfits", "relationships", "routines", "facts", "plot_beats"],
-  7: ["minigames", "bullethell", "ambient", "music"],
-};
-const STAGE_SECTION_FIELDS: Record<number, Record<string, string[]>> = {
-  2: {
-    locations: ["locations", "routes"],
-    weather: ["weather", "weather_transitions", "initial_weather_key"],
-    factions: ["factions"],
-    routes: ["routes"],
-  },
-  3: { locations: ["locations", "routes"], routes: ["routes"] },
-  4: { lore_systems: ["lore_systems"], stats: ["stats"], abilities: ["abilities"], items: ["items"] },
-  5: { characters: ["characters", "default_pov_character_key"], factions: ["factions"], facts: ["facts"] },
-  6: {
-    character_updates: ["character_updates"],
-    outfits: ["outfits"],
-    relationships: ["relationships"],
-    routines: ["routines"],
-    facts: ["facts"],
-    plot_beats: ["plot_beats"],
-  },
-  7: { minigames: ["minigames"], bullethell: ["bullethell"], ambient: ["ambient"], music: ["music"] },
-};
 
 export function PlanningStudio({
   projectId,
@@ -132,7 +102,7 @@ export function PlanningStudio({
   revision: number;
   fail: (message: string) => void;
 }) {
-  const [session, setSession] = useState<PlanningSession | null>(null);
+  const [session, setSession] = useState<PlanningGenerationPlanView | null>(null);
   const [setup, setSetup] = useState({
     scale_preset: "local" as PlanningScalePreset,
     ...PRESETS.local,
@@ -158,27 +128,28 @@ export function PlanningStudio({
   const dirtyPrompts = useRef(new Set<number>());
 
   const load = useCallback(async () => {
-    const current = await api<PlanningSession | null>(`/projects/${projectId}/planning`);
+    const wire = await api<PlanningSession | null>(`/projects/${projectId}/planning`);
+    const current = wire ? planningGenerationPlanView(wire) : null;
     setSession(current);
     if (!current) return;
     setPrompts((existing) =>
       Object.fromEntries(
-        current.stages.map((stage) => [
-          stage.stage_number,
-          dirtyPrompts.current.has(stage.stage_number)
-            ? (existing[stage.stage_number] ?? "")
+        current.tasks.map((stage) => [
+          stage.task_number,
+          dirtyPrompts.current.has(stage.task_number)
+            ? (existing[stage.task_number] ?? "")
             : (stage.human_prompt ?? ""),
         ]),
       ),
     );
     setDrafts((existing) =>
       Object.fromEntries(
-        current.stages.map((stage) => [
-          stage.stage_number,
-          dirtyDrafts.current.has(stage.stage_number)
-            ? (existing[stage.stage_number] ?? "{}")
+        current.tasks.map((stage) => [
+          stage.task_number,
+          dirtyDrafts.current.has(stage.task_number)
+            ? (existing[stage.task_number] ?? "{}")
             : (stage.raw_draft_text ??
-              JSON.stringify(stage.draft ?? stage.approved ?? emptyStage(stage.stage_number), null, 2)),
+              JSON.stringify(stage.draft ?? stage.approved ?? emptyPlanningTask(stage.task_number), null, 2)),
         ]),
       ),
     );
@@ -217,7 +188,7 @@ export function PlanningStudio({
     };
   }, [projectId]);
   useEffect(() => {
-    if (!session?.stages.some((stage) => ["queued", "generating"].includes(stage.status))) return;
+    if (!session?.tasks.some((stage) => ["queued", "generating"].includes(stage.status))) return;
     const timer = window.setInterval(() => void load(), 750);
     return () => clearInterval(timer);
   }, [session, load]);
@@ -234,12 +205,14 @@ export function PlanningStudio({
   }
   async function create() {
     try {
-      setSession(
-        await api(`/projects/${projectId}/planning`, {
+      const created = await api<PlanningSession>(
+        `/projects/${projectId}/planning`,
+        {
           method: "POST",
           body: JSON.stringify(setup),
-        }),
+        },
       );
+      setSession(planningGenerationPlanView(created));
     } catch (cause) {
       fail(message(cause));
     }
@@ -307,7 +280,7 @@ export function PlanningStudio({
     await load();
   }
   async function acceptCurrentSet(stage: number, generateAfter: boolean) {
-    const focus = generationSections[stage] || STAGE_SECTIONS[stage]?.[0];
+    const focus = generationSections[stage] || PLANNING_TASK_SECTIONS[stage]?.[0];
     if (!focus) return;
     try {
       const draft = JSON.parse(drafts[stage] || "{}");
@@ -319,10 +292,10 @@ export function PlanningStudio({
     }
   }
   async function regenerateSection(stage: number) {
-    const focus = generationSections[stage] || STAGE_SECTIONS[stage]?.[0];
+    const focus = generationSections[stage] || PLANNING_TASK_SECTIONS[stage]?.[0];
     if (!focus) return;
     try {
-      const draft = clearCurrentSection(stage, focus, JSON.parse(drafts[stage] || "{}"));
+      const draft = clearPlanningTaskSection(stage, focus, JSON.parse(drafts[stage] || "{}"));
       await saveStageDraft(stage, draft);
       await requestSection(stage, focus);
     } catch (cause) {
@@ -377,9 +350,9 @@ export function PlanningStudio({
     }
   }
   async function skip(stage: number) {
-    if (!window.confirm(`Skip ${STAGE_NAMES[stage - 1]}? You can reopen it later.`)) return;
+    if (!window.confirm(`Skip ${PLANNING_TASK_NAMES[stage - 1]}? You can reopen it later.`)) return;
     try {
-      await api(`/planning/${session!.id}/stages/${stage}/skip`, {
+      await api(`/planning/${session!.id}/tasks/${stage}/skip`, {
         method: "POST",
       });
       clearDirty(stage);
@@ -390,7 +363,7 @@ export function PlanningStudio({
   }
   async function inspectReopen(stage: number) {
     try {
-      setImpact(await api(`/planning/${session!.id}/stages/${stage}/dependency-impact`));
+      setImpact(await api(`/planning/${session!.id}/tasks/${stage}/dependency-impact`));
       setReopenStage(stage);
     } catch (cause) {
       fail(message(cause));
@@ -399,7 +372,7 @@ export function PlanningStudio({
   async function reopen() {
     if (!reopenStage) return;
     try {
-      await api(`/planning/${session!.id}/stages/${reopenStage}/reopen`, {
+      await api(`/planning/${session!.id}/tasks/${reopenStage}/reopen`, {
         method: "POST",
       });
       setImpact(null);
@@ -411,7 +384,7 @@ export function PlanningStudio({
   }
   async function revalidate(stage: number) {
     try {
-      await api(`/planning/${session!.id}/stages/${stage}/revalidate`, {
+      await api(`/planning/${session!.id}/tasks/${stage}/revalidate`, {
         method: "POST",
       });
       await load();
@@ -471,7 +444,7 @@ export function PlanningStudio({
         <header className="page-header">
           <p className="eyebrow">WORLD WORKSHOP</p>
           <h1>Preplan the story</h1>
-          <p>Build the story foundation through eight editable, skippable stages.</p>
+          <p>Build the story foundation through eight editable, skippable tasks.</p>
         </header>
         <section className="panel setup-grid">
           <TextField
@@ -534,7 +507,7 @@ export function PlanningStudio({
             </Typography>
           </Stack>
           <Button variant="contained" disabled={randomizingDirection} onClick={() => void create()}>
-            Start eight-stage workshop
+            Start world workshop
           </Button>
         </section>
       </div>
@@ -549,17 +522,17 @@ export function PlanningStudio({
             <h1>Preplanning</h1>
             <p>
               {session.status === "completed"
-                ? "Every stage is current and canonical."
-                : `Stage ${session.current_stage} of 8 · ${humanize(session.settings.scale_preset)} scale`}
+                ? "Every task is current and canonical."
+                : `Task ${session.current_task} of 8 · ${humanize(session.settings.scale_preset)} scale`}
             </p>
           </div>
           <Stack direction="row">
-            <Tooltip title="Automatically prepare remaining language-model stages">
+            <Tooltip title="Automatically prepare remaining language-model tasks">
               <span>
                 <IconButton
                   disabled={
                     session.status === "completed" ||
-                    session.stages.some((stage) => ["queued", "generating"].includes(stage.status))
+                    session.tasks.some((stage) => ["queued", "generating"].includes(stage.status))
                   }
                   onClick={() => {
                     setAutomationPrompt(session.settings.direction);
@@ -577,37 +550,37 @@ export function PlanningStudio({
         </Stack>
       </header>
       <div className="planning-step-strip">
-        {session.stages.map((stage) => (
+        {session.tasks.map((stage) => (
           <button
             key={stage.id}
             className={stage.status}
             onClick={() =>
-              document.getElementById(`planning-stage-${stage.stage_number}`)?.scrollIntoView({ behavior: "smooth" })
+              document.getElementById(`planning-stage-${stage.task_number}`)?.scrollIntoView({ behavior: "smooth" })
             }
           >
-            <b>{stage.stage_number}</b>
-            <span>{STAGE_NAMES[stage.stage_number - 1]}</span>
+            <b>{stage.task_number}</b>
+            <span>{PLANNING_TASK_NAMES[stage.task_number - 1]}</span>
             <small>{stage.status}</small>
           </button>
         ))}
       </div>
+      <PlanningDagEditor session={session} reload={load} fail={fail} />
       <div className="stage-list">
-        {session.stages.map((stage) => {
-          const locked =
-            stage.stage_number > session.current_stage && !["approved", "skipped", "stale"].includes(stage.status);
+        {session.tasks.map((stage) => {
+          const locked = stage.status === "pending";
           const generating = ["queued", "generating"].includes(stage.status);
           const operation = stage.operation;
           const measurable = Number(operation?.progress_total ?? 0) > 0;
           return (
             <section
-              id={`planning-stage-${stage.stage_number}`}
+              id={`planning-stage-${stage.task_number}`}
               className={`panel planning-stage ${stage.status}`}
               key={stage.id}
             >
               <header>
                 <div>
-                  <span>{stage.stage_number}</span>
-                  <h2>{STAGE_NAMES[stage.stage_number - 1]}</h2>
+                  <span>{stage.task_number}</span>
+                  <h2>{PLANNING_TASK_NAMES[stage.task_number - 1]}</h2>
                 </div>
                 <Chip
                   label={stage.status}
@@ -617,9 +590,9 @@ export function PlanningStudio({
               {stage.status === "stale" && (
                 <Alert
                   severity="warning"
-                  action={<Button onClick={() => void revalidate(stage.stage_number)}>Revalidate</Button>}
+                  action={<Button onClick={() => void revalidate(stage.task_number)}>Revalidate</Button>}
                 >
-                  An approved dependency changed. Canonical data remains active until this stage is redone.
+                  An approved dependency changed. Canonical data remains active until this task is redone.
                 </Alert>
               )}
               {!locked && !["approved", "skipped", "stale"].includes(stage.status) && (
@@ -629,14 +602,14 @@ export function PlanningStudio({
                     multiline
                     minRows={2}
                     label="Human direction (optional)"
-                    value={prompts[stage.stage_number] ?? ""}
-                    disabled={generating || stage.stage_number === 8}
+                    value={prompts[stage.task_number] ?? ""}
+                    disabled={generating || stage.task_number === 8}
                     onChange={(event) => {
-                      dirtyPrompts.current.add(stage.stage_number);
+                      dirtyPrompts.current.add(stage.task_number);
                       document.body.dataset.storyStudioUnsaved = "true";
                       setPrompts({
                         ...prompts,
-                        [stage.stage_number]: event.target.value,
+                        [stage.task_number]: event.target.value,
                       });
                     }}
                   />
@@ -644,7 +617,7 @@ export function PlanningStudio({
                     <Alert
                       severity="warning"
                       action={
-                        <Button startIcon={<AutoFixHighIcon />} onClick={() => void generate(stage.stage_number, true)}>
+                        <Button startIcon={<AutoFixHighIcon />} onClick={() => void generate(stage.task_number, true)}>
                           Ask AI to repair
                         </Button>
                       }
@@ -669,61 +642,61 @@ export function PlanningStudio({
                       variant="outlined"
                       disabled={generating}
                       onClick={() =>
-                        void (STAGE_SECTIONS[stage.stage_number]
-                          ? regenerateSection(stage.stage_number)
-                          : generate(stage.stage_number))
+                        void (PLANNING_TASK_SECTIONS[stage.task_number]
+                          ? regenerateSection(stage.task_number)
+                          : generate(stage.task_number))
                       }
                     >
-                      {stage.stage_number === 8
+                      {stage.task_number === 8
                         ? "Prepare deterministic prompts"
                         : generating
                           ? "AI is working…"
-                          : STAGE_SECTIONS[stage.stage_number]
+                          : PLANNING_TASK_SECTIONS[stage.task_number]
                             ? "Regenerate selected section"
                             : stage.draft
                               ? "Regenerate draft"
                               : "Generate draft"}
                     </Button>
-                    {STAGE_SECTIONS[stage.stage_number] && (
+                    {PLANNING_TASK_SECTIONS[stage.task_number] && (
                       <>
                         <TextField
                           select
                           size="small"
-                          label={stage.stage_number === 4 ? "Stage 4 layer" : "Generate section"}
-                          value={generationSections[stage.stage_number] || STAGE_SECTIONS[stage.stage_number][0]}
+                          label={stage.task_number === 4 ? "Rules layer" : "Generate section"}
+                          value={generationSections[stage.task_number] || PLANNING_TASK_SECTIONS[stage.task_number][0]}
                           disabled={generating}
                           onChange={(event) =>
                             setGenerationSections({
                               ...generationSections,
-                              [stage.stage_number]: event.target.value,
+                              [stage.task_number]: event.target.value,
                             })
                           }
                         >
-                          {STAGE_SECTIONS[stage.stage_number].map((section) => (
+                          {PLANNING_TASK_SECTIONS[stage.task_number].map((section) => (
                             <MenuItem key={section} value={section}>
-                              {stage.stage_number === 4 && section === "stats"
+                              {stage.task_number === 4 && section === "stats"
                                 ? "1. Stats"
-                                : stage.stage_number === 4 && section === "abilities"
+                                : stage.task_number === 4 && section === "abilities"
                                   ? "2. Abilities (after saving stats)"
                                   : humanize(section)}
                             </MenuItem>
                           ))}
                         </TextField>
-                        <Button variant="outlined" disabled={generating} onClick={() => void acceptCurrentSet(stage.stage_number, false)}>
-                          {stage.stage_number === 4 ? "Save selected layer" : "Separate & save current"}
+                        <Button variant="outlined" disabled={generating} onClick={() => void acceptCurrentSet(stage.task_number, false)}>
+                          {stage.task_number === 4 ? "Save selected layer" : "Separate & save current"}
                         </Button>
-                        <Button variant="outlined" disabled={generating} onClick={() => void acceptCurrentSet(stage.stage_number, true)}>
-                          {stage.stage_number === 4 ? "Save layer & generate more" : "Accept & generate more"}
+                        <Button variant="outlined" disabled={generating} onClick={() => void acceptCurrentSet(stage.task_number, true)}>
+                          {stage.task_number === 4 ? "Save layer & generate more" : "Accept & generate more"}
                         </Button>
                       </>
                     )}
-                    <Button disabled={generating} onClick={() => void skip(stage.stage_number)}>
-                      Skip stage
+                    <Button disabled={generating} onClick={() => void skip(stage.task_number)}>
+                      Skip task
                     </Button>
                   </div>
                   {generating && (
                     <Box role="status">
-                      <Typography variant="caption">{operation?.progress_message || "Preparing stage"}</Typography>
+                      <Typography variant="caption">{operation?.progress_message || "Preparing task"}</Typography>
                       <LinearProgress
                         variant={measurable ? "determinate" : "indeterminate"}
                         value={
@@ -737,9 +710,9 @@ export function PlanningStudio({
                       />
                     </Box>
                   )}
-                  <StageEditor
+                  <PlanningTaskEditor
                     stage={stage}
-                    value={drafts[stage.stage_number] ?? "{}"}
+                    value={drafts[stage.task_number] ?? "{}"}
                     disabled={generating}
                     catalogs={catalogs}
                     imagePlans={session.image_plans}
@@ -747,12 +720,12 @@ export function PlanningStudio({
                     setSelectedImages={setSelectedImages}
                     updateImage={updateImage}
                     generateImages={generateImages}
-                    onChange={(value) => markDraft(stage.stage_number, value)}
+                    onChange={(value) => markDraft(stage.task_number, value)}
                   />
                   <div className="button-row">
-                    <Button onClick={() => void saveOrApprove(stage.stage_number, false)}>Save draft</Button>
-                    <Button variant="contained" onClick={() => void saveOrApprove(stage.stage_number, true)}>
-                      Approve stage
+                    <Button onClick={() => void saveOrApprove(stage.task_number, false)}>Save draft</Button>
+                    <Button variant="contained" onClick={() => void saveOrApprove(stage.task_number, true)}>
+                      Approve task
                     </Button>
                   </div>
                 </>
@@ -762,28 +735,28 @@ export function PlanningStudio({
                   <p className="approved-summary">
                     {String(
                       stage.approved?.summary ||
-                        (stage.status === "skipped" ? "Intentionally skipped." : "Approved stage"),
+                        (stage.status === "skipped" ? "Intentionally skipped." : "Approved task"),
                     )}
                   </p>
-                  <Button onClick={() => void inspectReopen(stage.stage_number)}>Redo stage</Button>
+                  <Button onClick={() => void inspectReopen(stage.task_number)}>Redo task</Button>
                 </>
               )}
-              {locked && <p className="muted">Approve or skip the previous stage to unlock this one.</p>}
+              {locked && <p className="muted">Complete this task's dependencies to unlock it.</p>}
             </section>
           );
         })}
       </div>
       <Dialog open={reopenStage !== null} onClose={() => setReopenStage(null)}>
-        <DialogTitle>Redo stage {reopenStage}?</DialogTitle>
+        <DialogTitle>Redo task {reopenStage}?</DialogTitle>
         <DialogContent>
           <p>The current canonical data stays active while you edit.</p>
-          {impact?.affected_stages.length ? (
+          {impact?.affected_tasks.length ? (
             <Alert severity="warning">
-              If published data changes, these stages may become stale:{" "}
-              {impact.affected_stages.map((item) => STAGE_NAMES[item.stage_number - 1]).join(", ")}.
+              If published data changes, these tasks may become stale:{" "}
+              {impact.affected_tasks.map((item) => PLANNING_TASK_NAMES[item.task_number - 1]).join(", ")}.
             </Alert>
           ) : (
-            <Alert severity="info">No later approved stage currently depends on this stage.</Alert>
+            <Alert severity="info">No later approved task currently depends on this task.</Alert>
           )}
         </DialogContent>
         <DialogActions>
@@ -860,7 +833,7 @@ export function PlanningStudio({
         </DialogActions>
       </Dialog>
       <Dialog open={automationOpen} onClose={() => setAutomationOpen(false)}>
-        <DialogTitle>Automate remaining stages</DialogTitle>
+        <DialogTitle>Automate remaining tasks</DialogTitle>
         <DialogContent>
           <TextField
             fullWidth
@@ -869,7 +842,7 @@ export function PlanningStudio({
             label="Shared direction"
             value={automationPrompt}
             onChange={(event) => setAutomationPrompt(event.target.value)}
-            helperText="Automation stops for malformed drafts or conflicts and prepares, but never generates, stage-8 images."
+            helperText="Automation stops for malformed drafts or conflicts and prepares, but never generates, image-task assets."
           />
         </DialogContent>
         <DialogActions>
@@ -878,7 +851,7 @@ export function PlanningStudio({
             variant="contained"
             onClick={() => {
               setAutomationOpen(false);
-              void generate(session.current_stage, false, true, automationPrompt);
+              void generate(session.current_task, false, true, automationPrompt);
             }}
           >
             Start
@@ -911,7 +884,55 @@ export function PlanningStudio({
   );
 }
 
-function StageEditor({
+function PlanningDagEditor({ session, reload, fail }: {
+  session: PlanningGenerationPlanView;
+  reload: () => Promise<void>;
+  fail: (message: string) => void;
+}) {
+  async function save(taskKey: string, dependencyKeys: string[]) {
+    try {
+      await api(`/generation-plans/${session.id}/tasks/${taskKey}/dependencies`, {
+        method: "PUT",
+        body: JSON.stringify({
+          dependencies: dependencyKeys.map((key) => ({
+            task_key: key,
+            required_state: "committed",
+          })),
+        }),
+      });
+      await reload();
+    } catch (cause) {
+      fail(message(cause));
+    }
+  }
+  return (
+    <details className="panel planning-dag-editor">
+      <summary><b>Task dependency graph</b></summary>
+      <p className="muted">Tasks may depend on any other task. Cycles and missing references are rejected by the plan owner.</p>
+      <div className="planning-card-fields">
+        {session.tasks.map((task) => {
+          const options = session.tasks.filter((candidate) => candidate.task_key !== task.task_key);
+          const selected = options.filter((candidate) =>
+            task.dependencies.some((dependency) => dependency.task_key === candidate.task_key),
+          );
+          return (
+            <BoxedMultiselectFilter
+              key={task.task_key}
+              label={`${task.task_number}. ${PLANNING_TASK_NAMES[task.task_number - 1]} depends on`}
+              options={options}
+              value={selected}
+              getOptionLabel={(item: PlanningTask) => `${item.task_number}. ${PLANNING_TASK_NAMES[item.task_number - 1]}`}
+              isOptionEqualToValue={(left: PlanningTask, right: PlanningTask) => left.task_key === right.task_key}
+              onChange={(_event, next) => void save(task.task_key, next.map((item: PlanningTask) => item.task_key))}
+            />
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
+function PlanningTaskEditor({
   stage,
   value,
   disabled,
@@ -923,7 +944,7 @@ function StageEditor({
   generateImages,
   onChange,
 }: {
-  stage: PlanningStage;
+  stage: PlanningTask;
   value: string;
   disabled: boolean;
   catalogs: Catalogs;
@@ -944,7 +965,7 @@ function StageEditor({
         multiline
         minRows={12}
         error
-        label="Invalid stage JSON"
+        label="Invalid task JSON"
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
@@ -958,7 +979,7 @@ function StageEditor({
         fullWidth
         multiline
         minRows={2}
-        label="Stage summary"
+        label="Task summary"
         disabled={disabled}
         value={draft.summary ?? ""}
         onChange={(event) => set("summary", event.target.value)}
@@ -969,10 +990,10 @@ function StageEditor({
         value={strings(draft.notes)}
         onChange={(_event, next) => set("notes", next)}
       />
-      {stage.stage_number === 1 && (
+      {stage.task_number === 1 && (
         <FoundationEditor value={draft.foundation ?? {}} onChange={(foundation) => set("foundation", foundation)} />
       )}
-      {stage.stage_number === 2 && (
+      {stage.task_number === 2 && (
         <>
           <MapPreview locations={array(draft.locations)} routes={array(draft.routes)} />
           <ResourceListEditor
@@ -1004,7 +1025,7 @@ function StageEditor({
           />
         </>
       )}
-      {stage.stage_number === 3 && (
+      {stage.task_number === 3 && (
         <>
           <MapPreview locations={array(draft.locations)} routes={array(draft.routes)} />
           <ResourceListEditor
@@ -1029,7 +1050,7 @@ function StageEditor({
           />
         </>
       )}
-      {stage.stage_number === 4 && (
+      {stage.task_number === 4 && (
         <>
           <ResourceListEditor
             title="Lore systems"
@@ -1077,7 +1098,7 @@ function StageEditor({
           />
         </>
       )}
-      {stage.stage_number === 5 && (
+      {stage.task_number === 5 && (
         <>
           <ResourceListEditor
             title="Characters"
@@ -1105,7 +1126,7 @@ function StageEditor({
           />
         </>
       )}
-      {stage.stage_number === 6 && (
+      {stage.task_number === 6 && (
         <>
           <JsonCollection
             title="Character updates"
@@ -1167,8 +1188,8 @@ function StageEditor({
           />
         </>
       )}
-      {stage.stage_number === 7 && <RuntimeEditor draft={draft} update={update} catalogs={catalogs} />}
-      {stage.stage_number === 8 && (
+      {stage.task_number === 7 && <RuntimeEditor draft={draft} update={update} catalogs={catalogs} />}
+      {stage.task_number === 8 && (
         <ImagePlanEditor
           plans={imagePlans}
           workflows={catalogs.workflows}
@@ -1178,9 +1199,9 @@ function StageEditor({
           generate={generateImages}
         />
       )}
-      {stage.stage_number !== 8 && (
+      {stage.task_number !== 8 && (
         <details>
-          <summary>Advanced stage JSON</summary>
+          <summary>Advanced task JSON</summary>
           <TextField
             fullWidth
             multiline
@@ -1997,77 +2018,6 @@ function ImagePlanEditor({
   );
 }
 
-function clearCurrentSection(stage: number, focus: string, draft: any): any {
-  const next = structuredClone(draft);
-  const blank = emptyStage(stage);
-  for (const field of STAGE_SECTION_FIELDS[stage]?.[focus] ?? [focus]) next[field] = structuredClone(blank[field]);
-  return next;
-}
-
-function emptyStage(stage: number): any {
-  const common = { summary: "", notes: [] };
-  return stage === 1
-    ? {
-        ...common,
-        foundation: {
-          premise: "",
-          genres: [],
-          themes: [],
-          tone: "",
-          style: "",
-          world_description: "",
-          character_description: "",
-          narration_mode: "third_limited",
-          pov_strategy: "first_player",
-        },
-      }
-    : stage === 2
-      ? {
-          ...common,
-          locations: [],
-          routes: [],
-          factions: [],
-          weather: [],
-          weather_transitions: [],
-          initial_weather_key: "",
-        }
-      : stage === 3
-        ? { ...common, locations: [], routes: [] }
-        : stage === 4
-          ? { ...common, lore_systems: [], stats: [], abilities: [], items: [] }
-          : stage === 5
-            ? {
-                ...common,
-                characters: [],
-                factions: [],
-                facts: [],
-                default_pov_character_key: "",
-              }
-            : stage === 6
-              ? {
-                  ...common,
-                  character_updates: [],
-                  outfits: [],
-                  relationships: [],
-                  routines: [],
-                  facts: [],
-                  plot_beats: [],
-                }
-              : stage === 7
-                ? {
-                    ...common,
-                    minigames: [],
-                    bullethell: { mode_ids: [], skill_ids: [], attack_ids: [] },
-                    ambient: [],
-                    music: {
-                      mode: "disabled",
-                      enabled_theme_ids: [],
-                      manual_theme_id: null,
-                    },
-                    recommendations: [],
-                  }
-                : { ...common, assets: [] };
-}
 const array = (value: unknown): any[] => (Array.isArray(value) ? value : []);
 const strings = (value: unknown): string[] => (Array.isArray(value) ? value.map(String) : []);
 function replace(items: any[], index: number, item: any, onChange: (items: any[]) => void) {

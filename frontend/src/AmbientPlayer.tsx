@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FormControlLabel, Slider, Switch } from "@mui/material";
 import { api } from "./api";
-import type { SceneEnvironment, UserAmbientPreferences } from "./types";
+import type { NoiseEvent, SceneEnvironment, UserAmbientPreferences, UserNoisePreferences } from "./types";
 
 type Playing = { audio: HTMLAudioElement; gain: number; target: number };
 
@@ -56,7 +56,8 @@ export function AmbientPlayer({ projectId, revision, onScene }: { projectId: str
 
 export function AmbientPreferences({ fail }: { fail: (message: string) => void }) {
   const [prefs, setPrefs] = useState<UserAmbientPreferences>({ enabled: true, master_volume: 1 });
-  useEffect(() => { void api<UserAmbientPreferences>("/preferences/ambient").then(setPrefs).catch(cause => fail(String(cause))); }, [fail]);
+  const [noisePrefs, setNoisePrefs] = useState<UserNoisePreferences>({ enabled: true, master_volume: 1 });
+  useEffect(() => { void Promise.all([api<UserAmbientPreferences>("/preferences/ambient"), api<UserNoisePreferences>("/preferences/noises")]).then(([ambient, noises]) => { setPrefs(ambient); setNoisePrefs(noises); }).catch(cause => fail(String(cause))); }, [fail]);
   async function save(next: UserAmbientPreferences) {
     setPrefs(next);
     try {
@@ -64,10 +65,60 @@ export function AmbientPreferences({ fail }: { fail: (message: string) => void }
       window.dispatchEvent(new Event("storystudio-ambient-preferences"));
     } catch (cause) { fail(String(cause)); }
   }
+  async function saveNoises(next: UserNoisePreferences) {
+    setNoisePrefs(next);
+    try {
+      setNoisePrefs(await api("/preferences/noises", { method: "PUT", body: JSON.stringify(next) }));
+      window.dispatchEvent(new Event("storystudio-noise-preferences"));
+    } catch (cause) { fail(String(cause)); }
+  }
   return <section className="ambient-preferences">
     <h3>Ambient sound</h3>
     <p>Separate looping environment sounds. Music settings are unaffected.</p>
     <FormControlLabel control={<Switch checked={prefs.enabled} onChange={event => void save({ ...prefs, enabled: event.target.checked })} />} label="Enable ambient sound" />
     <label>Master ambient volume<Slider min={0} max={1} step={.05} value={prefs.master_volume} onChange={(_, value) => setPrefs({ ...prefs, master_volume: Number(value) })} onChangeCommitted={(_, value) => void save({ ...prefs, master_volume: Number(value) })} /></label>
+    <h3>Story noises</h3>
+    <p>Separate one-shot effects requested by the story or minigames.</p>
+    <FormControlLabel control={<Switch checked={noisePrefs.enabled} onChange={event => void saveNoises({ ...noisePrefs, enabled: event.target.checked })} />} label="Enable story noises" />
+    <label>Noise volume<Slider min={0} max={1} step={.05} value={noisePrefs.master_volume} onChange={(_, value) => setNoisePrefs({ ...noisePrefs, master_volume: Number(value) })} onChangeCommitted={(_, value) => void saveNoises({ ...noisePrefs, master_volume: Number(value) })} /></label>
   </section>;
+}
+
+export function NoisePlayer({ projectId }: { projectId: string }) {
+  const preferences = useRef<UserNoisePreferences>({ enabled: true, master_volume: 1 });
+  const pending = useRef<NoiseEvent[]>([]);
+  useEffect(() => {
+    const load = () => void api<UserNoisePreferences>("/preferences/noises").then(value => { preferences.current = value; });
+    const playNow = (noise: NoiseEvent, retry = true) => {
+      const prefs = preferences.current;
+      if (noise.project_id !== projectId || !prefs.enabled) return;
+      const audio = new Audio(noise.url);
+      audio.preload = "auto";
+      audio.playbackRate = noise.playback_rate;
+      audio.volume = Math.max(0, Math.min(1, noise.gain * prefs.master_volume));
+      void audio.play().catch(() => { if (retry) pending.current.push(noise); });
+    };
+    const play = (raw: Event) => {
+      const event = raw as CustomEvent<NoiseEvent>;
+      const noise = event.detail;
+      if (noise) playNow(noise);
+    };
+    const flush = () => {
+      const queued = pending.current.splice(0);
+      queued.forEach((noise) => playNow(noise, false));
+    };
+    load();
+    window.addEventListener("storystudio-noise", play);
+    window.addEventListener("storystudio-noise-preferences", load);
+    window.addEventListener("pointerdown", flush);
+    window.addEventListener("keydown", flush);
+    return () => {
+      window.removeEventListener("storystudio-noise", play);
+      window.removeEventListener("storystudio-noise-preferences", load);
+      window.removeEventListener("pointerdown", flush);
+      window.removeEventListener("keydown", flush);
+      pending.current = [];
+    };
+  }, [projectId]);
+  return null;
 }

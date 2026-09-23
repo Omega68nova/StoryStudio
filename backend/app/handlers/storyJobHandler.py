@@ -652,6 +652,10 @@ class StoryJobHandler(BaseJobHandler):
             context.project_id,
             routine_mutations,
         )
+        await environment.sound.apply_story_mutations(
+            context.project_id,
+            routine_mutations,
+        )
 
         result = {
             "story_node_id": assistant["id"],

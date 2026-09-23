@@ -5,8 +5,10 @@ from typing import Any, Iterable
 from app.data.dataProvider import DataProvider
 from app.services.batchCommit import BatchTaskCommitter
 from app.services.batchGeneration import (
+    GenerationDependency,
     GenerationPlanDefinition,
     GenerationPlanError,
+    GenerationTaskDefinition,
     descendant_keys,
     ready_task_keys,
 )
@@ -70,6 +72,62 @@ class BatchGenerationManager:
 
     def list_plans(self, project_id: str) -> list[dict[str, Any]]:
         return self.repo.plans_for_project(project_id)
+
+    def _validate_edit(self, plan_id: str, *, replacement: tuple[str, dict[str, Any]] | None = None,
+                       addition: dict[str, Any] | None = None, removed: str | None = None,
+                       dependencies: tuple[str, list[dict[str, str]]] | None = None) -> None:
+        plan = self.get_plan(plan_id)
+        definitions: list[GenerationTaskDefinition] = []
+        for row in plan["tasks"]:
+            if row["task_key"] == removed: continue
+            value = replacement[1] if replacement and replacement[0] == row["task_key"] else row
+            deps = dependencies[1] if dependencies and dependencies[0] == row["task_key"] else row.get("dependencies", [])
+            definitions.append(GenerationTaskDefinition(
+                key=row["task_key"], label=value.get("label", ""), generator_kind=value["generator_kind"],
+                target_kind=value["target_kind"], target_key=value.get("target_key"), prompt=value.get("prompt") or {}, settings=value.get("settings") or {},
+                dependencies=[GenerationDependency(item["task_key"], item.get("required_state", "generated")) for item in deps],
+            ))
+        if addition:
+            definitions.append(GenerationTaskDefinition(
+                key=addition["task_key"], label=addition.get("label", ""), generator_kind=addition["generator_kind"],
+                target_kind=addition["target_kind"], target_key=addition.get("target_key"), prompt=addition.get("prompt") or {}, settings=addition.get("settings") or {},
+                dependencies=[GenerationDependency(item["task_key"], item.get("required_state", "generated")) for item in addition.get("dependencies", [])],
+            ))
+        GenerationPlanDefinition(name=plan["name"], tasks=definitions).validate()
+
+    def create_task(self, plan_id: str, task: dict[str, Any]) -> dict[str, Any]:
+        self._validate_edit(plan_id, addition=task)
+        self.repo.create_task(plan_id, task)
+        self.repo.replace_dependencies(plan_id, task["task_key"], task.get("dependencies", []))
+        return self.get_plan(plan_id)
+
+    def update_task(self, plan_id: str, task_key: str, patch: dict[str, Any]) -> dict[str, Any]:
+        current = self.repo.task(plan_id, task_key)
+        if not current: raise GenerationPlanError(f"Generation task not found: {task_key}")
+        if current.get("active_job_id") or current["status"] in {"queued", "running"}: raise GenerationPlanError("Cancel the active task before editing it")
+        value = {**current, **patch}
+        self._validate_edit(plan_id, replacement=(task_key, value))
+        self.repo.update_task_definition(plan_id, task_key, value)
+        plan = self.get_plan(plan_id)
+        deps = {item["task_key"]: item["dependencies"] for item in plan["tasks"]}
+        self.repo.mark_stale(plan_id, [task_key, *descendant_keys(task_key, deps)])
+        return self.get_plan(plan_id)
+
+    def replace_dependencies(self, plan_id: str, task_key: str, dependencies: list[dict[str, str]]) -> dict[str, Any]:
+        self._validate_edit(plan_id, dependencies=(task_key, dependencies))
+        self.repo.replace_dependencies(plan_id, task_key, dependencies)
+        plan = self.get_plan(plan_id)
+        deps = {item["task_key"]: item["dependencies"] for item in plan["tasks"]}
+        self.repo.mark_stale(plan_id, [task_key, *descendant_keys(task_key, deps)])
+        return self.get_plan(plan_id)
+
+    def delete_task(self, plan_id: str, task_key: str) -> dict[str, Any]:
+        current = self.repo.task(plan_id, task_key)
+        if not current: raise GenerationPlanError(f"Generation task not found: {task_key}")
+        if current.get("active_job_id") or current["status"] in {"queued", "running"}: raise GenerationPlanError("Cancel the active task before deleting it")
+        self._validate_edit(plan_id, removed=task_key)
+        self.repo.delete_task(plan_id, task_key)
+        return self.get_plan(plan_id)
 
     def queue_task(self, plan_id: str, task_key: str, *,
                    requested_by_user_id: str | None = None,

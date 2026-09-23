@@ -335,7 +335,16 @@ export function RulesStudio({
               >
                 <MenuItem value="self">Self</MenuItem>
                 <MenuItem value="character">Character</MenuItem>
+                <MenuItem value="choice">Chosen character</MenuItem>
                 <MenuItem value="relationship">Relationship</MenuItem>
+                <MenuItem value="location">Location</MenuItem>
+                <MenuItem value="all">Everyone present</MenuItem>
+                <MenuItem value="party">Party</MenuItem>
+                <MenuItem value="allies">Allies</MenuItem>
+                <MenuItem value="enemies">Enemies</MenuItem>
+                <MenuItem value="nearby_enemies">Nearby enemies</MenuItem>
+                <MenuItem value="faction_members">Nearby faction members</MenuItem>
+                <MenuItem value="random">One resolved random target</MenuItem>
               </TextField>
               <TextField
                 multiline

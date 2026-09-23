@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from app.database import Database, new_id, utc_now
+from app.domain.world import ActionEffect, RequirementExpression
 from app.services.world import WorldValidationError
 
 
@@ -325,24 +326,29 @@ def validate_stage(stage_number: int, draft: dict[str, Any], settings: dict[str,
             invalid_aliases = [f"'{wrong}' (use '{right}')" for wrong, right in aliases.items() if wrong in ability]
             if invalid_aliases:
                 raise WorldValidationError(f"Ability '{ability_name}' uses unsupported field(s): {', '.join(invalid_aliases)}")
-            if ability.get("target_type", "self") not in {"self", "character", "relationship"}:
-                raise WorldValidationError(f"Ability '{ability_name}' has invalid target_type; use self, character, or relationship")
+            if ability.get("target_type", "self") not in {"self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"}:
+                raise WorldValidationError(f"Ability '{ability_name}' has invalid target_type")
             if not isinstance(ability.get("costs", {}), dict) or not isinstance(ability.get("effects", []), list):
                 raise WorldValidationError(f"Ability '{ability_name}' requires a costs object and an effects array")
+            try:
+                RequirementExpression.model_validate(ability.get("requirements", {}))
+            except ValueError as exc:
+                raise WorldValidationError(f"Ability '{ability_name}' has invalid requirements: {exc}") from exc
             for index, effect in enumerate(ability.get("effects", []), start=1):
                 if not isinstance(effect, dict):
                     raise WorldValidationError(f"Ability '{ability_name}' effect {index} must be an object")
-                if effect.get("target", "target") not in {"actor", "target"}:
-                    raise WorldValidationError(f"Ability '{ability_name}' effect {index} target must be actor or target")
-                if effect.get("operation", "add") not in {"add", "subtract", "set"}:
-                    raise WorldValidationError(f"Ability '{ability_name}' effect {index} operation must be add, subtract, or set")
-                if not str(effect.get("stat_key") or "").strip():
+                if effect.get("target", "target") not in {"actor", "target", "party", "location", "nearby_enemies", "faction_members", "relationship_target", "allies", "enemies", "all", "random"}:
+                    raise WorldValidationError(f"Ability '{ability_name}' effect {index} has invalid target")
+                operation = effect.get("operation", "add")
+                if operation not in {"add", "subtract", "set", "multiply", "move", "create", "remove", "apply_status", "reveal_knowledge", "change_relationship", "advance_time", "play_noise"}:
+                    raise WorldValidationError(f"Ability '{ability_name}' effect {index} has invalid operation")
+                if operation in {"add", "subtract", "set", "multiply"} and not str(effect.get("stat_key") or "").strip():
                     raise WorldValidationError(f"Ability '{ability_name}' effect {index} requires stat_key")
                 try:
-                    float(effect.get("amount", 0))
+                    ActionEffect.model_validate(effect)
                 except (TypeError, ValueError) as exc:
                     raise WorldValidationError(
-                        f"Ability '{ability_name}' effect {index} amount must be a fixed number; stat formulas are not supported"
+                        f"Ability '{ability_name}' effect {index} is invalid: {exc}"
                     ) from exc
     if stage_number == 7:
         mode = (draft.get("music") or {}).get("mode", "disabled")

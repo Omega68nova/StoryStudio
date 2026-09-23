@@ -148,6 +148,14 @@ export function useLiveEvents(options: LiveEventOptions): void {
         ) {
           current.onMusicChanged?.(event.payload);
         }
+
+        if (event.type === "noise") {
+          window.dispatchEvent(
+            new CustomEvent("storystudio-noise", {
+              detail: event.payload,
+            }),
+          );
+        }
       };
 
       socket.onerror = () => {

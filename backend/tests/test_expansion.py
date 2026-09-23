@@ -95,7 +95,7 @@ def test_relationship_ability_uses_relation_event_key_and_validates_operation(tm
     assert use[0].arguments["effects"][0]["relation_id"] == relation_id
     world.commit_root(project["id"], use, provenance="author", summary="charm")
     assert world.projection(project["id"])["relations"][relation_id]["stats"]["favorability"] == 5
-    db.execute("UPDATE ability_definitions SET effects_json = '[{\"stat_key\":\"favorability\",\"operation\":\"multiply\",\"amount\":2}]' WHERE project_id = ?", (project["id"],))
+    db.execute("UPDATE ability_definitions SET effects_json = '[{\"stat_key\":\"favorability\",\"operation\":\"unsupported\",\"amount\":2}]' WHERE project_id = ?", (project["id"],))
     with pytest.raises(WorldValidationError, match="operation"):
         world.normalize_mutations(project["id"], None, [{"tool": "useAbility", "arguments": {"actor_id": actor, "target_id": relation_id, "ability_key": "charm"}}], provenance="author")
 
