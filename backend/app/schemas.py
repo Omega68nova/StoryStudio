@@ -190,6 +190,18 @@ class RuntimeSettingsUpdate(BaseModel):
     context_tokens: int = Field(default=8192, ge=2048, le=131072)
     planning_context_tokens: int | None = Field(default=None, ge=2048, le=131072)
     memory_provider: Literal["builtin", "cognee"] = "builtin"
+    portrait_prompt_prefix: str = Field(
+        default="portrait, anime style, full color, clean lineart, soft shading, looking at viewer, simple background, white background,",
+        max_length=4000,
+    )
+    full_body_prompt_prefix: str = Field(
+        default="full body, standing, anime style, full color, clean lineart, soft shading, looking at viewer, simple background, white background,",
+        max_length=4000,
+    )
+    icon_prompt_prefix: str = Field(
+        default="(((no humans))),simple background, white background,",
+        max_length=4000,
+    )
 
     @model_validator(mode="after")
     def planning_context_covers_story_context(self) -> "RuntimeSettingsUpdate":

@@ -128,6 +128,9 @@ export type RuntimeSettings = {
   context_tokens: number;
   planning_context_tokens: number;
   memory_provider: "builtin" | "cognee";
+  portrait_prompt_prefix: string;
+  full_body_prompt_prefix: string;
+  icon_prompt_prefix: string;
 };
 
 export type LoreCard = {

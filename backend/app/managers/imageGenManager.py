@@ -45,18 +45,18 @@ class FullBodySizing:
 
     `height_factor` is normalized 0..1:
       0.0 -> child_height
-      1.0 -> adult_height
+      1.0 -> tall_height
     """
 
     width: int = 784
     child_height: int = 1552
-    adult_height: int = 2048
+    tall_height: int = 2048
 
     def size(self, height_factor: float) -> tuple[int, int]:
         factor = min(1.0, max(0.0, float(height_factor)))
         height = round(
             self.child_height
-            + ((self.adult_height - self.child_height) * factor)
+            + ((self.tall_height - self.child_height) * factor)
         )
         # Keep dimensions divisible by 8 for common latent image pipelines.
         height = max(64, int(round(height / 8) * 8))
@@ -77,7 +77,7 @@ class ManagedImageRequest:
     kind: ImageKind
     prompt: str
     negative_prompt: str = ""
-    full_body_height_factor: float = 1.0
+    full_body_height_factor: float = 0.5
     seed: int | None = None
     steps: int | None = None
     guidance: float | None = None
@@ -115,7 +115,7 @@ class ImageManager:
         self,
         kind: ImageKind,
         *,
-        full_body_height_factor: float = 1.0,
+        full_body_height_factor: float = 0.5,
     ) -> ImageProfile:
         if kind == ImageKind.PORTRAIT:
             return ImageProfile(

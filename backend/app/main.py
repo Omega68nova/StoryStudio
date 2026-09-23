@@ -2012,8 +2012,30 @@ async def generate_entity_media(asset_id: str, request: ImageGenerateRequest) ->
         values["prompt"], references = expand_image_prompt(db, scheduler.world, asset["project_id"], head_node_id, template_prompt)
     except ImagePromptReferenceError as exc:
         raise HTTPException(422, str(exc)) from exc
-    payload = {"media_asset_id": asset_id, "preset_id": request.workflow_preset_id, "values": values,
-               "template_prompt": template_prompt, "prompt_references": references}
+    semantic_kind = "background" if asset["kind"] == "location" else asset["kind"]
+    full_body_height_factor = None
+    if semantic_kind == "full_body":
+        entity = scheduler.world.projection(
+            asset["project_id"],
+            use_cache=False,
+        )["entities"].get(asset["entity_id"])
+        state = (entity or {}).get("state", {})
+        raw_factor = state.get("full_body_height_factor", state.get("height_factor"))
+        if raw_factor is not None:
+            try:
+                full_body_height_factor = max(0.0, min(1.0, float(raw_factor)))
+            except (TypeError, ValueError):
+                full_body_height_factor = None
+
+    payload = {
+        "media_asset_id": asset_id,
+        "preset_id": request.workflow_preset_id,
+        "values": values,
+        "template_prompt": template_prompt,
+        "prompt_references": references,
+        "image_kind": semantic_kind,
+        "full_body_height_factor": full_body_height_factor,
+    }
     job = db.create_job(asset["project_id"], "image", payload)
     db.execute("UPDATE entity_media_assets SET status = 'queued', updated_at = ? WHERE id = ?", (utc_now(), asset_id))
     await scheduler.enqueue(job["id"])
@@ -3338,7 +3360,8 @@ async def update_settings(request: RuntimeSettingsUpdate) -> dict[str, Any]:
     db.execute(
         "UPDATE runtime_settings SET llama_executable = ?, storyteller_model_path = ?, "
         "storyteller_model_id = ?, llama_url = ?, llama_extra_args_json = ?, comfy_command_json = ?, "
-        "comfy_workdir = ?, comfy_url = ?, context_tokens = ?, planning_context_tokens = ?, memory_provider = ?, updated_at = ? WHERE id = 1",
+        "comfy_workdir = ?, comfy_url = ?, context_tokens = ?, planning_context_tokens = ?, memory_provider = ?, "
+        "portrait_prompt_prefix = ?, full_body_prompt_prefix = ?, icon_prompt_prefix = ?, updated_at = ? WHERE id = 1",
         (
             values["llama_executable"],
             values["storyteller_model_path"],
@@ -3351,6 +3374,9 @@ async def update_settings(request: RuntimeSettingsUpdate) -> dict[str, Any]:
             values["context_tokens"],
             values["planning_context_tokens"],
             values["memory_provider"],
+            values["portrait_prompt_prefix"],
+            values["full_body_prompt_prefix"],
+            values["icon_prompt_prefix"],
             utc_now(),
         ),
     )
