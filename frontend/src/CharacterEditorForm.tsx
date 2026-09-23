@@ -60,9 +60,18 @@ type Props = {
   deleteOutfit: (value: Outfit) => Promise<void>;
   activateOutfit: (value: Outfit) => Promise<void>;
   upload: (kind: "portrait" | "full_body", outfitId: string | null, file: File) => Promise<void>;
-  regenerate: (asset: MediaAsset, differentPrompt: boolean) => Promise<void>;
+  generateMedia: (
+    kind: "portrait" | "full_body",
+    outfitId: string | null,
+    differentPrompt: boolean,
+    asset?: MediaAsset | null,
+  ) => Promise<void>;
   removeMedia: (value: MediaAsset) => Promise<void>;
   setStat: (key: string, value: number) => Promise<void>;
+  updateStatDefinition: (
+    definition: StatDefinition,
+    patch: Partial<Pick<StatDefinition, "minimum" | "maximum">>,
+  ) => Promise<void>;
   createRelationship: (relation: string, targetId: string, bidirectional: boolean) => Promise<void>;
   removeRelationship: (relation: WorldRelationship) => Promise<void>;
 };
@@ -85,9 +94,10 @@ export function CharacterEditorForm({
   deleteOutfit,
   activateOutfit,
   upload,
-  regenerate,
+  generateMedia,
   removeMedia,
   setStat,
+  updateStatDefinition,
   createRelationship,
   removeRelationship,
 }: Props) {
@@ -199,8 +209,10 @@ export function CharacterEditorForm({
         alt={`${draft.name || "Character"} portrait`}
         className="character-portrait-surface"
         placeholder="Portrait"
-        onRegenerate={asset => void regenerate(asset, false)}
-        onRegenerateWithPrompt={asset => void regenerate(asset, true)}
+        onGenerate={() => void generateMedia("portrait", viewOutfitId || null, false, portrait)}
+        onGenerateWithPrompt={() => void generateMedia("portrait", viewOutfitId || null, true, portrait)}
+        onRegenerate={asset => void generateMedia("portrait", viewOutfitId || null, false, asset)}
+        onRegenerateWithPrompt={asset => void generateMedia("portrait", viewOutfitId || null, true, asset)}
         onDelete={asset => void removeMedia(asset)}
         onUpload={draft.id ? file => void upload("portrait", viewOutfitId || null, file) : undefined}
       />
@@ -208,6 +220,7 @@ export function CharacterEditorForm({
         definitions={stats}
         values={character?.stats ?? {}}
         onSetStat={setStat}
+        onUpdateDefinition={updateStatDefinition}
       />
     </aside>
 
@@ -634,8 +647,10 @@ export function CharacterEditorForm({
         alt={`${draft.name || "Character"} full body`}
         className="character-fullbody-surface"
         placeholder="Full body"
-        onRegenerate={asset => void regenerate(asset, false)}
-        onRegenerateWithPrompt={asset => void regenerate(asset, true)}
+        onGenerate={() => void generateMedia("full_body", viewOutfitId || null, false, fullBody)}
+        onGenerateWithPrompt={() => void generateMedia("full_body", viewOutfitId || null, true, fullBody)}
+        onRegenerate={asset => void generateMedia("full_body", viewOutfitId || null, false, asset)}
+        onRegenerateWithPrompt={asset => void generateMedia("full_body", viewOutfitId || null, true, asset)}
         onDelete={asset => void removeMedia(asset)}
         onUpload={draft.id ? file => void upload("full_body", viewOutfitId || null, file) : undefined}
       />
@@ -687,21 +702,37 @@ function CharacterStatRail({
   definitions,
   values,
   onSetStat,
+  onUpdateDefinition,
 }: {
   definitions: StatDefinition[];
   values: Record<string, number>;
   onSetStat: (key: string, value: number) => Promise<void>;
+  onUpdateDefinition: (
+    definition: StatDefinition,
+    patch: Partial<Pick<StatDefinition, "minimum" | "maximum">>,
+  ) => Promise<void>;
 }) {
-  const [editing, setEditing] = useState<string | null>(null);
-  const [input, setInput] = useState("");
+  const [editing, setEditing] = useState<{
+    id: string;
+    value: string;
+    save: (value: number) => Promise<void>;
+  } | null>(null);
 
   const definitionsByKey = useMemo(
     () => Object.fromEntries(definitions.map(item => [item.stat_key, item])),
     [definitions],
   );
 
+  const isRanged = (definition: StatDefinition) =>
+    definition.display_style === "bar"
+    || Boolean(definition.maximum_stat_key)
+    || Boolean(definition.minimum_stat_key)
+    || /^(hp|mp|health|mana|stamina|energy)$/i.test(definition.stat_key);
+
   const ordered = useMemo(() => {
-    const known = definitions.filter(item => item.scope === "character" && item.stat_key in values);
+    const known = definitions.filter(
+      item => item.scope === "character" && item.stat_key in values,
+    );
     const missingDefinitions = Object.keys(values)
       .filter(key => !definitionsByKey[key])
       .map(key => ({
@@ -715,7 +746,11 @@ function CharacterStatRail({
         integer_only: 0,
         visibility: "public",
       } as StatDefinition));
-    return [...known, ...missingDefinitions];
+
+    return [...known, ...missingDefinitions].sort((a, b) => {
+      const ranged = Number(isRanged(b)) - Number(isRanged(a));
+      return ranged || a.label.localeCompare(b.label);
+    });
   }, [definitions, definitionsByKey, values]);
 
   function bounds(definition: StatDefinition) {
@@ -730,26 +765,80 @@ function CharacterStatRail({
     return { minimum, maximum, minKey, maxKey };
   }
 
-  async function commit(definition: StatDefinition) {
-    const value = Number(input);
+  function beginEdit(
+    id: string,
+    value: number,
+    save: (next: number) => Promise<void>,
+  ) {
+    setEditing({ id, value: String(value), save });
+  }
+
+  async function finishEdit() {
+    if (!editing) return;
+    const current = editing;
     setEditing(null);
+    const value = Number(current.value);
     if (!Number.isFinite(value)) return;
-    await onSetStat(definition.stat_key, value);
+    await current.save(value);
+  }
+
+  function chip(
+    id: string,
+    label: string,
+    value: number,
+    save: (next: number) => Promise<void>,
+    title?: string,
+  ) {
+    if (editing?.id === id) {
+      return <TextField
+        key={id}
+        className="character-stat-editor"
+        size="small"
+        autoFocus
+        type="number"
+        label={label}
+        value={editing.value}
+        onChange={event => setEditing({ ...editing, value: event.target.value })}
+        onBlur={() => void finishEdit()}
+        onKeyDown={event => {
+          if (event.key === "Enter") void finishEdit();
+          if (event.key === "Escape") setEditing(null);
+        }}
+      />;
+    }
+    return <Tooltip key={id} title={title ?? `${label}: ${value}`} arrow>
+      <button
+        type="button"
+        className="character-stat-chip"
+        onClick={() => beginEdit(id, value, save)}
+      >
+        <span className="character-stat-chip-label">{label}</span>
+        <span className="character-stat-chip-value">{value}</span>
+      </button>
+    </Tooltip>;
   }
 
   return <div className="character-stat-box">
     <div className="character-stat-grid">
       {ordered.map(definition => {
-        const value = Number(values[definition.stat_key] ?? definition.default_value ?? 0);
-        const { minimum, maximum, minKey, maxKey } = bounds(definition);
-        const span = maximum - minimum;
-        const ratio = span > 0 ? Math.max(0, Math.min(1, (value - minimum) / span)) : 0;
-        const bar = definition.display_style === "compact" ? false : Boolean(
-          definition.display_style === "bar"
-          || definition.maximum_stat_key
-          || definition.minimum_stat_key
-          || /^(hp|mp|health|mana|stamina|energy)$/i.test(definition.stat_key)
+        const value = Number(
+          values[definition.stat_key] ?? definition.default_value ?? 0,
         );
+        const { minimum, maximum, minKey, maxKey } = bounds(definition);
+        const ranged = isRanged(definition);
+        if (!ranged) {
+          return chip(
+            `${definition.stat_key}:value`,
+            definition.label,
+            value,
+            next => onSetStat(definition.stat_key, next),
+          );
+        }
+
+        const span = maximum - minimum;
+        const ratio = span > 0
+          ? Math.max(0, Math.min(1, (value - minimum) / span))
+          : 0;
         const minimumColor = definition.minimum_color
           ?? (minKey ? definitionsByKey[minKey]?.color : null)
           ?? "#b94a48";
@@ -757,47 +846,25 @@ function CharacterStatRail({
           ?? (maxKey ? definitionsByKey[maxKey]?.color : null)
           ?? definition.color
           ?? "#5a9b63";
+        const minDefinition = minKey ? definitionsByKey[minKey] : undefined;
+        const maxDefinition = maxKey ? definitionsByKey[maxKey] : undefined;
         const tooltip = [
           `${definition.label}: ${value}`,
-          `Minimum: ${minKey ? `${minKey} = ` : ""}${minimum}`,
-          `Maximum: ${maxKey ? `${maxKey} = ` : ""}${maximum}`,
+          `Minimum: ${minKey ? `${minDefinition?.label ?? minKey} = ` : ""}${minimum}`,
+          `Maximum: ${maxKey ? `${maxDefinition?.label ?? maxKey} = ` : ""}${maximum}`,
         ].join("\n");
-
-        if (editing === definition.stat_key) {
-          return <TextField
-            key={definition.stat_key}
-            className={bar ? "character-stat-editor wide" : "character-stat-editor"}
-            size="small"
-            autoFocus
-            type="number"
-            value={input}
-            onChange={event => setInput(event.target.value)}
-            onBlur={() => void commit(definition)}
-            onKeyDown={event => {
-              if (event.key === "Enter") void commit(definition);
-              if (event.key === "Escape") setEditing(null);
-            }}
-          />;
-        }
 
         return <Tooltip
           key={definition.stat_key}
           title={<span style={{ whiteSpace: "pre-line" }}>{tooltip}</span>}
           arrow
         >
-          <button
-            type="button"
-            className={bar ? "character-stat-chip ranged" : "character-stat-chip"}
-            onClick={() => {
-              setEditing(definition.stat_key);
-              setInput(String(value));
-            }}
-          >
-            <span className="character-stat-chip-label">{definition.label}</span>
-            <span className="character-stat-chip-value">
-              {bar ? `${value} / ${maximum}` : value}
-            </span>
-            {bar && <span className="character-stat-track">
+          <div className="character-stat-group">
+            <div className="character-stat-group-header">
+              <b>{definition.label}</b>
+              <span>{value} / {maximum}</span>
+            </div>
+            <span className="character-stat-track grouped">
               <span
                 className="character-stat-fill"
                 style={{
@@ -805,8 +872,39 @@ function CharacterStatRail({
                   background: `linear-gradient(90deg, ${minimumColor}, ${maximumColor})`,
                 }}
               />
-            </span>}
-          </button>
+            </span>
+            <div className="character-stat-group-chips">
+              {chip(
+                `${definition.stat_key}:value`,
+                "Value",
+                value,
+                next => onSetStat(definition.stat_key, next),
+                `${definition.label} value: ${value}`,
+              )}
+              {chip(
+                `${definition.stat_key}:minimum`,
+                minDefinition?.label ?? "Min",
+                minimum,
+                minKey
+                  ? next => onSetStat(minKey, next)
+                  : next => onUpdateDefinition(definition, { minimum: next }),
+                minKey
+                  ? `Minimum comes from stat ${minDefinition?.label ?? minKey}`
+                  : `Raw minimum for ${definition.label}`,
+              )}
+              {chip(
+                `${definition.stat_key}:maximum`,
+                maxDefinition?.label ?? "Max",
+                maximum,
+                maxKey
+                  ? next => onSetStat(maxKey, next)
+                  : next => onUpdateDefinition(definition, { maximum: next }),
+                maxKey
+                  ? `Maximum comes from stat ${maxDefinition?.label ?? maxKey}`
+                  : `Raw maximum for ${definition.label}`,
+              )}
+            </div>
+          </div>
         </Tooltip>;
       })}
     </div>
