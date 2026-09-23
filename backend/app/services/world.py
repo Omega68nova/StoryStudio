@@ -22,7 +22,7 @@ from app.domain.operations import (
     StatAdjustmentExecutor,
     TargetResolver,
 )
-from app.domain.world import Character, TypedWorldEntity
+from app.domain.world import Character, TypedWorldEntity, resolve_stat_bounds
 
 
 ENTITY_KINDS = {"character", "location", "faction", "item", "lore_system", "fact", "relationship", "plot_beat"}
@@ -825,21 +825,78 @@ class WorldEngine:
         )
 
     def effective_stats(self, project_id: str, container: dict[str, Any], scope: str = "character") -> dict[str, float]:
-        definitions = self.db.fetch_all("SELECT * FROM stat_definitions WHERE project_id = ? AND scope = ?", (project_id, scope))
-        values: dict[str, float] = {row["stat_key"]: max(float(row["minimum"]), min(float(row["maximum"]), container.get("stats", {}).get(row["stat_key"], row["default_value"]))) for row in definitions}
-        by_key = {row["stat_key"]: row for row in definitions}
+        rows = self.db.fetch_all(
+            "SELECT * FROM stat_definitions WHERE project_id=? AND scope=?",
+            (project_id, scope),
+        )
+        definitions = {
+            row["stat_key"]: stat_from_record(row)
+            for row in rows
+        }
+
+        def lookup(key: str, requested_scope: str):
+            definition = definitions.get(key)
+            if definition is None or str(definition.scope) != requested_scope:
+                raise WorldValidationError(
+                    f"Unknown {requested_scope} stat: {key}"
+                )
+            return definition
+
+        raw_values = {
+            key: float(
+                container.get("stats", {}).get(
+                    key,
+                    definition.default_value,
+                )
+            )
+            for key, definition in definitions.items()
+        }
+        values: dict[str, float] = {}
+        for key, definition in definitions.items():
+            try:
+                bounds = resolve_stat_bounds(
+                    definition,
+                    raw_values,
+                    lookup,
+                )
+            except ValueError as exc:
+                raise WorldValidationError(str(exc)) from exc
+            values[key] = max(
+                float(bounds.minimum),
+                min(float(bounds.maximum), raw_values[key]),
+            )
+            if definition.integer_only:
+                values[key] = int(round(values[key]))
+
         for effect in container.get("active_effects", []):
             key = effect.get("stat_key")
-            if key not in values: continue
-            operation, amount = effect.get("operation", "add"), float(effect.get("amount", 0))
+            if key not in values:
+                continue
+            definition = definitions[key]
+            operation = effect.get("operation", "add")
+            amount = float(effect.get("amount", 0))
             if operation == "set":
                 values[key] = amount
             elif operation == "multiply":
                 values[key] *= amount
             else:
-                values[key] += amount * (1 if operation == "add" else -1)
-            values[key] = max(float(by_key[key]["minimum"]), min(float(by_key[key]["maximum"]), values[key]))
-            if by_key[key]["integer_only"]: values[key] = int(round(values[key]))
+                values[key] += amount * (
+                    1 if operation == "add" else -1
+                )
+            try:
+                bounds = resolve_stat_bounds(
+                    definition,
+                    values,
+                    lookup,
+                )
+            except ValueError as exc:
+                raise WorldValidationError(str(exc)) from exc
+            values[key] = max(
+                float(bounds.minimum),
+                min(float(bounds.maximum), values[key]),
+            )
+            if definition.integer_only:
+                values[key] = int(round(values[key]))
         return values
 
     def _validate_projection(self, projection: dict[str, Any]) -> None:
