@@ -5,7 +5,7 @@ import secrets
 from typing import Any, Callable, Literal
 
 from app.domain.adapters import entity_from_projection, relationship_from_projection
-from app.domain.world import Ability, ActionEffect, Character, ComparisonOperator, DomainReference, EffectOperation, EffectTarget, Location, Relationship, RequirementExpression, Stat
+from app.domain.world import Ability, ActionEffect, Character, ComparisonOperator, DomainReference, EffectOperation, EffectTarget, Location, Relationship, RequirementExpression, Stat, resolve_stat_bounds
 
 
 class DomainOperationError(ValueError):
@@ -194,9 +194,31 @@ class EffectExecutor:
     def __init__(self, target_resolver: TargetResolver | None = None) -> None: self.targets = target_resolver or TargetResolver()
 
     @staticmethod
-    def _bounded_value(definition: Stat, current: float, operation: str, amount: float) -> int | float:
-        value = amount if operation == "set" else current * amount if operation == "multiply" else current + amount * (1 if operation == "add" else -1)
-        value = max(float(definition.minimum), min(float(definition.maximum), value))
+    def _bounded_value(
+        definition: Stat,
+        current: float,
+        operation: str,
+        amount: float,
+        *,
+        values: dict[str, float] | None = None,
+        stat_lookup: StatLookup | None = None,
+    ) -> int | float:
+        value = (
+            amount
+            if operation == "set"
+            else current * amount
+            if operation == "multiply"
+            else current + amount * (1 if operation == "add" else -1)
+        )
+        bounds = resolve_stat_bounds(
+            definition,
+            values or {},
+            stat_lookup,
+        )
+        value = max(
+            float(bounds.minimum),
+            min(float(bounds.maximum), value),
+        )
         return int(round(value)) if definition.integer_only else value
 
     def normalize(self, *, projection: dict[str, Any], actor: Character, primary_target: ResolvedTarget, ability: Ability, next_sequence: int, elapsed_minutes: int, stat_lookup: StatLookup, effective_stats: EffectiveStats, id_factory: Callable[[], str] | None = None) -> EffectExecution:
@@ -212,7 +234,17 @@ class EffectExecutor:
             current = base(actor_target, definition)
             if cost < 0: raise DomainOperationError("Ability costs cannot be negative")
             if float(effective_stats(actor).get(key, current)) < cost: raise DomainOperationError(f"{actor.name} lacks enough {definition.label}")
-            value = self._bounded_value(definition, current, "subtract", cost)
+            value = self._bounded_value(
+                definition,
+                current,
+                "subtract",
+                cost,
+                values={
+                    key: float(value)
+                    for key, value in actor_target.container.stats.items()
+                },
+                stat_lookup=stat_lookup,
+            )
             working[("character", str(actor.id), key)] = float(value)
             costs.append({"entity_id": str(actor.id), "stat_key": key, "value": value, "previous_value": current})
         effects: list[dict[str, Any]] = []
@@ -226,7 +258,17 @@ class EffectExecutor:
                     if target.scope == "location": raise DomainOperationError("Stat effects cannot target locations")
                     definition = stat_lookup(str(effect.stat_key), "relationship" if target.scope == "relationship" else "character")
                     current, amount = base(target, definition), float(effect.amount)
-                    value = self._bounded_value(definition, current, operation, amount)
+                    value = self._bounded_value(
+                        definition,
+                        current,
+                        operation,
+                        amount,
+                        values={
+                            key: float(value)
+                            for key, value in target.container.stats.items()
+                        },
+                        stat_lookup=stat_lookup,
+                    )
                     key = "relation_id" if target.scope == "relationship" else "entity_id"
                     row = {**common, key: target.id, "stat_key": definition.stat_key, "amount": amount, "previous_value": current, "value": value}
                     duration = int(effect.duration_value or 0)
@@ -268,5 +310,15 @@ class StatAdjustmentExecutor:
         definition = stat_lookup(stat_key, target.scope)
         current, numeric = float(target.container.stats.get(definition.stat_key, definition.default_value)), float(amount)
         if operation not in {"add", "subtract", "set", "multiply"}: raise DomainOperationError("Stat operation must be add, subtract, set, or multiply")
-        value = EffectExecutor._bounded_value(definition, current, operation, numeric)
+        value = EffectExecutor._bounded_value(
+            definition,
+            current,
+            operation,
+            numeric,
+            values={
+                key: float(value)
+                for key, value in target.container.stats.items()
+            },
+            stat_lookup=stat_lookup,
+        )
         return {"entity_id" if target.scope == "character" else "relation_id": target.id, "stat_key": definition.stat_key, "value": value, "previous_value": current}
