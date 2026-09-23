@@ -1,67 +1,220 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Button, Checkbox, FormControlLabel, MenuItem, Switch, Tab, Tabs, TextField } from "@mui/material";
+import { MenuItem, TextField } from "@mui/material";
 import { api } from "./api";
-import { BoxedMultiselectFilter, CreatableBoxedMultiselect } from "./customComponents/BoxedMultiselect";
+import { BoxedMultiselectFilter } from "./customComponents/BoxedMultiselect";
 import { RecordDrawer, ResourceButton, ResourceList } from "./customComponents/AdminResourceForms";
+import { CharacterEditorForm, type OutfitDraft } from "./CharacterEditorForm";
 import { applyAdvancedState, entityToDraft, updateDraftState } from "./entityDrafts";
 import type { BulletCatalog } from "./BulletHellStudio";
-import type { CharacterEditorDraft, MediaAsset, Outfit, WorkflowPreset, WorldEntity, WorldProjection, WorldRelationship } from "./types";
-
-type OutfitDraft = { id?: string; entity_id: string; name: string; description: string; equipment: string[] };
-const array = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : [];
+import type { AbilityDefinition, CharacterEditorDraft, MediaAsset, Outfit, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection, WorldRelationship } from "./types";
 
 export function CharacterStudio({ projectId, revision, workflows, fail }: { projectId: string; revision: number; workflows: WorkflowPreset[]; fail: (message: string) => void }) {
   const [world, setWorld] = useState<WorldProjection | null>(null); const [catalog, setCatalog] = useState<BulletCatalog>({ skills: [], modes: [], attacks: [] }); const [bullet, setBullet] = useState({ allowed_mode_ids: [] as string[], allowed_skill_ids: [] as string[] });
+  const [rules, setRules] = useState<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>({ stats: [], abilities: [] });
+  const [characterMedia, setCharacterMedia] = useState<Record<string, MediaAsset[]>>({});
   const [query, setQuery] = useState(""); const [control, setControl] = useState(""); const [status, setStatus] = useState("active"); const [locationFilter, setLocationFilter] = useState(""); const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [draft, setDraft] = useState<CharacterEditorDraft | null>(null); const [initial, setInitial] = useState(""); const [error, setError] = useState("");
   const [history, setHistory] = useState<Array<Record<string, unknown>>>([]); const [outfits, setOutfits] = useState<Outfit[]>([]); const [media, setMedia] = useState<MediaAsset[]>([]); const [outfitDraft, setOutfitDraft] = useState<OutfitDraft | null>(null);
-  const load = useCallback(async () => { const [nextWorld, nextCatalog, nextBullet] = await Promise.all([api<WorldProjection>(`/projects/${projectId}/world`), api<BulletCatalog>("/bullethell/catalog"), api<{ allowed_mode_ids: string[]; allowed_skill_ids: string[] }>(`/projects/${projectId}/bullethell`)]); setWorld(nextWorld); setCatalog(nextCatalog); setBullet(nextBullet); }, [projectId]);
+  const load = useCallback(async () => {
+    const [nextWorld, nextCatalog, nextBullet, nextRules] = await Promise.all([
+      api<WorldProjection>(`/projects/${projectId}/world`),
+      api<BulletCatalog>("/bullethell/catalog"),
+      api<{ allowed_mode_ids: string[]; allowed_skill_ids: string[] }>(`/projects/${projectId}/bullethell`),
+      api<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>(`/projects/${projectId}/rules`),
+    ]);
+    setWorld(nextWorld);
+    setCatalog(nextCatalog);
+    setBullet(nextBullet);
+    setRules(nextRules);
+    const characterIds = Object.values(nextWorld.entities)
+      .filter(item => item.kind === "character")
+      .map(item => item.id);
+    const mediaEntries = await Promise.all(characterIds.map(async id => [
+      id,
+      await api<MediaAsset[]>(`/entities/${id}/media`).catch(() => [] as MediaAsset[]),
+    ] as const));
+    setCharacterMedia(Object.fromEntries(mediaEntries));
+  }, [projectId]);
   useEffect(() => { void load().catch(cause => fail(String(cause))); }, [load, revision, fail]);
   const entities = useMemo(() => Object.values(world?.entities ?? {}), [world]); const locations = entities.filter(item => item.kind === "location"); const tags = [...new Set(entities.filter(item => item.kind === "character").flatMap(item => item.tags))].sort();
   const characters = entities.filter(item => item.kind === "character" && (!query || item.card.search_text.toLocaleLowerCase().includes(query.toLocaleLowerCase())) && (!control || (control === "player") === Boolean(item.state.player_controlled)) && (status === "all" || (status === "archived") === Boolean(item.state.archived)) && (!locationFilter || item.state.current_location_id === locationFilter) && (!tagFilter.length || tagFilter.every(tag => item.tags.includes(tag))));
   const dirty = Boolean(draft && initial && JSON.stringify(draft) !== initial);
   useEffect(() => { document.body.dataset.storyStudioUnsaved = String(dirty); return () => { document.body.dataset.storyStudioUnsaved = "false"; }; }, [dirty]);
 
-  async function openCharacter(entity: WorldEntity) { const next = entityToDraft(entity) as CharacterEditorDraft; setDraft(next); setInitial(JSON.stringify(next)); setError(""); try { const [events, nextOutfits, assets] = await Promise.all([api<Array<Record<string, unknown>>>(`/projects/${projectId}/entities/${entity.id}/history`), api<Outfit[]>(`/entities/${entity.id}/outfits`), api<MediaAsset[]>(`/entities/${entity.id}/media`)]); setHistory(events); setOutfits(nextOutfits); setMedia(assets); } catch (cause) { setError(String(cause)); setHistory([]); setOutfits([]); setMedia([]); } }
+  async function openCharacter(entity: WorldEntity) {
+    const next = entityToDraft(entity) as CharacterEditorDraft;
+    setDraft(next);
+    setInitial(JSON.stringify(next));
+    setError("");
+    try {
+      const [events, nextOutfits, assets] = await Promise.all([
+        api<Array<Record<string, unknown>>>(`/projects/${projectId}/entities/${entity.id}/history`),
+        api<Outfit[]>(`/entities/${entity.id}/outfits`),
+        api<MediaAsset[]>(`/entities/${entity.id}/media`),
+      ]);
+      setHistory(events);
+      setOutfits(nextOutfits);
+      setMedia(assets);
+      setCharacterMedia(previous => ({ ...previous, [entity.id]: assets }));
+    } catch (cause) {
+      setError(String(cause));
+      setHistory([]);
+      setOutfits([]);
+      setMedia([]);
+    }
+  }
   function createCharacter() { const state = { player_controlled: false, autonomy_enabled: false, intervention_frequency: "normal", goals: [], secrets: [], character_secrets: [], secrets_to_character: [], equipment: [], inventory: [], abilities: [], knowledge: [], faction_ids: [], bullethell_skill_ids: [] }; const next: CharacterEditorDraft = { kind: "character", name: "", aliases: [], tags: [], state, advancedState: JSON.stringify(state, null, 2) }; setDraft(next); setInitial(JSON.stringify(next)); setHistory([]); setOutfits([]); setMedia([]); }
   function close(force = false) { if (!force && dirty && !window.confirm("Discard unsaved character changes?")) return; setDraft(null); setInitial(""); setError(""); setOutfitDraft(null); }
   async function save() { if (!draft || !draft.name.trim()) return setError("Name is required"); try { const normalized = applyAdvancedState(draft, draft.advancedState) as CharacterEditorDraft; if (normalized.state.player_controlled && normalized.state.autonomy_enabled) throw new Error("Player-controlled characters cannot enable NPC autonomy"); if (draft.id) await api(`/projects/${projectId}/entities/${draft.id}`, { method: "PATCH", body: JSON.stringify({ name: draft.name.trim(), aliases: draft.aliases, tags: draft.tags, patch: normalized.state }) }); else await api(`/projects/${projectId}/entities`, { method: "POST", body: JSON.stringify({ kind: "character", name: draft.name.trim(), aliases: draft.aliases, tags: draft.tags, state: normalized.state }) }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
   async function archive() { if (!draft?.id) return; try { await api(`/projects/${projectId}/entities/${draft.id}/${draft.state.archived ? "restore" : "archive"}`, { method: "POST" }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
   async function remove() { if (!draft?.id) return; try { const impact = await api<{ confirmation: string }>(`/projects/${projectId}/entities/${draft.id}/delete-impact`); if (window.prompt(`Type ${impact.confirmation} to permanently delete this character`) !== impact.confirmation) return; await api(`/projects/${projectId}/entities/${draft.id}`, { method: "DELETE", body: JSON.stringify({ confirmation: impact.confirmation }) }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
-  async function correctStat(key: string, current: number) { if (!draft?.id) return; const entered = window.prompt(`Set ${key}`, String(current)); if (entered == null || !Number.isFinite(Number(entered))) return; try { await api(`/projects/${projectId}/stats/adjust`, { method: "POST", body: JSON.stringify({ entity_id: draft.id, stat_key: key, operation: "set", amount: Number(entered) }) }); await load(); } catch (cause) { setError(String(cause)); } }
+  async function setStat(key: string, value: number) {
+    if (!draft?.id || !Number.isFinite(value)) return;
+    try {
+      await api(`/projects/${projectId}/stats/adjust`, {
+        method: "POST",
+        body: JSON.stringify({
+          entity_id: draft.id,
+          stat_key: key,
+          operation: "set",
+          amount: value,
+        }),
+      });
+      await load();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
   async function saveOutfit() { if (!outfitDraft || !outfitDraft.name.trim()) return; try { await api(outfitDraft.id ? `/outfits/${outfitDraft.id}` : `/entities/${outfitDraft.entity_id}/outfits`, { method: outfitDraft.id ? "PUT" : "POST", body: JSON.stringify({ name: outfitDraft.name, description: outfitDraft.description, equipment: outfitDraft.equipment }) }); setOutfits(await api(`/entities/${outfitDraft.entity_id}/outfits`)); setOutfitDraft(null); } catch (cause) { setError(String(cause)); } }
   async function deleteOutfit(outfit: Outfit) { if (!window.confirm(`Delete outfit ${outfit.name}?`)) return; try { await api(`/outfits/${outfit.id}`, { method: "DELETE" }); setOutfits(await api(`/entities/${outfit.entity_id}/outfits`)); } catch (cause) { setError(String(cause)); } }
   async function activateOutfit(outfit: Outfit) { try { await api(`/outfits/${outfit.id}/activate`, { method: "POST" }); const patch = { active_outfit_id: outfit.id, wardrobe: outfit.description, equipment: outfit.equipment }; if (draft) setDraft(updateDraftState(draft, patch) as CharacterEditorDraft); setInitial(previous => { if (!previous) return previous; const baseline = JSON.parse(previous) as CharacterEditorDraft; return JSON.stringify(updateDraftState(baseline, patch)); }); await load(); } catch (cause) { setError(String(cause)); } }
-  async function upload(kind: "portrait" | "full_body", outfitId: string | null, file: File) { if (!draft?.id) return; const body = new FormData(); body.append("file", file); try { await api(`/entities/${draft.id}/media/upload?kind=${kind}${outfitId ? `&outfit_id=${outfitId}` : ""}`, { method: "POST", body }); setMedia(await api(`/entities/${draft.id}/media`)); } catch (cause) { setError(String(cause)); } }
-  async function generate(asset: MediaAsset) { const workflow = workflows[0]; if (!workflow) return setError("Import a ComfyUI workflow first."); const prompt = window.prompt("Image prompt", asset.prompt); if (!prompt?.trim()) return; try { await api(`/media-assets/${asset.id}`, { method: "PATCH", body: JSON.stringify({ prompt, negative_prompt: asset.negative_prompt }) }); await api(`/media-assets/${asset.id}/generate`, { method: "POST", body: JSON.stringify({ workflow_preset_id: workflow.id, prompt, negative_prompt: asset.negative_prompt, width: workflow.mappings.width ? 1024 : null, height: workflow.mappings.height ? 1024 : null }) }); } catch (cause) { setError(String(cause)); } }
-  async function removeMedia(asset: MediaAsset) { if (!window.confirm("Remove this image?")) return; try { await api(`/media-assets/${asset.id}`, { method: "DELETE" }); if (draft?.id) setMedia(await api(`/entities/${draft.id}/media`)); } catch (cause) { setError(String(cause)); } }
+  async function refreshMedia(entityId: string) {
+    const assets = await api<MediaAsset[]>(`/entities/${entityId}/media`);
+    setMedia(assets);
+    setCharacterMedia(previous => ({ ...previous, [entityId]: assets }));
+  }
+  async function upload(kind: "portrait" | "full_body", outfitId: string | null, file: File) {
+    if (!draft?.id) return;
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      await api(`/entities/${draft.id}/media/upload?kind=${kind}${outfitId ? `&outfit_id=${outfitId}` : ""}`, {
+        method: "POST",
+        body,
+      });
+      await refreshMedia(draft.id);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+  async function regenerate(asset: MediaAsset, differentPrompt: boolean) {
+    const workflow = workflows[0];
+    if (!workflow) return setError("Import a ComfyUI workflow first.");
+    const fallback = String(draft?.state.appearance ?? draft?.state.description ?? draft?.name ?? "");
+    const prompt = differentPrompt
+      ? window.prompt("Image prompt", asset.prompt || fallback)
+      : (asset.prompt || fallback);
+    if (!prompt?.trim()) return setError("An image prompt is required.");
+    try {
+      await api(`/media-assets/${asset.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ prompt, negative_prompt: asset.negative_prompt }),
+      });
+      await api(`/media-assets/${asset.id}/generate`, {
+        method: "POST",
+        body: JSON.stringify({
+          workflow_preset_id: workflow.id,
+          prompt,
+          negative_prompt: asset.negative_prompt,
+          width: workflow.mappings.width ? 1024 : null,
+          height: workflow.mappings.height ? 1024 : null,
+        }),
+      });
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+  async function removeMedia(asset: MediaAsset) {
+    if (!window.confirm("Remove this image?")) return;
+    try {
+      await api(`/media-assets/${asset.id}`, { method: "DELETE" });
+      if (draft?.id) await refreshMedia(draft.id);
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+  async function createRelationship(relation: string, targetId: string, bidirectional: boolean) {
+    if (!draft?.id) return;
+    try {
+      await api(`/projects/${projectId}/mutations`, {
+        method: "POST",
+        body: JSON.stringify({
+          summary: `Added ${relation} relationship for ${draft.name}`,
+          mutations: [{
+            tool: "setRelationship",
+            arguments: {
+              source_id: draft.id,
+              target_id: targetId,
+              relation,
+              bidirectional,
+            },
+          }],
+        }),
+      });
+      await load();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
+  async function removeRelationship(relation: WorldRelationship) {
+    if (!relation.id || !window.confirm("Remove this relationship from the current branch?")) return;
+    try {
+      await api(`/projects/${projectId}/relationships/${relation.id}`, { method: "DELETE" });
+      await load();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
 
-  return <div className="page world-page"><header className="page-header"><p className="eyebrow">BRANCH-AWARE CAST</p><h1>Characters</h1><p>Player characters, NPCs, state, outfits, portraits, and branch history.</p></header><ResourceList title="Characters" query={query} setQuery={setQuery} onAdd={createCharacter}><div className="character-filter-grid"><TextField select size="small" label="Control" value={control} onChange={event => setControl(event.target.value)}><MenuItem value="">Everyone</MenuItem><MenuItem value="player">Player controlled</MenuItem><MenuItem value="npc">NPC</MenuItem></TextField><TextField select size="small" label="Status" value={status} onChange={event => setStatus(event.target.value)}><MenuItem value="active">Active</MenuItem><MenuItem value="archived">Archived</MenuItem><MenuItem value="all">All</MenuItem></TextField><TextField select size="small" label="Location" value={locationFilter} onChange={event => setLocationFilter(event.target.value)}><MenuItem value="">Every location</MenuItem>{locations.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField><BoxedMultiselectFilter label="Tags" options={tags} value={tagFilter} onChange={(_event, next) => setTagFilter(next)} /></div>{characters.map(item => <ResourceButton key={item.id} enabled={!item.state.archived} disabledLabel="Archived" title={item.name} subtitle={`${item.state.player_controlled ? "Player" : "NPC"} · ${world?.entities[String(item.state.current_location_id)]?.name ?? "Unknown location"}`} onClick={() => void openCharacter(item)} />)}</ResourceList>
-    <RecordDrawer width={980} title={draft ? `${draft.id ? "Edit" : "Create"} character` : ""} open={Boolean(draft)} dirty={dirty} error={error} onClose={() => close()} onSave={() => void save()} onArchive={draft?.id ? () => void archive() : undefined} archiveLabel={draft?.state.archived ? "Restore" : "Archive"} onDelete={draft?.id ? () => void remove() : undefined}>{draft && <CharacterForm draft={draft} setDraft={setDraft} entities={entities} relations={Object.values(world?.relations ?? {}) as WorldRelationship[]} modes={catalog.modes.filter(item => bullet.allowed_mode_ids.includes(item.id))} skills={catalog.skills.filter(item => bullet.allowed_skill_ids.includes(item.id))} history={history} outfits={outfits} media={media} outfitDraft={outfitDraft} setOutfitDraft={setOutfitDraft} saveOutfit={saveOutfit} deleteOutfit={deleteOutfit} activateOutfit={activateOutfit} upload={upload} generate={generate} removeMedia={removeMedia} correctStat={correctStat} />}</RecordDrawer>
+  const listPortrait = (item: WorldEntity) => {
+    const assets = characterMedia[item.id] ?? [];
+    const activeOutfitId = String(item.state.active_outfit_id ?? "");
+    const asset = assets.find(mediaAsset =>
+      mediaAsset.kind === "portrait"
+      && Boolean(activeOutfitId)
+      && mediaAsset.outfit_id === activeOutfitId
+      && mediaAsset.file_path)
+      ?? assets.find(mediaAsset =>
+        mediaAsset.kind === "portrait"
+        && !mediaAsset.outfit_id
+        && mediaAsset.file_path);
+    return asset?.file_path ? `/media/${asset.file_path}` : null;
+  };
+
+  return <div className="page world-page"><header className="page-header"><p className="eyebrow">BRANCH-AWARE CAST</p><h1>Characters</h1><p>Player characters, NPCs, state, outfits, portraits, and branch history.</p></header><ResourceList title="Characters" query={query} setQuery={setQuery} onAdd={createCharacter}><div className="character-filter-grid"><TextField select size="small" label="Control" value={control} onChange={event => setControl(event.target.value)}><MenuItem value="">Everyone</MenuItem><MenuItem value="player">Player controlled</MenuItem><MenuItem value="npc">NPC</MenuItem></TextField><TextField select size="small" label="Status" value={status} onChange={event => setStatus(event.target.value)}><MenuItem value="active">Active</MenuItem><MenuItem value="archived">Archived</MenuItem><MenuItem value="all">All</MenuItem></TextField><TextField select size="small" label="Location" value={locationFilter} onChange={event => setLocationFilter(event.target.value)}><MenuItem value="">Every location</MenuItem>{locations.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField><BoxedMultiselectFilter label="Tags" options={tags} value={tagFilter} onChange={(_event, next) => setTagFilter(next)} /></div>{characters.map(item => <ResourceButton key={item.id} enabled={!item.state.archived} disabledLabel="Archived" title={item.name} subtitle={`${item.state.player_controlled ? "Player" : "NPC"} · ${world?.entities[String(item.state.current_location_id)]?.name ?? "Unknown location"}`} thumbnail={listPortrait(item)} onClick={() => void openCharacter(item)} />)}</ResourceList>
+    <RecordDrawer width={1180} title={draft ? `${draft.id ? "Edit" : "Create"} character` : ""} open={Boolean(draft)} dirty={dirty} error={error} onClose={() => close()} onSave={() => void save()} onArchive={draft?.id ? () => void archive() : undefined} archiveLabel={draft?.state.archived ? "Restore" : "Archive"} onDelete={draft?.id ? () => void remove() : undefined}>{draft && <CharacterEditorForm
+      draft={draft}
+      setDraft={setDraft}
+      entities={entities}
+      relations={Object.values(world?.relations ?? {}) as WorldRelationship[]}
+      modes={catalog.modes.filter(item => bullet.allowed_mode_ids.includes(item.id))}
+      skills={catalog.skills.filter(item => bullet.allowed_skill_ids.includes(item.id))}
+      history={history}
+      outfits={outfits}
+      media={media}
+      stats={rules.stats}
+      abilities={rules.abilities}
+      outfitDraft={outfitDraft}
+      setOutfitDraft={setOutfitDraft}
+      saveOutfit={saveOutfit}
+      deleteOutfit={deleteOutfit}
+      activateOutfit={activateOutfit}
+      upload={upload}
+      regenerate={regenerate}
+      removeMedia={removeMedia}
+      setStat={setStat}
+      createRelationship={createRelationship}
+      removeRelationship={removeRelationship}
+    />}</RecordDrawer>
   </div>;
 }
-
-function CharacterForm({ draft, setDraft, entities, relations, modes, skills, history, outfits, media, outfitDraft, setOutfitDraft, saveOutfit, deleteOutfit, activateOutfit, upload, generate, removeMedia, correctStat }: { draft: CharacterEditorDraft; setDraft: (value: CharacterEditorDraft) => void; entities: WorldEntity[]; relations: WorldRelationship[]; modes: Array<{ id: string; name: string }>; skills: Array<{ id: string; name: string }>; history: Array<Record<string, unknown>>; outfits: Outfit[]; media: MediaAsset[]; outfitDraft: OutfitDraft | null; setOutfitDraft: (value: OutfitDraft | null) => void; saveOutfit: () => Promise<void>; deleteOutfit: (value: Outfit) => Promise<void>; activateOutfit: (value: Outfit) => Promise<void>; upload: (kind: "portrait" | "full_body", outfitId: string | null, file: File) => Promise<void>; generate: (value: MediaAsset) => Promise<void>; removeMedia: (value: MediaAsset) => Promise<void>; correctStat: (key: string, value: number) => Promise<void> }) {
-  const [tab, setTab] = useState(0); const state = draft.state as Record<string, any>; const setState = (patch: Record<string, unknown>) => setDraft(updateDraftState(draft, patch) as CharacterEditorDraft);
-  const locations = entities.filter(item => item.kind === "location"), items = entities.filter(item => item.kind === "item"), facts = entities.filter(item => item.kind === "fact"), factions = entities.filter(item => item.kind === "faction"); const inventory = Array.isArray(state.inventory) ? state.inventory as Array<{ item_id: string; quantity: number }> : [];
-  const entityMulti = (label: string, ids: unknown, options: WorldEntity[], key: string) => { const values = array(ids), selected = options.filter(item => values.includes(item.id)); const missing = values.filter(id => !options.some(item => item.id === id)).map(id => ({ id, name: `Unavailable (${id})`, kind: "missing", aliases: [], tags: [], state: {}, card: { compact_text: "", visual_description: "", image_tags: [], search_text: "" } } as WorldEntity)); return <BoxedMultiselectFilter label={label} options={[...options, ...missing]} value={[...selected, ...missing]} getOptionDisabled={item => item.kind === "missing" || Boolean(item.state.archived)} onChange={(_event, next) => setState({ [key]: next.map(item => item.id) })} />; };
-  const tabs = ["Identity", "Personality", "Appearance", "Wardrobe", "Equipment", "Abilities", "Relationships", "Location", "Knowledge", "Control", "Stats", "Outfits & media", "Advanced", "History"];
-  return <><TextField required label="Name" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /><CreatableBoxedMultiselect label="Aliases" options={draft.aliases} value={draft.aliases} onChange={(_event, next) => setDraft({ ...draft, aliases: next })} /><CreatableBoxedMultiselect label="Tags" options={draft.tags} value={draft.tags} onChange={(_event, next) => setDraft({ ...draft, tags: next })} /><Tabs value={tab} onChange={(_event, value) => setTab(value)} variant="scrollable" scrollButtons="auto">{tabs.map(label => <Tab key={label} label={label} />)}</Tabs>
-    {tab === 0 && <div className="character-fields"><TextField multiline minRows={3} label="Description" value={String(state.description ?? "")} onChange={event => setState({ description: event.target.value })} /><TextField multiline minRows={2} label="Identity notes" value={String(state.identity ?? "")} onChange={event => setState({ identity: event.target.value })} /><TextField label="Pronouns" value={String(state.pronouns ?? "")} onChange={event => setState({ pronouns: event.target.value })} /></div>}
-    {tab === 1 && <div className="character-fields"><TextField multiline minRows={4} label="Personality" value={String(state.personality ?? "")} onChange={event => setState({ personality: event.target.value })} /><CreatableBoxedMultiselect label="Goals" options={array(state.goals)} value={array(state.goals)} onChange={(_event, next) => setState({ goals: next })} /><TextField multiline minRows={3} label="General secret notes" value={String(state.secrets ?? "")} onChange={event => setState({ secrets: event.target.value })} /><CreatableBoxedMultiselect label="Character secrets (known while acting)" options={array(state.character_secrets)} value={array(state.character_secrets)} onChange={(_event, next) => setState({ character_secrets: next })} /><CreatableBoxedMultiselect label="Secrets from character (narrator only)" options={array(state.secrets_to_character)} value={array(state.secrets_to_character)} onChange={(_event, next) => setState({ secrets_to_character: next })} /></div>}
-    {tab === 2 && <TextField multiline minRows={6} label="Persistent appearance" value={String(state.appearance ?? "")} onChange={event => setState({ appearance: event.target.value })} />}
-    {tab === 3 && <div className="character-fields"><TextField multiline minRows={5} label="Wardrobe notes" value={String(state.wardrobe ?? "")} onChange={event => setState({ wardrobe: event.target.value })} /><TextField select label="Active outfit" value={String(state.active_outfit_id ?? "")} onChange={event => setState({ active_outfit_id: event.target.value || null })}><MenuItem value="">None</MenuItem>{outfits.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField></div>}
-    {tab === 4 && <div className="character-fields">{entityMulti("Equipment", state.equipment, items, "equipment")}{inventory.map((entry, index) => { const selectedItem = items.find(item => item.id === entry.item_id); return <div className="environment-condition-row" key={index}><TextField select label="Inventory item" value={entry.item_id} onChange={event => setState({ inventory: inventory.map((value, position) => position === index ? { ...value, item_id: event.target.value } : value) })}>{!selectedItem && entry.item_id && <MenuItem value={entry.item_id} disabled>Unavailable ({entry.item_id})</MenuItem>}{items.map(item => <MenuItem key={item.id} value={item.id} disabled={Boolean(item.state.archived)}>{item.name}{item.state.archived ? " (archived)" : ""}</MenuItem>)}</TextField><TextField type="number" label="Quantity" value={entry.quantity} onChange={event => setState({ inventory: inventory.map((value, position) => position === index ? { ...value, quantity: Math.max(0, Math.floor(Number(event.target.value) || 0)) } : value) })} /><Button color="error" onClick={() => setState({ inventory: inventory.filter((_, position) => position !== index) })}>Remove</Button></div>; })}<Button disabled={!items.some(item => !item.state.archived)} onClick={() => setState({ inventory: [...inventory, { item_id: items.find(item => !item.state.archived)?.id ?? "", quantity: 1 }] })}>Add inventory item</Button></div>}
-    {tab === 5 && <div className="character-fields"><CreatableBoxedMultiselect label="Ability keys" options={array(state.abilities)} value={array(state.abilities)} onChange={(_event, next) => setState({ abilities: next })} /><BoxedMultiselectFilter label="Bullet-hell skills" options={skills} value={skills.filter(item => array(state.bullethell_skill_ids).includes(item.id))} onChange={(_event, next) => setState({ bullethell_skill_ids: next.map(item => item.id) })} /></div>}
-    {tab === 6 && <div className="character-fields"><TextField multiline minRows={4} label="Relationship notes" value={String(state.relationships ?? "")} onChange={event => setState({ relationships: event.target.value })} />{relations.filter(item => item.source_id === draft.id || item.target_id === draft.id).map(item => <div className="visual-card" key={String(item.id)}><b>{String(item.relation)}</b><span>{entities.find(entity => entity.id === (item.source_id === draft.id ? item.target_id : item.source_id))?.name}</span></div>)}</div>}
-    {tab === 7 && <TextField select label="Current location" value={String(state.current_location_id ?? "")} onChange={event => setState({ current_location_id: event.target.value || null })}><MenuItem value="">Unknown</MenuItem>{locations.map(item => <MenuItem key={item.id} value={item.id} disabled={item.state.enabled === false || Boolean(item.state.archived)}>{item.name}{item.state.enabled === false || item.state.archived ? " (unavailable)" : ""}</MenuItem>)}</TextField>}
-    {tab === 8 && <div className="character-fields">{entityMulti("Known facts", state.knowledge, facts, "knowledge")}{entityMulti("Faction memberships", state.faction_ids, factions, "faction_ids")}</div>}
-    {tab === 9 && <div className="character-fields"><FormControlLabel control={<Switch checked={Boolean(state.player_controlled)} onChange={event => setState({ player_controlled: event.target.checked, autonomy_enabled: event.target.checked ? false : Boolean(state.autonomy_enabled) })} />} label="Player controlled" /><FormControlLabel control={<Switch disabled={Boolean(state.player_controlled)} checked={Boolean(state.autonomy_enabled)} onChange={event => setState({ autonomy_enabled: event.target.checked })} />} label="NPC autonomy" /><TextField select label="Intervention frequency" value={String(state.intervention_frequency ?? "normal")} onChange={event => setState({ intervention_frequency: event.target.value })}>{["low", "normal", "high"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField select label="Default bullet-hell mode" value={String(state.bullethell_default_mode_id ?? "")} onChange={event => setState({ bullethell_default_mode_id: event.target.value || null })}><MenuItem value="">Project default</MenuItem>{modes.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField><TextField select label="Enemy forced mode" value={String(state.bullethell_forced_mode_id ?? "")} onChange={event => setState({ bullethell_forced_mode_id: event.target.value || null })}><MenuItem value="">None</MenuItem>{modes.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField></div>}
-    {tab === 10 && <div className="stat-strip">{Object.entries((entities.find(item => item.id === draft.id)?.stats ?? {})).map(([key, value]) => <button key={key} onClick={() => void correctStat(key, value)}><b>{key}</b> {value}</button>)}{(entities.find(item => item.id === draft.id)?.active_effects ?? []).map((effect, index) => <pre key={index}>{JSON.stringify(effect, null, 2)}</pre>)}</div>}
-    {tab === 11 && <div className="character-fields">{draft.id && <Button onClick={() => setOutfitDraft({ entity_id: draft.id!, name: "", description: "", equipment: [] })}>Add outfit</Button>}{outfitDraft && <div className="environment-sound-set"><TextField label="Outfit name" value={outfitDraft.name} onChange={event => setOutfitDraft({ ...outfitDraft, name: event.target.value })} /><TextField multiline label="Visual description" value={outfitDraft.description} onChange={event => setOutfitDraft({ ...outfitDraft, description: event.target.value })} /><CreatableBoxedMultiselect label="Equipment" options={outfitDraft.equipment} value={outfitDraft.equipment} onChange={(_event, next) => setOutfitDraft({ ...outfitDraft, equipment: next })} /><Button onClick={() => void saveOutfit()}>Save outfit</Button></div>}{outfits.map(outfit => <article className="outfit-row" key={outfit.id}><b>{outfit.name}</b><span>{outfit.description}</span><Button onClick={() => setOutfitDraft({ id: outfit.id, entity_id: outfit.entity_id, name: outfit.name, description: outfit.description, equipment: outfit.equipment })}>Edit</Button><Button onClick={() => void activateOutfit(outfit)}>{state.active_outfit_id === outfit.id ? "Active" : "Wear"}</Button><Button color="error" onClick={() => void deleteOutfit(outfit)}>Delete</Button><UploadButton label="Portrait" onFile={file => void upload("portrait", outfit.id, file)} /><UploadButton label="Full body" onFile={file => void upload("full_body", outfit.id, file)} /></article>)}<div className="profile-media">{media.map(asset => <article key={asset.id}>{asset.file_path ? <img src={`/media/${asset.file_path}`} /> : <div className="media-placeholder">{asset.kind}</div>}<Button onClick={() => void generate(asset)}>Generate</Button><Button onClick={() => void removeMedia(asset)}>Remove</Button></article>)}</div></div>}
-    {tab === 12 && <TextField fullWidth multiline minRows={18} label="Advanced state JSON" value={draft.advancedState} onChange={event => setDraft({ ...draft, advancedState: event.target.value })} />}
-    {tab === 13 && <div className="entity-history">{history.map(event => <article key={String(event.id)}><b>{String(event.event_type)}</b><pre>{JSON.stringify(event.payload, null, 2)}</pre></article>)}</div>}
-  </>;
-}
-
-function UploadButton({ label, onFile }: { label: string; onFile: (file: File) => void }) { return <label className="file-button">{label}<input hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={event => event.target.files?.[0] && onFile(event.target.files[0])} /></label>; }
