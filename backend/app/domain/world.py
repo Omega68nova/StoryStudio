@@ -218,6 +218,26 @@ class CharacterState(DomainModel):
         return normalized
 
     @property
+    def identity(self) -> str:
+        """Legacy read alias; canonical field is description."""
+        return self.description
+
+    @property
+    def core_personality(self) -> str:
+        """Legacy read alias; canonical field is personality."""
+        return self.personality
+
+    @property
+    def wardrobe(self) -> str:
+        """Legacy read alias; canonical field is wardrobe_notes."""
+        return self.wardrobe_notes
+
+    @property
+    def secrets(self) -> str:
+        """Legacy read alias for narrator-only secret notes."""
+        return "\n".join(self.secrets_to_character)
+
+    @property
     def current_location(self) -> DomainReference | None:
         if self.current_location_id is None:
             return None
@@ -324,7 +344,7 @@ class Outfit(DomainModel):
     name: str = Field(min_length=1)
     description: str = ""
     imagegen_description: str = ""
-    equipment: list[DomainId] = Field(default_factory=list)
+    equipment: list[str] = Field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
 
