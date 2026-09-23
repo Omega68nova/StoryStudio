@@ -43,6 +43,7 @@ class DomainKind(StrEnum):
     WEATHER = "weather"
     STAT = "stat"
     ABILITY = "ability"
+    OUTFIT = "outfit"
 
 
 class Exposure(StrEnum):
@@ -164,7 +165,6 @@ class CharacterState(DomainModel):
     appearance: str = ""
     personality: str = ""
     goals: list[str] = Field(default_factory=list)
-    secrets: str = ""
     character_secrets: list[str] = Field(default_factory=list)
     secrets_to_character: list[str] = Field(default_factory=list)
     cast_role: str = "supporting"
@@ -177,11 +177,15 @@ class CharacterState(DomainModel):
     inventory: list[InventoryEntry] = Field(default_factory=list)
     abilities: list[str] = Field(default_factory=list)
     faction_ids: list[DomainId] = Field(default_factory=list)
+    knowledge: list[DomainId] = Field(default_factory=list)
     party_ids: list[DomainId] = Field(default_factory=list)
     known_character_ids: list[DomainId] = Field(default_factory=list)
     known_faction_ids: list[DomainId] = Field(default_factory=list)
     active_outfit_id: DomainId | None = None
     full_body_height_factor: float = Field(default=0.5, ge=0, le=1)
+    bullethell_default_mode_id: str | None = None
+    bullethell_forced_mode_id: str | None = None
+    bullethell_skill_ids: list[str] = Field(default_factory=list)
     archived: bool = False
     visibility: str = "public"
 
@@ -201,6 +205,13 @@ class CharacterState(DomainModel):
             normalized["wardrobe_notes"] = str(
                 normalized.get("wardrobe") or ""
             )
+        if not normalized.get("secrets_to_character"):
+            legacy_secret = normalized.get("secrets")
+            if isinstance(legacy_secret, list):
+                normalized["secrets_to_character"] = legacy_secret
+            elif str(legacy_secret or "").strip():
+                normalized["secrets_to_character"] = [str(legacy_secret)]
+        normalized.pop("secrets", None)
         normalized.pop("identity", None)
         normalized.pop("core_personality", None)
         normalized.pop("wardrobe", None)
@@ -316,6 +327,10 @@ class Outfit(DomainModel):
     equipment: list[DomainId] = Field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
+
+    @property
+    def reference(self) -> DomainReference:
+        return DomainReference(id=self.id, kind=DomainKind.OUTFIT)
 
 
 class StatDisplayStyle(StrEnum):
