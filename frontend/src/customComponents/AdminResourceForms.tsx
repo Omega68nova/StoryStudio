@@ -7,8 +7,8 @@ export function ResourceList({ title, query, setQuery, onAdd, addLabel = "Create
   return <section className="panel environment-resource"><div className="sheet-heading"><h2>{title}</h2>{onAdd && <Button onClick={onAdd}>{addLabel}</Button>}</div><TextField fullWidth size="small" label={`Search ${title.toLocaleLowerCase()}`} value={query} onChange={event => setQuery(event.target.value)} /><div className="environment-resource-list">{children}</div></section>;
 }
 
-export function ResourceButton({ enabled = true, active = false, title, subtitle, enabledLabel = "Enabled", disabledLabel = "Disabled", onClick }: { enabled?: boolean; active?: boolean; title: string; subtitle: string; enabledLabel?: string; disabledLabel?: string; onClick: () => void }) {
-  return <button className={`environment-resource-button${enabled ? "" : " disabled"}${active ? " active" : ""}`} onClick={onClick}><span><b>{title}</b><small>{subtitle}</small></span><small>{enabled ? enabledLabel : disabledLabel}</small></button>;
+export function ResourceButton({ enabled = true, active = false, title, subtitle, enabledLabel = "Enabled", disabledLabel = "Disabled", thumbnail, onClick }: { enabled?: boolean; active?: boolean; title: string; subtitle: string; enabledLabel?: string; disabledLabel?: string; thumbnail?: string | null; onClick: () => void }) {
+  return <button className={`environment-resource-button${enabled ? "" : " disabled"}${active ? " active" : ""}`} onClick={onClick}>{thumbnail && <img className="resource-button-thumbnail" src={thumbnail} alt="" />}<span><b>{title}</b><small>{subtitle}</small></span><small>{enabled ? enabledLabel : disabledLabel}</small></button>;
 }
 
 export function RecordDrawer({ title, open, dirty, error, onClose, onSave, onArchive, archiveLabel, onDelete, children, width = 760 }: { title: string; open: boolean; dirty: boolean; error?: string; onClose: () => void; onSave: () => void; onArchive?: () => void; archiveLabel?: string; onDelete?: () => void; children: ReactNode; width?: number }) {
