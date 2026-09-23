@@ -1293,7 +1293,7 @@ async def update_environment_settings(project_id: str, request: EnvironmentSetti
 async def create_weather(project_id: str, request: WeatherDefinitionUpdate) -> dict[str, Any]:
     require_project(project_id); now, weather_id = utc_now(), new_id()
     try:
-        db.execute("INSERT INTO weather_definitions(id,project_id,name,description,imagegen_description,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (weather_id, project_id, request.name.strip(), request.description, request.imagegen_description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), now, now))
+        db.execute("INSERT INTO weather_definitions(id,project_id,name,description,appearance,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (weather_id, project_id, request.name.strip(), request.description, request.appearance, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), now, now))
     except Exception as exc:
         raise HTTPException(409, "A weather definition with that name already exists") from exc
     await events.publish("environment", {"project_id": project_id, "action": "weather_changed"})
@@ -1308,7 +1308,7 @@ async def update_weather(project_id: str, weather_id: str, request: WeatherDefin
     settings = db.fetch_one("SELECT initial_weather_id FROM project_environment_settings WHERE project_id=?", (project_id,)) or {}
     if not request.enabled and settings.get("initial_weather_id") == weather_id:
         raise HTTPException(422, "The initial weather cannot be disabled")
-    db.execute("UPDATE weather_definitions SET name=?,description=?,imagegen_description=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=?", (request.name.strip(), request.description, request.imagegen_description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), utc_now(), weather_id))
+    db.execute("UPDATE weather_definitions SET name=?,description=?,appearance=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=?", (request.name.strip(), request.description, request.appearance, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), utc_now(), weather_id))
     if not request.enabled:
         project = require_project(project_id)
         projection = scheduler.world.projection(project_id)
@@ -1360,9 +1360,9 @@ async def update_time_phases(project_id: str, request: TimePhasesUpdate) -> dict
         for position, item in enumerate(request.phases):
             phase_id = item.id or new_id()
             if phase_id in existing:
-                connection.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,position=?,enabled=? WHERE id=? AND project_id=?", (item.name.strip(), item.duration_minutes, item.description, item.imagegen_description, position, int(item.enabled), phase_id, project_id))
+                connection.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,appearance=?,position=?,enabled=? WHERE id=? AND project_id=?", (item.name.strip(), item.duration_minutes, item.description, item.appearance, position, int(item.enabled), phase_id, project_id))
             else:
-                connection.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, item.name.strip(), item.duration_minutes, item.description, item.imagegen_description, position, int(item.enabled)))
+                connection.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,appearance,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, item.name.strip(), item.duration_minutes, item.description, item.appearance, position, int(item.enabled)))
         for removed_id in existing - requested_ids:
             connection.execute("DELETE FROM time_phases WHERE id=? AND project_id=?", (removed_id, project_id))
         connection.execute("UPDATE project_environment_settings SET revision=revision+1,updated_at=? WHERE project_id=?", (utc_now(), project_id))
@@ -1374,7 +1374,7 @@ async def update_time_phases(project_id: str, request: TimePhasesUpdate) -> dict
 async def create_time_phase(project_id: str, request: TimePhaseItem) -> dict[str, Any]:
     require_project(project_id); phase_id = new_id()
     position = int((db.fetch_one("SELECT COALESCE(MAX(position),-1)+1 position FROM time_phases WHERE project_id=?", (project_id,)) or {"position": 0})["position"])
-    db.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, request.name.strip(), request.duration_minutes, request.description, request.imagegen_description, position, int(request.enabled)))
+    db.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,appearance,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, request.name.strip(), request.duration_minutes, request.description, request.appearance, position, int(request.enabled)))
     await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
     return next(item for item in environment.settings(project_id)["time_phases"] if item["id"] == phase_id)
 
@@ -1384,7 +1384,7 @@ async def update_time_phase(project_id: str, phase_id: str, request: TimePhaseIt
     require_project(project_id)
     if not db.fetch_one("SELECT id FROM time_phases WHERE id=? AND project_id=?", (phase_id, project_id)): raise HTTPException(404, "Time phase not found")
     if not request.enabled and (db.fetch_one("SELECT COUNT(*) n FROM time_phases WHERE project_id=? AND enabled=1 AND id<>?", (project_id, phase_id)) or {"n": 0})["n"] == 0: raise HTTPException(422, "At least one time phase must be enabled")
-    db.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,enabled=? WHERE id=? AND project_id=?", (request.name.strip(), request.duration_minutes, request.description, request.imagegen_description, int(request.enabled), phase_id, project_id))
+    db.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,appearance=?,enabled=? WHERE id=? AND project_id=?", (request.name.strip(), request.duration_minutes, request.description, request.appearance, int(request.enabled), phase_id, project_id))
     await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
     return next(item for item in environment.settings(project_id)["time_phases"] if item["id"] == phase_id)
 
@@ -1412,7 +1412,7 @@ async def reorder_time_phases(project_id: str, request: TimePhaseOrderUpdate) ->
 def _location_state(request: EnvironmentLocationUpdate) -> dict[str, Any]:
     return {
         "parent_location_id": request.parent_location_id, "exposure": request.exposure,
-        "description": request.description, "imagegen_description": request.imagegen_description,
+        "description": request.description, "appearance": request.appearance,
         "image_tags": request.image_tags, "enabled": request.enabled,
         "random_encounter": request.random_encounter, "discovered": request.discovered,
         "x": request.x, "y": request.y,
@@ -1829,7 +1829,7 @@ async def create_outfit(entity_id: str, request: OutfitCreate) -> dict[str, Any]
     try:
         db.execute(
             "INSERT INTO entity_outfits("
-            "id,entity_id,name,description,imagegen_description,equipment_json,"
+            "id,entity_id,name,description,appearance,equipment_json,"
             "created_at,updated_at"
             ") VALUES (?,?,?,?,?,?,?,?)",
             (
@@ -1837,7 +1837,7 @@ async def create_outfit(entity_id: str, request: OutfitCreate) -> dict[str, Any]
                 entity_id,
                 request.name.strip(),
                 request.description,
-                request.imagegen_description,
+                request.appearance,
                 json.dumps(request.equipment),
                 now,
                 now,
@@ -1865,11 +1865,11 @@ async def update_outfit(outfit_id: str, request: OutfitCreate) -> dict[str, Any]
     try:
         db.execute(
             "UPDATE entity_outfits SET name=?,description=?,"
-            "imagegen_description=?,equipment_json=?,updated_at=? WHERE id=?",
+            "appearance=?,equipment_json=?,updated_at=? WHERE id=?",
             (
                 request.name.strip(),
                 request.description,
-                request.imagegen_description,
+                request.appearance,
                 json.dumps(request.equipment),
                 utc_now(),
                 outfit_id,
