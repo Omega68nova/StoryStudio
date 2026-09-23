@@ -85,6 +85,30 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       setError(String(cause));
     }
   }
+
+  async function updateStatDefinition(
+    definition: StatDefinition,
+    patch: Partial<Pick<StatDefinition, "minimum" | "maximum">>,
+  ) {
+    try {
+      await api(`/projects/${projectId}/stats/${definition.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          stat_key: definition.stat_key,
+          label: definition.label,
+          scope: definition.scope,
+          default_value: definition.default_value,
+          minimum: patch.minimum ?? definition.minimum,
+          maximum: patch.maximum ?? definition.maximum,
+          integer_only: Boolean(definition.integer_only),
+          visibility: definition.visibility,
+        }),
+      });
+      await load();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
   async function saveOutfit() { if (!outfitDraft || !outfitDraft.name.trim()) return; try { await api(outfitDraft.id ? `/outfits/${outfitDraft.id}` : `/entities/${outfitDraft.entity_id}/outfits`, { method: outfitDraft.id ? "PUT" : "POST", body: JSON.stringify({ name: outfitDraft.name, description: outfitDraft.description, equipment: outfitDraft.equipment }) }); setOutfits(await api(`/entities/${outfitDraft.entity_id}/outfits`)); setOutfitDraft(null); } catch (cause) { setError(String(cause)); } }
   async function deleteOutfit(outfit: Outfit) { if (!window.confirm(`Delete outfit ${outfit.name}?`)) return; try { await api(`/outfits/${outfit.id}`, { method: "DELETE" }); setOutfits(await api(`/entities/${outfit.entity_id}/outfits`)); } catch (cause) { setError(String(cause)); } }
   async function activateOutfit(outfit: Outfit) { try { await api(`/outfits/${outfit.id}/activate`, { method: "POST" }); const patch = { active_outfit_id: outfit.id, wardrobe: outfit.description, equipment: outfit.equipment }; if (draft) setDraft(updateDraftState(draft, patch) as CharacterEditorDraft); setInitial(previous => { if (!previous) return previous; const baseline = JSON.parse(previous) as CharacterEditorDraft; return JSON.stringify(updateDraftState(baseline, patch)); }); await load(); } catch (cause) { setError(String(cause)); } }
@@ -107,33 +131,84 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       setError(String(cause));
     }
   }
-  async function regenerate(asset: MediaAsset, differentPrompt: boolean) {
+  function defaultImagePrompt(
+    kind: "portrait" | "full_body",
+    outfitId: string | null,
+  ) {
+    const outfit = outfitId
+      ? outfits.find(item => item.id === outfitId)
+      : null;
+    const appearance = String(
+      draft?.state.appearance
+      ?? draft?.state.description
+      ?? "",
+    ).trim();
+    const parts = [
+      draft?.name ? `Character: ${draft.name}` : "",
+      appearance,
+      outfit?.description ? `Outfit: ${outfit.description}` : "",
+      kind === "portrait"
+        ? "character portrait, focus on face and upper body"
+        : "full body character image, show the complete character",
+    ];
+    return parts.filter(Boolean).join(". ");
+  }
+
+  async function generateMedia(
+    kind: "portrait" | "full_body",
+    outfitId: string | null,
+    differentPrompt: boolean,
+    existingAsset?: MediaAsset | null,
+  ) {
+    if (!draft?.id) return;
     const workflow = workflows[0];
     if (!workflow) return setError("Import a ComfyUI workflow first.");
-    const fallback = String(draft?.state.appearance ?? draft?.state.description ?? draft?.name ?? "");
+
+    const basePrompt = existingAsset?.prompt?.trim()
+      || defaultImagePrompt(kind, outfitId);
     const prompt = differentPrompt
-      ? window.prompt("Image prompt", asset.prompt || fallback)
-      : (asset.prompt || fallback);
+      ? window.prompt("Image prompt", basePrompt)
+      : basePrompt;
     if (!prompt?.trim()) return setError("An image prompt is required.");
+
     try {
-      await api(`/media-assets/${asset.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ prompt, negative_prompt: asset.negative_prompt }),
-      });
+      let asset = existingAsset ?? null;
+      if (!asset) {
+        asset = await api<MediaAsset>(`/entities/${draft.id}/media`, {
+          method: "POST",
+          body: JSON.stringify({
+            kind,
+            outfit_id: outfitId,
+            prompt,
+            negative_prompt: "",
+          }),
+        });
+      } else {
+        asset = await api<MediaAsset>(`/media-assets/${asset.id}`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            prompt,
+            negative_prompt: asset.negative_prompt,
+          }),
+        });
+      }
+
       await api(`/media-assets/${asset.id}/generate`, {
         method: "POST",
         body: JSON.stringify({
           workflow_preset_id: workflow.id,
           prompt,
-          negative_prompt: asset.negative_prompt,
+          negative_prompt: asset.negative_prompt ?? "",
           width: workflow.mappings.width ? 1024 : null,
           height: workflow.mappings.height ? 1024 : null,
         }),
       });
+      await refreshMedia(draft.id);
     } catch (cause) {
       setError(String(cause));
     }
   }
+
   async function removeMedia(asset: MediaAsset) {
     if (!window.confirm("Remove this image?")) return;
     try {
@@ -210,9 +285,10 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       deleteOutfit={deleteOutfit}
       activateOutfit={activateOutfit}
       upload={upload}
-      regenerate={regenerate}
+      generateMedia={generateMedia}
       removeMedia={removeMedia}
       setStat={setStat}
+      updateStatDefinition={updateStatDefinition}
       createRelationship={createRelationship}
       removeRelationship={removeRelationship}
     />}</RecordDrawer>
