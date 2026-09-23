@@ -11,6 +11,7 @@ from app.domain.world import (
     EntityKind,
     GenericWorldEntity,
     Location,
+    Outfit,
     Relationship,
     Stat,
     TypedWorldEntity,
@@ -79,6 +80,18 @@ def relationship_to_projection(
     relationship: Relationship,
 ) -> dict[str, Any]:
     return _dump(relationship)
+
+
+def outfit_from_record(value: Mapping[str, Any]) -> Outfit:
+    raw = _record(value)
+    raw["equipment"] = _json_field(raw, "equipment_json", list)
+    return Outfit.model_validate(raw)
+
+
+def outfit_to_record(outfit: Outfit) -> dict[str, Any]:
+    raw = _dump(outfit)
+    raw["equipment_json"] = json.dumps(raw.pop("equipment", []))
+    return raw
 
 
 def weather_from_record(value: Mapping[str, Any]) -> Weather:
