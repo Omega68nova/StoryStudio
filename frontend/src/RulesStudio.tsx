@@ -18,10 +18,17 @@ import type { BulletCatalog } from "./BulletHellStudio";
 const blankStat = {
   stat_key: "",
   label: "",
+  description: "",
   scope: "character",
   default_value: 0,
   minimum: 0,
   maximum: 100,
+  minimum_stat_key: null,
+  maximum_stat_key: null,
+  color: null,
+  minimum_color: null,
+  maximum_color: null,
+  display_style: "compact",
   integer_only: true,
   visibility: "public",
 };
@@ -248,6 +255,14 @@ export function RulesStudio({
                 onChange={(e) => setStat({ ...stat, label: e.target.value })}
               />
               <TextField
+                multiline
+                minRows={2}
+                label="Description"
+                value={stat.description ?? ""}
+                helperText="General semantic description used by the editor and AI."
+                onChange={(e) => setStat({ ...stat, description: e.target.value })}
+              />
+              <TextField
                 select
                 label="Scope"
                 value={stat.scope}
@@ -282,6 +297,83 @@ export function RulesStudio({
                   }
                 />
               </Stack>
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  select
+                  fullWidth
+                  label="Minimum from stat"
+                  value={stat.minimum_stat_key ?? ""}
+                  onChange={(e) => setStat({
+                    ...stat,
+                    minimum_stat_key: e.target.value || null,
+                  })}
+                >
+                  <MenuItem value="">Use numeric minimum</MenuItem>
+                  {rules.stats
+                    .filter((item) => item.scope === stat.scope && item.stat_key !== stat.stat_key)
+                    .map((item) => <MenuItem key={item.id} value={item.stat_key}>{item.label}</MenuItem>)}
+                </TextField>
+                <TextField
+                  select
+                  fullWidth
+                  label="Maximum from stat"
+                  value={stat.maximum_stat_key ?? ""}
+                  onChange={(e) => setStat({
+                    ...stat,
+                    maximum_stat_key: e.target.value || null,
+                  })}
+                >
+                  <MenuItem value="">Use numeric maximum</MenuItem>
+                  {rules.stats
+                    .filter((item) => item.scope === stat.scope && item.stat_key !== stat.stat_key)
+                    .map((item) => <MenuItem key={item.id} value={item.stat_key}>{item.label}</MenuItem>)}
+                </TextField>
+              </Stack>
+              <TextField
+                select
+                label="Display style"
+                value={stat.display_style ?? "compact"}
+                onChange={(e) => setStat({ ...stat, display_style: e.target.value })}
+              >
+                <MenuItem value="compact">Compact chip</MenuItem>
+                <MenuItem value="bar">Value / min / max bar</MenuItem>
+              </TextField>
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  label="Main / max color"
+                  placeholder="#5a9b63"
+                  value={stat.color ?? ""}
+                  onChange={(e) => setStat({ ...stat, color: e.target.value || null })}
+                />
+                <TextField
+                  label="Minimum color"
+                  placeholder="#b94a48"
+                  value={stat.minimum_color ?? ""}
+                  onChange={(e) => setStat({ ...stat, minimum_color: e.target.value || null })}
+                />
+                <TextField
+                  label="Maximum color override"
+                  value={stat.maximum_color ?? ""}
+                  onChange={(e) => setStat({ ...stat, maximum_color: e.target.value || null })}
+                />
+              </Stack>
+              <FormControlLabel
+                control={<Switch
+                  checked={Boolean(stat.integer_only)}
+                  onChange={(e) => setStat({ ...stat, integer_only: e.target.checked })}
+                />}
+                label="Integer values only"
+              />
+              <TextField
+                select
+                label="Visibility"
+                value={stat.visibility ?? "public"}
+                onChange={(e) => setStat({ ...stat, visibility: e.target.value })}
+              >
+                <MenuItem value="public">Public</MenuItem>
+                <MenuItem value="private">Private</MenuItem>
+                <MenuItem value="narrator">Narrator only</MenuItem>
+              </TextField>
             </>
           )}
         </DialogContent>
