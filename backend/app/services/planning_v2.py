@@ -97,8 +97,8 @@ def compact_schema(stage_number: int, focus: str | None = None) -> dict[str, Any
                 },
             }],
             "stats": [
-                {"key": "hp", "stat_key": "hp", "label": "Health", "scope": "character", "default_value": 100, "minimum": 0, "maximum": 100, "integer_only": True, "visibility": "public"},
-                {"key": "stamina", "stat_key": "stamina", "label": "Stamina", "scope": "character", "default_value": 100, "minimum": 0, "maximum": 100, "integer_only": True, "visibility": "public"},
+                {"key": "hp", "stat_key": "hp", "label": "Health", "description": "Current physical health.", "scope": "character", "default_value": 100, "minimum": 0, "maximum": 100, "minimum_stat_key": None, "maximum_stat_key": None, "color": "#5a9b63", "minimum_color": "#b94a48", "maximum_color": None, "display_style": "bar", "integer_only": True, "visibility": "public"},
+                {"key": "stamina", "stat_key": "stamina", "label": "Stamina", "description": "Current exertion reserve.", "scope": "character", "default_value": 100, "minimum": 0, "maximum": 100, "minimum_stat_key": None, "maximum_stat_key": None, "color": "#5a9b63", "minimum_color": "#b94a48", "maximum_color": None, "display_style": "bar", "integer_only": True, "visibility": "public"},
             ],
             "abilities": [{
                 "key": "basic_attack", "ability_key": "basic_attack", "name": "Basic Attack",
@@ -113,8 +113,8 @@ def compact_schema(stage_number: int, focus: str | None = None) -> dict[str, Any
             "characters": [{
                 "key": "character_key", "name": "Character name", "aliases": [], "tags": [],
                 "state": {
-                    "description": "A concise overview of the character and their place in the story.",
-                    "identity": "Age, occupation, background, and other identity notes.",
+                    "description": "A concise overview including identity, background, role, and other generally useful facts.",
+                    "imagegen_description": "Visual-only details useful to an image model.",
                     "pronouns": "they/them",
                     "appearance": "Persistent physical features, build, hair, eyes, and distinguishing traits.",
                     "personality": "Temperament, values, habits, strengths, and flaws.",
@@ -135,17 +135,17 @@ def compact_schema(stage_number: int, focus: str | None = None) -> dict[str, Any
             "character_updates": [{
                 "key": "existing_character_key", "name": "Character name",
                 "state": {
-                    "description": "Updated character overview.",
-                    "identity": "Detailed identity and background notes.",
+                    "description": "Updated identity, background, role, and general character overview.",
+                    "imagegen_description": "Detailed visual-only guidance for character image generation.",
                     "pronouns": "they/them",
                     "appearance": "Detailed persistent appearance.",
                     "personality": "Detailed personality, values, habits, strengths, and flaws.",
                     "goals": [], "secrets": "", "character_secrets": [], "secrets_to_character": [],
-                    "wardrobe": "Usual clothing and style notes.",
+                    "wardrobe_notes": "Usual clothing and style notes.",
                     "equipment": [], "inventory": [], "abilities": [], "relationships": "",
                 },
             }],
-            "outfits": [], "relationships": [], "routines": [], "facts": [], "plot_beats": [],
+            "outfits": [{"key": "outfit_key", "character_key": "existing_character_key", "name": "Outfit name", "description": "General outfit purpose and semantic description.", "imagegen_description": "Visual-only clothing, materials, colors, and accessories.", "equipment": []}], "relationships": [], "routines": [], "facts": [], "plot_beats": [],
         },
         7: {"minigames": [], "bullethell": {"mode_ids": [], "skill_ids": [], "attack_ids": []}, "ambient": [], "music": {"mode": "disabled", "enabled_theme_ids": [], "manual_theme_id": None}, "recommendations": []},
     }
@@ -567,12 +567,68 @@ def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int,
             raise WorldValidationError("Invalid stat definition")
         existing = _resource_row(db, owner_id, key, "stat")
         stat_id = str(existing["resource_id"]) if existing else new_id()
-        values = (stat["stat_key"], stat.get("label") or stat["stat_key"], stat.get("scope", "character"), float(stat.get("default_value", 0)), float(stat.get("minimum", 0)), float(stat.get("maximum", 100)), int(stat.get("integer_only", True)), stat.get("visibility", "public"))
-        if values[4] > values[5]: raise WorldValidationError("Stat minimum cannot exceed maximum")
-        if existing: db.execute("UPDATE stat_definitions SET stat_key=?,label=?,scope=?,default_value=?,minimum=?,maximum=?,integer_only=?,visibility=?,updated_at=? WHERE id=? AND project_id=?", (*values, now, stat_id, project_id))
-        else: db.execute("INSERT INTO stat_definitions(id,project_id,stat_key,label,scope,default_value,minimum,maximum,integer_only,visibility,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (stat_id, project_id, *values, now, now))
+        values = (
+            stat["stat_key"],
+            stat.get("label") or stat["stat_key"],
+            stat.get("description", ""),
+            stat.get("scope", "character"),
+            float(stat.get("default_value", 0)),
+            float(stat.get("minimum", 0)),
+            float(stat.get("maximum", 100)),
+            stat.get("minimum_stat_key"),
+            stat.get("maximum_stat_key"),
+            stat.get("color"),
+            stat.get("minimum_color"),
+            stat.get("maximum_color"),
+            stat.get("display_style", "compact"),
+            int(stat.get("integer_only", True)),
+            stat.get("visibility", "public"),
+        )
+        if values[5] > values[6]:
+            raise WorldValidationError("Stat minimum cannot exceed maximum")
+        if values[7] == values[0] or values[8] == values[0]:
+            raise WorldValidationError("A stat cannot use itself as a bound")
+        if existing:
+            db.execute(
+                "UPDATE stat_definitions SET stat_key=?,label=?,description=?,"
+                "scope=?,default_value=?,minimum=?,maximum=?,minimum_stat_key=?,"
+                "maximum_stat_key=?,color=?,minimum_color=?,maximum_color=?,"
+                "display_style=?,integer_only=?,visibility=?,updated_at=? "
+                "WHERE id=? AND project_id=?",
+                (*values, now, stat_id, project_id),
+            )
+        else:
+            db.execute(
+                "INSERT INTO stat_definitions("
+                "id,project_id,stat_key,label,description,scope,default_value,"
+                "minimum,maximum,minimum_stat_key,maximum_stat_key,color,"
+                "minimum_color,maximum_color,display_style,integer_only,"
+                "visibility,created_at,updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (stat_id, project_id, *values, now, now),
+            )
         record_resource(db, owner_id, stage_number, key, "stat", stat_id, stat)
-    known_stats = {row["stat_key"] for row in db.fetch_all("SELECT stat_key FROM stat_definitions WHERE project_id=?", (project_id,))}
+    known_stat_rows = db.fetch_all(
+        "SELECT stat_key,scope FROM stat_definitions WHERE project_id=?",
+        (project_id,),
+    )
+    known_stats = {row["stat_key"] for row in known_stat_rows}
+    stat_scopes = {row["stat_key"]: row["scope"] for row in known_stat_rows}
+    for stat in draft.get("stats", []):
+        key = str(stat.get("stat_key") or stat.get("key") or "")
+        scope = str(stat.get("scope") or "character")
+        for field in ("minimum_stat_key", "maximum_stat_key"):
+            reference = stat.get(field)
+            if not reference:
+                continue
+            if reference not in known_stats:
+                raise WorldValidationError(
+                    f"Stat '{key}' {field} references unknown stat '{reference}'"
+                )
+            if stat_scopes.get(reference) != scope:
+                raise WorldValidationError(
+                    f"Stat '{key}' {field} must reference a {scope} stat"
+                )
     for ability in draft.get("abilities", []):
         key = str(ability.get("key") or ability.get("ability_key") or "").strip()
         referenced = {*dict(ability.get("costs") or {}), *[str(item.get("stat_key")) for item in ability.get("effects", []) if item.get("stat_key")]}
@@ -599,8 +655,38 @@ def apply_outfits(db: Database, project_id: str, owner_id: str, stage_number: in
         key = str(outfit.get("key") or "").strip(); entity_id = resolve_resource(db, owner_id, outfit.get("character_key"), "entity")
         if not key or not entity_id or not db.fetch_one("SELECT id FROM world_entities WHERE id=? AND project_id=? AND kind='character'", (entity_id, project_id)): raise WorldValidationError("Outfit references an unavailable character")
         existing = _resource_row(db, owner_id, key, "outfit"); outfit_id = str(existing["resource_id"]) if existing else new_id()
-        if existing: db.execute("UPDATE entity_outfits SET name=?,description=?,equipment_json=?,updated_at=? WHERE id=? AND entity_id=?", (outfit.get("name", "Outfit"), outfit.get("description", ""), json.dumps(outfit.get("equipment", [])), now, outfit_id, entity_id))
-        else: db.execute("INSERT INTO entity_outfits(id,entity_id,name,description,equipment_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", (outfit_id, entity_id, outfit.get("name", "Outfit"), outfit.get("description", ""), json.dumps(outfit.get("equipment", [])), now, now))
+        if existing:
+            db.execute(
+                "UPDATE entity_outfits SET name=?,description=?,"
+                "imagegen_description=?,equipment_json=?,updated_at=? "
+                "WHERE id=? AND entity_id=?",
+                (
+                    outfit.get("name", "Outfit"),
+                    outfit.get("description", ""),
+                    outfit.get("imagegen_description", ""),
+                    json.dumps(outfit.get("equipment", [])),
+                    now,
+                    outfit_id,
+                    entity_id,
+                ),
+            )
+        else:
+            db.execute(
+                "INSERT INTO entity_outfits("
+                "id,entity_id,name,description,imagegen_description,"
+                "equipment_json,created_at,updated_at"
+                ") VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    outfit_id,
+                    entity_id,
+                    outfit.get("name", "Outfit"),
+                    outfit.get("description", ""),
+                    outfit.get("imagegen_description", ""),
+                    json.dumps(outfit.get("equipment", [])),
+                    now,
+                    now,
+                ),
+            )
         record_resource(db, owner_id, stage_number, key, "outfit", outfit_id, outfit)
     for routine in draft.get("routines", []):
         key = str(routine.get("key") or "").strip(); character_id = resolve_resource(db, owner_id, routine.get("character_key"), "entity"); location_id = resolve_resource(db, owner_id, routine.get("location_key"), "entity")
