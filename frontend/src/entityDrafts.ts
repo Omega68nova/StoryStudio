@@ -21,6 +21,14 @@ export function entityToDraft(entity: WorldEntity): EntityEditorDraft {
     if (!String(state.wardrobe_notes ?? "").trim() && state.wardrobe) {
       state.wardrobe_notes = state.wardrobe;
     }
+    if (!Array.isArray(state.secrets_to_character) || !state.secrets_to_character.length) {
+      if (Array.isArray(state.secrets)) {
+        state.secrets_to_character = state.secrets;
+      } else if (String(state.secrets ?? "").trim()) {
+        state.secrets_to_character = [String(state.secrets)];
+      }
+    }
+    delete state.secrets;
     delete state.identity;
     delete state.core_personality;
     delete state.wardrobe;
