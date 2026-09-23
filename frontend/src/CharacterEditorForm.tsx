@@ -27,6 +27,7 @@ export type OutfitDraft = {
   entity_id: string;
   name: string;
   description: string;
+  imagegen_description: string;
   equipment: string[];
 };
 
@@ -179,6 +180,7 @@ export function CharacterEditorForm({
       entity_id: outfit.entity_id,
       name: outfit.name,
       description: outfit.description,
+      imagegen_description: outfit.imagegen_description,
       equipment: outfit.equipment,
     } : null);
   }
@@ -265,6 +267,14 @@ export function CharacterEditorForm({
           value={String(state.appearance ?? "")}
           onChange={event => setState({ appearance: event.target.value })}
         />
+        <TextField
+          multiline
+          minRows={2}
+          label="Image AI description"
+          value={String(state.imagegen_description ?? "")}
+          helperText="Visual-only guidance used when generating portraits and full-body images."
+          onChange={event => setState({ imagegen_description: event.target.value })}
+        />
       </section>
 
       <Tabs
@@ -311,8 +321,8 @@ export function CharacterEditorForm({
             multiline
             minRows={4}
             label="Wardrobe notes"
-            value={String(state.wardrobe ?? "")}
-            onChange={event => setState({ wardrobe: event.target.value })}
+            value={String(state.wardrobe_notes ?? state.wardrobe ?? "")}
+            onChange={event => setState({ wardrobe_notes: event.target.value })}
           />
           <TextField
             select
@@ -329,6 +339,7 @@ export function CharacterEditorForm({
               entity_id: draft.id!,
               name: "",
               description: "",
+              imagegen_description: "",
               equipment: [],
             })}
           >Create outfit</Button>}
@@ -345,10 +356,19 @@ export function CharacterEditorForm({
             />
             <TextField
               multiline
-              minRows={4}
-              label="Outfit appearance"
+              minRows={3}
+              label="Outfit description"
               value={outfitDraft.description}
+              helperText="General description used by the user and storyteller."
               onChange={event => setOutfitDraft({ ...outfitDraft, description: event.target.value })}
+            />
+            <TextField
+              multiline
+              minRows={3}
+              label="Outfit image AI description"
+              value={outfitDraft.imagegen_description}
+              helperText="Visual-only clothing details for portrait/full-body generation."
+              onChange={event => setOutfitDraft({ ...outfitDraft, imagegen_description: event.target.value })}
             />
             <CreatableBoxedMultiselect
               label="Equipment"
