@@ -10,7 +10,12 @@ from app.functions.imageGen import (
     ImageGenerationRequest,
     ImageWorkflow,
 )
-from app.managers.imageGenManager import ImageManager
+from app.managers.imageGenManager import (
+    ImageKind,
+    ImageManager,
+    ImagePrompts,
+    ManagedImageRequest,
+)
 from app.schemas import WorkflowMappings
 from app.services.job_handlers import BaseJobHandler, JobExecutionContext
 from app.services.runtimes import RuntimeFailure
@@ -290,11 +295,7 @@ class ImageJobHandler(BaseJobHandler):
             )
 
         media_kind = self._media_kind(context)
-        make_transparent = self._transparent_requested(
-            context,
-            media_kind,
-            mappings,
-        )
+        semantic_kind = self._semantic_kind(context, media_kind)
 
         workflow = ImageWorkflow(
             graph=graph,
@@ -314,29 +315,73 @@ class ImageJobHandler(BaseJobHandler):
                 "Image job has no positive prompt"
             )
 
-        request = ImageGenerationRequest(
-            positive_prompt=positive,
-            negative_prompt=str(
-                values.pop("negative_prompt", "") or ""
-            ),
-            width=self._optional_int(values.pop("width", None)),
-            height=self._optional_int(values.pop("height", None)),
-            make_transparent=make_transparent,
-            seed=self._optional_int(values.pop("seed", None)),
-            steps=self._optional_int(values.pop("steps", None)),
-            guidance=self._optional_float(
-                values.pop("guidance", None)
-            ),
-            checkpoint=self._optional_str(
-                values.pop("checkpoint", None)
-            ),
-        )
+        negative = str(values.pop("negative_prompt", "") or "")
+        seed = self._optional_int(values.pop("seed", None))
+        steps = self._optional_int(values.pop("steps", None))
+        guidance = self._optional_float(values.pop("guidance", None))
+        checkpoint = self._optional_str(values.pop("checkpoint", None))
+
+        if semantic_kind is not None:
+            settings = context.db.fetch_one(
+                "SELECT portrait_prompt_prefix,full_body_prompt_prefix,"
+                "icon_prompt_prefix FROM runtime_settings WHERE id=1"
+            ) or {}
+            manager = ImageManager(
+                context.ai,
+                prompts=ImagePrompts(
+                    portrait_prefix=str(
+                        settings.get("portrait_prompt_prefix")
+                        or ImagePrompts().portrait_prefix
+                    ),
+                    full_body_prefix=str(
+                        settings.get("full_body_prompt_prefix")
+                        or ImagePrompts().full_body_prefix
+                    ),
+                    icon_prefix=str(
+                        settings.get("icon_prompt_prefix")
+                        or ImagePrompts().icon_prefix
+                    ),
+                ),
+            )
+            factor_raw = payload.get("full_body_height_factor")
+            factor = 0.5 if factor_raw in (None, "") else float(factor_raw)
+            request = manager.build_request(
+                ManagedImageRequest(
+                    kind=semantic_kind,
+                    prompt=positive,
+                    negative_prompt=negative,
+                    full_body_height_factor=factor,
+                    seed=seed,
+                    steps=steps,
+                    guidance=guidance,
+                    checkpoint=checkpoint,
+                )
+            )
+        else:
+            make_transparent = self._transparent_requested(
+                context,
+                media_kind,
+                mappings,
+            )
+            request = ImageGenerationRequest(
+                positive_prompt=positive,
+                negative_prompt=negative,
+                width=self._optional_int(values.pop("width", None)),
+                height=self._optional_int(values.pop("height", None)),
+                make_transparent=make_transparent,
+                seed=seed,
+                steps=steps,
+                guidance=guidance,
+                checkpoint=checkpoint,
+            )
 
         return ResolvedImageJob(
             workflow=workflow,
             request=request,
             preset_id=preset_id,
-            media_kind=media_kind,
+            media_kind=(
+                semantic_kind.value if semantic_kind is not None else media_kind
+            ),
         )
 
     def _media_kind(
@@ -352,6 +397,22 @@ class ImageJobHandler(BaseJobHandler):
             (asset_id,),
         )
         return str(row["kind"]) if row and row.get("kind") else None
+
+    @staticmethod
+    def _semantic_kind(
+        context: JobExecutionContext,
+        media_kind: str | None,
+    ) -> ImageKind | None:
+        explicit = context.payload.get("image_kind")
+        raw = str(explicit or media_kind or "").strip().lower()
+        if raw == "location":
+            raw = "background"
+        if not raw and context.payload.get("environment_background_id"):
+            raw = "background"
+        try:
+            return ImageKind(raw) if raw else None
+        except ValueError:
+            return None
 
     @staticmethod
     def _transparent_requested(
