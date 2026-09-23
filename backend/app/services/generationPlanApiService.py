@@ -92,11 +92,21 @@ class GenerationPlanApiService:
         draft: dict[str, Any],
     ) -> dict[str, Any]:
         plan, task = self.planning_task(plan_id, stage_number)
-        return self.replace_generated_result(
+        if task.get("active_job_id"):
+            raise GenerationPlanError(
+                "Cancel active generation before saving this task result"
+            )
+        self.data.batch_generation.import_task_state(
             plan["id"],
             task["task_key"],
-            {"json": draft},
+            status="generated",
+            result={"json": draft},
+            metadata={
+                **dict(task.get("commit_metadata") or {}),
+                "manual_result_save": True,
+            },
         )
+        return self.batch.get_plan(plan["id"])
 
     def replace_generated_result(
         self,
