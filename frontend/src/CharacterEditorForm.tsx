@@ -67,6 +67,7 @@ type Props = {
     asset?: MediaAsset | null,
   ) => Promise<void>;
   removeMedia: (value: MediaAsset) => Promise<void>;
+  mediaJobs: Record<string, { id: string; status: string }>;
   setStat: (key: string, value: number) => Promise<void>;
   updateStatDefinition: (
     definition: StatDefinition,
@@ -96,6 +97,7 @@ export function CharacterEditorForm({
   upload,
   generateMedia,
   removeMedia,
+  mediaJobs,
   setStat,
   updateStatDefinition,
   createRelationship,
@@ -139,6 +141,8 @@ export function CharacterEditorForm({
 
   const portrait = selectedMedia("portrait");
   const fullBody = selectedMedia("full_body");
+  const portraitJob = mediaJobs[`portrait:${viewOutfitId || "default"}`];
+  const fullBodyJob = mediaJobs[`full_body:${viewOutfitId || "default"}`];
   const entityMulti = (label: string, ids: unknown, options: WorldEntity[], key: string) => {
     const values = array(ids);
     const selected = options.filter(item => values.includes(item.id));
@@ -215,6 +219,8 @@ export function CharacterEditorForm({
         onRegenerateWithPrompt={asset => void generateMedia("portrait", viewOutfitId || null, true, asset)}
         onDelete={asset => void removeMedia(asset)}
         onUpload={draft.id ? file => void upload("portrait", viewOutfitId || null, file) : undefined}
+        loading={Boolean(portraitJob)}
+        loadingLabel={portraitJob ? `Generating portrait · ${portraitJob.status}` : undefined}
       />
       <CharacterStatRail
         definitions={stats}
@@ -653,6 +659,8 @@ export function CharacterEditorForm({
         onRegenerateWithPrompt={asset => void generateMedia("full_body", viewOutfitId || null, true, asset)}
         onDelete={asset => void removeMedia(asset)}
         onUpload={draft.id ? file => void upload("full_body", viewOutfitId || null, file) : undefined}
+        loading={Boolean(fullBodyJob)}
+        loadingLabel={fullBodyJob ? `Generating full body · ${fullBodyJob.status}` : undefined}
       />
       <div className="character-outfit-switcher">
         <button

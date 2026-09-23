@@ -15,6 +15,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
   const [query, setQuery] = useState(""); const [control, setControl] = useState(""); const [status, setStatus] = useState("active"); const [locationFilter, setLocationFilter] = useState(""); const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [draft, setDraft] = useState<CharacterEditorDraft | null>(null); const [initial, setInitial] = useState(""); const [error, setError] = useState("");
   const [history, setHistory] = useState<Array<Record<string, unknown>>>([]); const [outfits, setOutfits] = useState<Outfit[]>([]); const [media, setMedia] = useState<MediaAsset[]>([]); const [outfitDraft, setOutfitDraft] = useState<OutfitDraft | null>(null);
+  const [mediaJobs, setMediaJobs] = useState<Record<string, { id: string; status: string }>>({});
   const load = useCallback(async () => {
     const [nextWorld, nextCatalog, nextBullet, nextRules] = await Promise.all([
       api<WorldProjection>(`/projects/${projectId}/world`),
@@ -46,6 +47,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
     setDraft(next);
     setInitial(JSON.stringify(next));
     setError("");
+    setMediaJobs({});
     try {
       const [events, nextOutfits, assets] = await Promise.all([
         api<Array<Record<string, unknown>>>(`/projects/${projectId}/entities/${entity.id}/history`),
@@ -64,7 +66,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
     }
   }
   function createCharacter() { const state = { player_controlled: false, autonomy_enabled: false, intervention_frequency: "normal", goals: [], secrets: [], character_secrets: [], secrets_to_character: [], equipment: [], inventory: [], abilities: [], knowledge: [], faction_ids: [], bullethell_skill_ids: [] }; const next: CharacterEditorDraft = { kind: "character", name: "", aliases: [], tags: [], state, advancedState: JSON.stringify(state, null, 2) }; setDraft(next); setInitial(JSON.stringify(next)); setHistory([]); setOutfits([]); setMedia([]); }
-  function close(force = false) { if (!force && dirty && !window.confirm("Discard unsaved character changes?")) return; setDraft(null); setInitial(""); setError(""); setOutfitDraft(null); }
+  function close(force = false) { if (!force && dirty && !window.confirm("Discard unsaved character changes?")) return; setDraft(null); setInitial(""); setError(""); setOutfitDraft(null); setMediaJobs({}); }
   async function save() { if (!draft || !draft.name.trim()) return setError("Name is required"); try { const normalized = applyAdvancedState(draft, draft.advancedState) as CharacterEditorDraft; if (normalized.state.player_controlled && normalized.state.autonomy_enabled) throw new Error("Player-controlled characters cannot enable NPC autonomy"); if (draft.id) await api(`/projects/${projectId}/entities/${draft.id}`, { method: "PATCH", body: JSON.stringify({ name: draft.name.trim(), aliases: draft.aliases, tags: draft.tags, patch: normalized.state }) }); else await api(`/projects/${projectId}/entities`, { method: "POST", body: JSON.stringify({ kind: "character", name: draft.name.trim(), aliases: draft.aliases, tags: draft.tags, state: normalized.state }) }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
   async function archive() { if (!draft?.id) return; try { await api(`/projects/${projectId}/entities/${draft.id}/${draft.state.archived ? "restore" : "archive"}`, { method: "POST" }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
   async function remove() { if (!draft?.id) return; try { const impact = await api<{ confirmation: string }>(`/projects/${projectId}/entities/${draft.id}/delete-impact`); if (window.prompt(`Type ${impact.confirmation} to permanently delete this character`) !== impact.confirmation) return; await api(`/projects/${projectId}/entities/${draft.id}`, { method: "DELETE", body: JSON.stringify({ confirmation: impact.confirmation }) }); await load(); close(true); } catch (cause) { setError(String(cause)); } }
@@ -117,6 +119,45 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
     setMedia(assets);
     setCharacterMedia(previous => ({ ...previous, [entityId]: assets }));
   }
+
+  useEffect(() => {
+    if (!draft?.id) return;
+    void refreshMedia(draft.id).catch(cause => setError(String(cause)));
+  }, [revision, draft?.id]);
+
+  useEffect(() => {
+    const active = Object.entries(mediaJobs).filter(([, job]) =>
+      ["queued", "running", "switching"].includes(job.status),
+    );
+    if (!active.length || !draft?.id) return;
+
+    const timer = window.setInterval(() => {
+      void Promise.all(
+        active.map(async ([slot, job]) => {
+          try {
+            const latest = await api<{ id: string; status: string }>(`/jobs/${job.id}`);
+            if (["completed", "failed", "cancelled", "interrupted"].includes(latest.status)) {
+              await refreshMedia(draft.id!);
+              setMediaJobs(current => {
+                const next = { ...current };
+                delete next[slot];
+                return next;
+              });
+              return;
+            }
+            setMediaJobs(current => ({
+              ...current,
+              [slot]: { id: job.id, status: latest.status },
+            }));
+          } catch (cause) {
+            setError(String(cause));
+          }
+        }),
+      );
+    }, 700);
+
+    return () => window.clearInterval(timer);
+  }, [mediaJobs, draft?.id]);
   async function upload(kind: "portrait" | "full_body", outfitId: string | null, file: File) {
     if (!draft?.id) return;
     const body = new FormData();
@@ -193,7 +234,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
         });
       }
 
-      await api(`/media-assets/${asset.id}/generate`, {
+      const job = await api<{ id: string; status: string }>(`/media-assets/${asset.id}/generate`, {
         method: "POST",
         body: JSON.stringify({
           workflow_preset_id: workflow.id,
@@ -203,6 +244,11 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
           height: workflow.mappings.height ? 1024 : null,
         }),
       });
+      const slot = `${kind}:${outfitId ?? "default"}`;
+      setMediaJobs(current => ({
+        ...current,
+        [slot]: { id: job.id, status: job.status || "queued" },
+      }));
       await refreshMedia(draft.id);
     } catch (cause) {
       setError(String(cause));
@@ -287,6 +333,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       upload={upload}
       generateMedia={generateMedia}
       removeMedia={removeMedia}
+      mediaJobs={mediaJobs}
       setStat={setStat}
       updateStatDefinition={updateStatDefinition}
       createRelationship={createRelationship}

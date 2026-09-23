@@ -830,3 +830,25 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   width: 100%;
   height: 5px;
 }
+
+
+.entity-image-surface {
+  position: relative;
+}
+.entity-image-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  background: rgba(250, 247, 240, .82);
+  backdrop-filter: blur(1px);
+  color: #5e503f;
+  pointer-events: none;
+}
+.entity-image-loading small {
+  max-width: 85%;
+  text-align: center;
+  font-size: 10px;
+}
