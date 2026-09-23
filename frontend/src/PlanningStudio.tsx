@@ -271,6 +271,7 @@ export function PlanningStudio({
     });
     clearDirty(stage);
     setDrafts((current) => ({ ...current, [stage]: JSON.stringify(draft, null, 2) }));
+    await load();
   }
   async function requestSection(stage: number, focus: string) {
     await api(`/generation-plans/planning/${session!.id}/tasks/${stage}/generate`, {
