@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Menu, MenuItem } from "@mui/material";
+import { CircularProgress, Menu, MenuItem } from "@mui/material";
 import type { MediaAsset } from "../types";
 
 export function EntityImageSurface({
@@ -13,6 +13,8 @@ export function EntityImageSurface({
   onRegenerateWithPrompt,
   onDelete,
   onUpload,
+  loading = false,
+  loadingLabel = "Generating image…",
 }: {
   asset?: MediaAsset | null;
   alt: string;
@@ -24,6 +26,8 @@ export function EntityImageSurface({
   onRegenerateWithPrompt?: (asset: MediaAsset) => void;
   onDelete?: (asset: MediaAsset) => void;
   onUpload?: (file: File) => void;
+  loading?: boolean;
+  loadingLabel?: string;
 }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -40,6 +44,10 @@ export function EntityImageSurface({
       {asset?.file_path
         ? <img src={`/media/${asset.file_path}`} alt={alt} />
         : <span className="entity-image-placeholder">{placeholder ?? asset?.kind ?? "image"}</span>}
+      {loading && <span className="entity-image-loading">
+        <CircularProgress size={24} />
+        <small>{loadingLabel}</small>
+      </span>}
     </button>
     <Menu
       anchorEl={anchor}
