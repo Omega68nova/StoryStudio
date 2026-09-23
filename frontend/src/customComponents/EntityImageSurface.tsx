@@ -7,6 +7,8 @@ export function EntityImageSurface({
   alt,
   className = "",
   placeholder,
+  onGenerate,
+  onGenerateWithPrompt,
   onRegenerate,
   onRegenerateWithPrompt,
   onDelete,
@@ -16,6 +18,8 @@ export function EntityImageSurface({
   alt: string;
   className?: string;
   placeholder?: string;
+  onGenerate?: () => void;
+  onGenerateWithPrompt?: () => void;
   onRegenerate?: (asset: MediaAsset) => void;
   onRegenerateWithPrompt?: (asset: MediaAsset) => void;
   onDelete?: (asset: MediaAsset) => void;
@@ -24,6 +28,7 @@ export function EntityImageSurface({
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const open = Boolean(anchor);
+  const hasImage = Boolean(asset?.file_path);
 
   return <>
     <button
@@ -42,10 +47,12 @@ export function EntityImageSurface({
       onClose={() => setAnchor(null)}
       anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
     >
-      {asset && onRegenerate && <MenuItem onClick={() => { setAnchor(null); onRegenerate(asset); }}>Regenerate</MenuItem>}
-      {asset && onRegenerateWithPrompt && <MenuItem onClick={() => { setAnchor(null); onRegenerateWithPrompt(asset); }}>Regenerate with different prompt</MenuItem>}
-      {onUpload && <MenuItem onClick={() => { setAnchor(null); inputRef.current?.click(); }}>{asset ? "Replace with uploaded image" : "Upload image"}</MenuItem>}
-      {asset && onDelete && <MenuItem onClick={() => { setAnchor(null); onDelete(asset); }}>Delete image</MenuItem>}
+      {!hasImage && onGenerate && <MenuItem onClick={() => { setAnchor(null); onGenerate(); }}>Generate</MenuItem>}
+      {!hasImage && onGenerateWithPrompt && <MenuItem onClick={() => { setAnchor(null); onGenerateWithPrompt(); }}>Generate with custom prompt</MenuItem>}
+      {hasImage && asset && onRegenerate && <MenuItem onClick={() => { setAnchor(null); onRegenerate(asset); }}>Regenerate</MenuItem>}
+      {hasImage && asset && onRegenerateWithPrompt && <MenuItem onClick={() => { setAnchor(null); onRegenerateWithPrompt(asset); }}>Regenerate with custom prompt</MenuItem>}
+      {onUpload && <MenuItem onClick={() => { setAnchor(null); inputRef.current?.click(); }}>{hasImage ? "Replace with uploaded image" : "Upload image"}</MenuItem>}
+      {hasImage && asset && onDelete && <MenuItem onClick={() => { setAnchor(null); onDelete(asset); }}>Delete image</MenuItem>}
     </Menu>
     {onUpload && <input
       ref={inputRef}

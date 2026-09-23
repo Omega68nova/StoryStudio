@@ -468,19 +468,31 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr) 235px;
   gap: 12px;
-  min-height: 610px;
-  align-items: start;
+  min-height: 680px;
+  height: min(82vh, 920px);
+  align-items: stretch;
 }
 .character-editor-left-rail,
 .character-editor-right-rail {
   display: grid;
   gap: 8px;
   min-width: 0;
+  min-height: 0;
+  height: 100%;
+}
+.character-editor-left-rail {
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.character-editor-right-rail {
+  grid-template-rows: minmax(0, 1fr) auto;
 }
 .character-editor-main {
   min-width: 0;
+  min-height: 0;
   display: grid;
   gap: 12px;
+  overflow-y: auto;
+  align-content: start;
 }
 .entity-image-surface {
   width: 100%;
@@ -518,11 +530,16 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   aspect-ratio: 1 / 1;
 }
 .character-fullbody-surface {
-  aspect-ratio: 3 / 7;
-  max-height: 530px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  aspect-ratio: auto;
 }
 .character-stat-box {
-  max-height: 300px;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 2px 3px 3px;
@@ -741,7 +758,8 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
     align-items: end;
   }
   .character-fullbody-surface {
-    max-height: 300px;
+    min-height: 260px;
+    max-height: none;
   }
 }
 @media (max-width: 760px) {
@@ -773,4 +791,42 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+
+.character-stat-group {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid #d9cfbf;
+  border-radius: 10px;
+  background: rgba(247, 241, 230, .8);
+}
+.character-stat-group-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.character-stat-group-header > span {
+  font-variant-numeric: tabular-nums;
+  opacity: .75;
+}
+.character-stat-group-chips {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 5px;
+}
+.character-stat-group-chips .character-stat-chip {
+  width: 100%;
+}
+.character-stat-track.grouped {
+  position: relative;
+  left: auto;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+  height: 5px;
 }

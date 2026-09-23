@@ -61,6 +61,7 @@ from app.schemas import (
     WorldMutationBatch,
     NpcSettingsUpdate,
     OutfitCreate,
+    EntityMediaCreate,
     MediaAssetUpdate,
     MusicThemeCreate,
     MusicTrackUpdate,
@@ -1887,6 +1888,62 @@ async def activate_outfit(outfit_id: str) -> dict[str, Any]:
 @app.get("/api/entities/{entity_id}/media")
 async def list_entity_media(entity_id: str) -> list[dict[str, Any]]:
     return db.fetch_all("SELECT * FROM entity_media_assets WHERE entity_id = ? ORDER BY created_at", (entity_id,))
+
+
+@app.post("/api/entities/{entity_id}/media", status_code=201)
+async def create_entity_media(entity_id: str, request: EntityMediaCreate) -> dict[str, Any]:
+    entity = db.fetch_one(
+        "SELECT * FROM world_entities WHERE id=? AND kind='character'",
+        (entity_id,),
+    )
+    if not entity:
+        raise HTTPException(404, "Character not found")
+    if request.outfit_id and not db.fetch_one(
+        "SELECT id FROM entity_outfits WHERE id=? AND entity_id=?",
+        (request.outfit_id, entity_id),
+    ):
+        raise HTTPException(422, "Outfit does not belong to this character")
+
+    existing = db.fetch_one(
+        "SELECT * FROM entity_media_assets "
+        "WHERE entity_id=? AND kind=? "
+        "AND COALESCE(outfit_id,'')=COALESCE(?, '') AND featured=1",
+        (entity_id, request.kind, request.outfit_id),
+    )
+    now = utc_now()
+    if existing:
+        db.execute(
+            "UPDATE entity_media_assets SET source='generated',prompt=?,"
+            "negative_prompt=?,updated_at=? WHERE id=?",
+            (request.prompt, request.negative_prompt, now, existing["id"]),
+        )
+        return db.fetch_one(
+            "SELECT * FROM entity_media_assets WHERE id=?",
+            (existing["id"],),
+        ) or {}
+
+    asset_id = new_id()
+    db.execute(
+        "INSERT INTO entity_media_assets("
+        "id,project_id,entity_id,outfit_id,kind,source,status,prompt,"
+        "negative_prompt,featured,created_at,updated_at"
+        ") VALUES(?,?,?,?,?,'generated','draft',?,?,1,?,?)",
+        (
+            asset_id,
+            entity["project_id"],
+            entity_id,
+            request.outfit_id,
+            request.kind,
+            request.prompt,
+            request.negative_prompt,
+            now,
+            now,
+        ),
+    )
+    return db.fetch_one(
+        "SELECT * FROM entity_media_assets WHERE id=?",
+        (asset_id,),
+    ) or {}
 
 
 @app.patch("/api/media-assets/{asset_id}")

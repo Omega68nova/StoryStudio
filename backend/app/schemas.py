@@ -466,6 +466,13 @@ class OutfitCreate(BaseModel):
     equipment: list[str] = Field(default_factory=list, max_length=100)
 
 
+class EntityMediaCreate(BaseModel):
+    kind: Literal["portrait", "full_body"]
+    outfit_id: str | None = None
+    prompt: str = Field(default="", max_length=20_000)
+    negative_prompt: str = Field(default="", max_length=20_000)
+
+
 class MediaAssetUpdate(BaseModel):
     prompt: str = Field(default="", max_length=20_000)
     negative_prompt: str = Field(default="", max_length=20_000)
