@@ -159,11 +159,10 @@ class InventoryEntry(DomainModel):
 
 class CharacterState(DomainModel):
     description: str = ""
-    identity: str = ""
+    imagegen_description: str = ""
     pronouns: str = ""
     appearance: str = ""
     personality: str = ""
-    core_personality: str = ""
     goals: list[str] = Field(default_factory=list)
     secrets: str = ""
     character_secrets: list[str] = Field(default_factory=list)
@@ -173,7 +172,7 @@ class CharacterState(DomainModel):
     autonomy_enabled: bool = False
     intervention_frequency: str = "normal"
     current_location_id: DomainId | None = None
-    wardrobe: str = ""
+    wardrobe_notes: str = ""
     equipment: list[str] = Field(default_factory=list)
     inventory: list[InventoryEntry] = Field(default_factory=list)
     abilities: list[str] = Field(default_factory=list)
@@ -182,8 +181,30 @@ class CharacterState(DomainModel):
     known_character_ids: list[DomainId] = Field(default_factory=list)
     known_faction_ids: list[DomainId] = Field(default_factory=list)
     active_outfit_id: DomainId | None = None
+    full_body_height_factor: float = Field(default=0.5, ge=0, le=1)
     archived: bool = False
     visibility: str = "public"
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if not str(normalized.get("description") or "").strip():
+            normalized["description"] = str(normalized.get("identity") or "")
+        if not str(normalized.get("personality") or "").strip():
+            normalized["personality"] = str(
+                normalized.get("core_personality") or ""
+            )
+        if not str(normalized.get("wardrobe_notes") or "").strip():
+            normalized["wardrobe_notes"] = str(
+                normalized.get("wardrobe") or ""
+            )
+        normalized.pop("identity", None)
+        normalized.pop("core_personality", None)
+        normalized.pop("wardrobe", None)
+        return normalized
 
     @property
     def current_location(self) -> DomainReference | None:
@@ -286,23 +307,102 @@ class Weather(DomainModel):
         return DomainReference(id=self.id, kind=DomainKind.WEATHER)
 
 
+class Outfit(DomainModel):
+    id: DomainId
+    entity_id: DomainId
+    name: str = Field(min_length=1)
+    description: str = ""
+    imagegen_description: str = ""
+    equipment: list[DomainId] = Field(default_factory=list)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class StatDisplayStyle(StrEnum):
+    COMPACT = "compact"
+    BAR = "bar"
+
+
 class Stat(DomainModel):
     id: DomainId
     project_id: DomainId
     stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     label: str = Field(min_length=1)
+    description: str = ""
     scope: StatScope = StatScope.CHARACTER
     default_value: Number = 0
     minimum: Number = 0
     maximum: Number = 100
+    minimum_stat_key: str | None = None
+    maximum_stat_key: str | None = None
+    color: str | None = None
+    minimum_color: str | None = None
+    maximum_color: str | None = None
+    display_style: StatDisplayStyle = StatDisplayStyle.COMPACT
     integer_only: bool = True
     visibility: StatVisibility = StatVisibility.PUBLIC
     created_at: str | None = None
     updated_at: str | None = None
 
+    @model_validator(mode="after")
+    def validate_bounds(self) -> Stat:
+        if self.minimum > self.maximum:
+            raise ValueError("stat minimum cannot exceed maximum")
+        if not self.minimum_stat_key and not self.maximum_stat_key:
+            if self.default_value < self.minimum or self.default_value > self.maximum:
+                raise ValueError("stat default must be within numeric bounds")
+        if self.minimum_stat_key == self.stat_key:
+            raise ValueError("stat cannot use itself as minimum")
+        if self.maximum_stat_key == self.stat_key:
+            raise ValueError("stat cannot use itself as maximum")
+        return self
+
     @property
     def reference(self) -> DomainReference:
         return DomainReference(id=self.id, kind=DomainKind.STAT)
+
+
+class ResolvedStatBounds(DomainModel):
+    minimum: Number
+    maximum: Number
+    minimum_stat_key: str | None = None
+    maximum_stat_key: str | None = None
+
+
+def resolve_stat_bounds(
+    definition: Stat,
+    values: dict[str, Number],
+    stat_lookup: Any | None = None,
+) -> ResolvedStatBounds:
+    def resolve_reference(key: str | None, fallback: Number) -> Number:
+        if not key:
+            return fallback
+        if key in values:
+            return values[key]
+        if stat_lookup is None:
+            return fallback
+        referenced = stat_lookup(key, str(definition.scope))
+        return values.get(key, referenced.default_value)
+
+    minimum = resolve_reference(
+        definition.minimum_stat_key,
+        definition.minimum,
+    )
+    maximum = resolve_reference(
+        definition.maximum_stat_key,
+        definition.maximum,
+    )
+    if float(minimum) > float(maximum):
+        raise ValueError(
+            f"Resolved bounds for {definition.stat_key} are invalid: "
+            f"{minimum} > {maximum}"
+        )
+    return ResolvedStatBounds(
+        minimum=minimum,
+        maximum=maximum,
+        minimum_stat_key=definition.minimum_stat_key,
+        maximum_stat_key=definition.maximum_stat_key,
+    )
 
 
 class RequirementExpression(DomainModel):
