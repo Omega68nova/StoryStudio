@@ -243,7 +243,7 @@ export type AppEvent = { type: string; payload: Record<string, unknown> };
 
 export type NpcIntervention = { id: string; story_node_id: string; npc_id: string; dialogue: string; attempted_action: string; ability_key?: string | null };
 export type SceneAppearance = { id: string; story_node_id: string; entity_id: string; outfit_id?: string | null; encounter_kind: string };
-export type Outfit = { id: string; entity_id: string; name: string; description: string; equipment: string[] };
+export type Outfit = { id: string; entity_id: string; name: string; description: string; imagegen_description: string; equipment: string[] };
 export type MediaAsset = { id: string; entity_id: string; outfit_id?: string | null; kind: "portrait" | "full_body" | "location"; status: string; file_path?: string | null; prompt: string; negative_prompt: string };
 export type MusicTrack = { id: string; title: string; file_path: string; mime_type: string; position: number };
 export type MusicTheme = { id: string; name: string; description: string; playback_mode: "shuffle" | "repeat_one" | "in_order"; tracks: MusicTrack[] };
@@ -262,7 +262,7 @@ export type UserAmbientPreferences = { enabled: boolean; master_volume: number }
 export type UserNoisePreferences = { enabled: boolean; master_volume: number };
 export type NoiseVariant = { id: string; source_path: string; url: string; label: string; playback_rate: number; default_gain: number; tags: string[]; enabled: boolean; available: boolean };
 export type NoiseEvent = { project_id: string; noise_id: string; label: string; url: string; playback_rate: number; gain: number; source: string };
-export type StatDefinition = { id: string; stat_key: string; label: string; scope: "character" | "relationship"; default_value: number; minimum: number; maximum: number; integer_only: number; visibility: string; color?: string | null; minimum_stat_key?: string | null; maximum_stat_key?: string | null; minimum_color?: string | null; maximum_color?: string | null; display_style?: "compact" | "bar" | null };
+export type StatDefinition = { id: string; stat_key: string; label: string; description: string; scope: "character" | "relationship"; default_value: number; minimum: number; maximum: number; integer_only: number; visibility: string; color?: string | null; minimum_stat_key?: string | null; maximum_stat_key?: string | null; minimum_color?: string | null; maximum_color?: string | null; display_style: "compact" | "bar" };
 export type AbilityDefinition = { id: string; ability_key: string; name: string; description: string; icon_url?: string | null; target_type: "self" | "character" | "choice" | "relationship" | "location" | "all" | "party" | "allies" | "enemies" | "nearby_enemies" | "faction_members" | "random"; requirements?: Record<string, unknown>; costs: Record<string, number>; effects: Array<Record<string, unknown>>; minigame_profile?: { timed_attack?: { line_count: number; damage_per_line: number }; bullethell_skill_ids?: string[] } };
 
 export type GenerationTaskStatus =
