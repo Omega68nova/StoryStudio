@@ -151,6 +151,14 @@ class RulesRuntime:
                 inventory_changes.append({"character_id": str(actor.id), "entity_id": str(actor.id), "item_id": item_id, "previous_quantity": current, "quantity": current - quantity, "delta": -quantity})
             effects: list[dict[str, Any]] = []
             participants = {"actor": self.participant(project_id, actor_raw), "source": self.participant(project_id, source_raw)}
+            # Active effects created by this ability begin after the action that
+            # applied them has committed. Otherwise an effect with a one-action
+            # delay would already be overdue immediately after creation.
+            timing_projection = copy.deepcopy(projection)
+            timing_projection["world_action_count"] = int(projection.get("world_action_count", 0)) + 1
+            target_counts = dict(projection.get("target_action_counts", {}))
+            target_counts[str(actor.id)] = int(target_counts.get(str(actor.id), 0)) + 1
+            timing_projection["target_action_counts"] = target_counts
             proposed_names = {str(entity.get("name", "")).casefold() for entity in projection["entities"].values() if not entity.get("state", {}).get("archived")}
             for action in ability.actions:
                 if action.destination_id: self.entity(projection, action.destination_id, "location")
@@ -164,7 +172,7 @@ class RulesRuntime:
                 if str(action.kind) == "apply_effect":
                     definition = self.data.rules.effect(project_id, str(action.effect_key))
                     if not definition or not definition.enabled: raise DomainOperationError(f"Unknown effect: {action.effect_key}")
-                    effects.extend(self.normalize_effect(project_id, projection, definition, target, participants, action.duration_override, action.tick_override) for target in resolved)
+                    effects.extend(self.normalize_effect(project_id, timing_projection, definition, target, participants, action.duration_override, action.tick_override) for target in resolved)
                 else: effects.extend(self.normalize_action(action, target, actor) for target in (resolved[:1] if str(action.kind) in {"advance_time", "play_noise", "create"} else resolved))
         except DomainOperationError as exc: raise RulesRuntimeError(str(exc)) from exc
         return {"actor_id": actor.id, "target_id": primary.id, "ability_key": ability.ability_key, "ability_name": ability.name, "source_item_id": source_item_id, "costs": execution.costs, "inventory_changes": inventory_changes, "effects": effects}
