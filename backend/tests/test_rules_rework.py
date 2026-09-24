@@ -451,3 +451,124 @@ def test_ability_created_effect_starts_after_committing_action() -> None:
     assert active["started_at"] == 6
     assert active["next_tick"] == 7
     assert active["expires_at"] == 7
+
+
+
+def test_legacy_inline_ability_migrates_to_effects_actions_and_warnings(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    project = db.create_project("Legacy rules")
+    project_id = project["id"]
+    now = utc_now()
+    db.execute(
+        "INSERT INTO stat_definitions(project_id,stat_key,label,description,default_value,minimum,maximum,display_style,integer_only,visibility,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (project_id, "hp", "HP", "", 100, 0, 100, "bar", 1, "public", now, now),
+    )
+    db.execute(
+        "INSERT INTO stat_definition_owner_kinds(project_id,stat_key,owner_kind) VALUES(?,?,?)",
+        (project_id, "hp", "character"),
+    )
+
+    with db._lock, db.connect() as connection:
+        connection.execute(
+            "CREATE TABLE ability_definitions_legacy_v2("
+            "id TEXT PRIMARY KEY,project_id TEXT,ability_key TEXT,name TEXT,description TEXT,target_type TEXT,"
+            "requirements_json TEXT,costs_json TEXT,effects_json TEXT,minigame_profile_json TEXT,created_at TEXT,updated_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO ability_definitions_legacy_v2 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-ability", project_id, "slash", "Slash", "", "character",
+                '{"kind":"not","child":{"kind":"has_tag","tag":"invulnerable","target":"target"}}',
+                '{"hp":5}',
+                '[{"operation":"subtract","stat_key":"hp","amount":12,"target":"target"},'
+                '{"operation":"move","destination_id":"somewhere","target":"actor"},'
+                '{"operation":"apply_status","status":"bleeding","target":"target"}]',
+                '{}', now, now,
+            ),
+        )
+        db._migrate_canonical_rules(connection)
+
+    ability = db.fetch_one("SELECT * FROM ability_definitions WHERE project_id=? AND ability_key='slash'", (project_id,))
+    assert ability is not None
+    generated = db.fetch_one("SELECT * FROM effect_definitions WHERE project_id=? AND effect_key='slash_effect_1'", (project_id,))
+    assert generated is not None
+    assert generated["target_stat_key"] == "hp"
+    assert generated["operation"] == "subtract"
+    formula = db.fetch_one(
+        "SELECT node_kind,constant_value FROM effect_formula_nodes WHERE project_id=? AND effect_key='slash_effect_1'",
+        (project_id,),
+    )
+    assert formula == {"node_kind": "constant", "constant_value": 12.0}
+    actions = db.fetch_all(
+        "SELECT action_kind,effect_key,destination_id FROM ability_actions WHERE project_id=? AND ability_key='slash' ORDER BY position",
+        (project_id,),
+    )
+    assert [item["action_kind"] for item in actions] == ["apply_effect", "move"]
+    assert actions[0]["effect_key"] == "slash_effect_1"
+    root = db.fetch_one(
+        "SELECT id,node_kind FROM ability_requirement_nodes WHERE project_id=? AND ability_key='slash' AND parent_id IS NULL",
+        (project_id,),
+    )
+    assert root and root["node_kind"] == "not"
+    child = db.fetch_one(
+        "SELECT edge_kind,node_kind,tag FROM ability_requirement_nodes WHERE parent_id=?",
+        (root["id"],),
+    )
+    assert child == {"edge_kind": "not_child", "node_kind": "has_tag", "tag": "invulnerable"}
+    warnings = db.fetch_all(
+        "SELECT warning_kind,details_json FROM rule_migration_warnings WHERE project_id=?",
+        (project_id,),
+    )
+    assert any(item["warning_kind"] == "discarded_marker_status" for item in warnings)
+
+
+def test_legacy_active_effect_events_are_removed_but_stat_history_remains(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    project = db.create_project("Legacy effect history")
+    project_id = project["id"]
+    now = utc_now()
+    node_id = "story-node"
+    db.execute(
+        "INSERT INTO story_nodes(id,project_id,parent_id,role,content,status,created_at,narration_mode,action_kind) "
+        "VALUES(?,?,NULL,'assistant','x','complete',?,'third_limited','story')",
+        (node_id, project_id, now),
+    )
+    transaction_id = "legacy-tx"
+    db.execute(
+        "INSERT INTO world_transactions(id,project_id,story_node_id,parent_node_id,branch_sequence,elapsed_minutes,provenance,status,summary,created_at) "
+        "VALUES(?,?,?,NULL,1,0,'author','committed','legacy',?)",
+        (transaction_id, project_id, node_id, now),
+    )
+    entity_id = "legacy-character"
+    db.execute(
+        "INSERT INTO world_entities(id,project_id,kind,canonical_name,aliases_json,tags_json,created_at) VALUES(?,?, 'character','Hero','[]','[]',?)",
+        (entity_id, project_id, now),
+    )
+    db.execute(
+        "INSERT INTO world_events(id,transaction_id,entity_id,event_type,ordinal,payload_json,created_at) VALUES(?,?,?,?,?,?,?)",
+        ("effect-event", transaction_id, entity_id, "effect.applied", 0, '{"stat_key":"hp"}', now),
+    )
+    db.execute(
+        "INSERT INTO world_events(id,transaction_id,entity_id,event_type,ordinal,payload_json,created_at) VALUES(?,?,?,?,?,?,?)",
+        ("stat-event", transaction_id, entity_id, "stat.changed", 1, '{"stat_key":"hp","value":80}', now),
+    )
+
+    with db._lock, db.connect() as connection:
+        connection.execute(
+            "CREATE TABLE ability_definitions_legacy_v2("
+            "id TEXT PRIMARY KEY,project_id TEXT,ability_key TEXT,name TEXT,description TEXT,target_type TEXT,"
+            "requirements_json TEXT,costs_json TEXT,effects_json TEXT,minigame_profile_json TEXT,created_at TEXT,updated_at TEXT)"
+        )
+        db._migrate_canonical_rules(connection)
+
+    assert db.fetch_one("SELECT id FROM world_events WHERE id='effect-event'") is None
+    assert db.fetch_one("SELECT id FROM world_events WHERE id='stat-event'") is not None
+    warning = db.fetch_one(
+        "SELECT warning_kind,details_json FROM rule_migration_warnings WHERE project_id=? AND warning_kind='discarded_active_effects'",
+        (project_id,),
+    )
+    assert warning is not None
+    assert '"instance_count": 1' in warning["details_json"]
