@@ -85,20 +85,227 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
 
 function RuleList({ title, add, rows }: { title: string; add: () => void; rows: Array<{ key: string; title: string; subtitle: string; edit: () => void; remove: () => void }> }) { return <section className="panel"><Stack direction="row" justifyContent="space-between"><h2>{title}</h2><Button onClick={add}>Add</Button></Stack>{rows.map(row => <article className="rule-row" key={row.key}><div><strong>{row.title}</strong><small>{row.subtitle}</small></div><div><Button onClick={row.edit}>Edit</Button><Button color="error" onClick={row.remove}>Delete</Button></div></article>)}</section>; }
 
-function AbilityDialog({ ability, editing, stats, effects, bulletSkills, setAbility, close, save }: { ability: AbilityDefinition | null; editing: boolean; stats: StatDefinition[]; effects: EffectDefinition[]; bulletSkills: Array<{ id: string; name: string }>; setAbility: (value: AbilityDefinition) => void; close: () => void; save: () => void }) {
+function RequirementEditor({
+  node,
+  stats,
+  items,
+  locations,
+  abilities,
+  onChange,
+  depth = 0,
+}: {
+  node: RequirementExpression;
+  stats: StatDefinition[];
+  items: Array<{ id: string; name: string }>;
+  locations: Array<{ id: string; name: string }>;
+  abilities: AbilityDefinition[];
+  onChange: (value: RequirementExpression) => void;
+  depth?: number;
+}) {
+  const kind = node.kind ?? "compare";
+  const changeKind = (next: NonNullable<RequirementExpression["kind"]>) => {
+    if (next === "and" || next === "or") onChange({ kind: next, children: [{ kind: "compare", target: "actor", stat_key: stats[0]?.stat_key ?? "", comparison: "gte", value: 0 }] });
+    else if (next === "not") onChange({ kind: next, child: { kind: "compare", target: "actor", stat_key: stats[0]?.stat_key ?? "", comparison: "gte", value: 0 } });
+    else if (next === "compare") onChange({ kind: next, target: "actor", stat_key: stats[0]?.stat_key ?? "", comparison: "gte", value: 0 });
+    else if (next === "has_item") onChange({ kind: next, target: "actor", item_id: items[0]?.id ?? "" });
+    else if (next === "has_tag") onChange({ kind: next, target: "actor", tag: "" });
+    else if (next === "location") onChange({ kind: next, target: "actor", location_id: locations[0]?.id ?? "" });
+    else if (next === "has_ability") onChange({ kind: next, target: "actor", ability_key: abilities[0]?.ability_key ?? "" });
+    else if (next === "relationship") onChange({ kind: next, target: "actor", relation: "" });
+    else if (next === "time") onChange({ kind: next, target: "actor", time_phase_id: "" });
+    else onChange({ kind: next, target: "actor", weather_id: "" });
+  };
+  const targetField = !["and", "or", "not"].includes(kind) && <TextField
+    select
+    size="small"
+    label="Participant"
+    value={node.target ?? "actor"}
+    onChange={event => onChange({ ...node, target: event.target.value as RequirementExpression["target"] })}
+    sx={{ minWidth: 130 }}
+  >
+    {["actor", "target", "party", "location", "relationship_target"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+  </TextField>;
+  return <Stack spacing={1} sx={{ borderLeft: depth ? "2px solid" : undefined, borderColor: "divider", pl: depth ? 1 : 0 }}>
+    <Stack direction="row" spacing={1} alignItems="center">
+      <TextField select size="small" label="Requirement" value={kind} onChange={event => changeKind(event.target.value as NonNullable<RequirementExpression["kind"]>)} sx={{ minWidth: 150 }}>
+        {["and", "or", "not", "compare", "has_item", "has_tag", "relationship", "location", "time", "weather", "has_ability"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+      </TextField>
+      {targetField}
+      {kind === "compare" && <>
+        <TextField select size="small" label="Stat" value={node.stat_key ?? ""} onChange={event => onChange({ ...node, stat_key: event.target.value })} sx={{ minWidth: 150 }}>
+          {stats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}
+        </TextField>
+        <TextField select size="small" label="Comparison" value={node.comparison ?? "gte"} onChange={event => onChange({ ...node, comparison: event.target.value as RequirementExpression["comparison"] })}>
+          {["eq", "ne", "lt", "lte", "gt", "gte"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+        </TextField>
+        <TextField size="small" type="number" label="Value" value={typeof node.value === "number" ? node.value : 0} onChange={event => onChange({ ...node, value: Number(event.target.value) })} />
+      </>}
+      {kind === "has_item" && <TextField select size="small" label="Item" value={node.item_id ?? ""} onChange={event => onChange({ ...node, item_id: event.target.value })} sx={{ minWidth: 180 }}>
+        {items.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+      </TextField>}
+      {kind === "has_tag" && <TextField size="small" label="Tag" value={node.tag ?? ""} onChange={event => onChange({ ...node, tag: event.target.value })} />}
+      {kind === "relationship" && <TextField size="small" label="Relationship" value={node.relation ?? ""} onChange={event => onChange({ ...node, relation: event.target.value })} />}
+      {kind === "location" && <TextField select size="small" label="Location" value={node.location_id ?? ""} onChange={event => onChange({ ...node, location_id: event.target.value })} sx={{ minWidth: 180 }}>
+        {locations.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+      </TextField>}
+      {kind === "time" && <TextField size="small" label="Time phase ID" value={node.time_phase_id ?? ""} onChange={event => onChange({ ...node, time_phase_id: event.target.value })} />}
+      {kind === "weather" && <TextField size="small" label="Weather ID" value={node.weather_id ?? ""} onChange={event => onChange({ ...node, weather_id: event.target.value })} />}
+      {kind === "has_ability" && <TextField select size="small" label="Ability" value={node.ability_key ?? ""} onChange={event => onChange({ ...node, ability_key: event.target.value })} sx={{ minWidth: 180 }}>
+        {abilities.map(item => <MenuItem key={item.ability_key} value={item.ability_key}>{item.name}</MenuItem>)}
+      </TextField>}
+    </Stack>
+    {(kind === "and" || kind === "or") && <>
+      {(node.children ?? []).map((child, index) => <Stack key={index} direction="row" spacing={1} alignItems="flex-start">
+        <div style={{ flex: 1 }}><RequirementEditor node={child} stats={stats} items={items} locations={locations} abilities={abilities} depth={depth + 1} onChange={next => onChange({ ...node, children: (node.children ?? []).map((item, childIndex) => childIndex === index ? next : item) })} /></div>
+        <Button onClick={() => onChange({ ...node, children: (node.children ?? []).filter((_, childIndex) => childIndex !== index) })}>Remove</Button>
+      </Stack>)}
+      <Button onClick={() => onChange({ ...node, children: [...(node.children ?? []), { kind: "compare", target: "actor", stat_key: stats[0]?.stat_key ?? "", comparison: "gte", value: 0 }] })}>Add child</Button>
+    </>}
+    {kind === "not" && <RequirementEditor node={node.child ?? { kind: "compare", target: "actor", stat_key: stats[0]?.stat_key ?? "", comparison: "gte", value: 0 }} stats={stats} items={items} locations={locations} abilities={abilities} depth={depth + 1} onChange={child => onChange({ ...node, child })} />}
+  </Stack>;
+}
+
+function AbilityDialog({
+  ability,
+  editing,
+  stats,
+  effects,
+  abilities,
+  world,
+  bulletSkills,
+  setAbility,
+  close,
+  save,
+}: {
+  ability: AbilityDefinition | null;
+  editing: boolean;
+  stats: StatDefinition[];
+  effects: EffectDefinition[];
+  abilities: AbilityDefinition[];
+  world: WorldProjection | null;
+  bulletSkills: Array<{ id: string; name: string }>;
+  setAbility: (value: AbilityDefinition) => void;
+  close: () => void;
+  save: () => void;
+}) {
   if (!ability) return null;
+  const entities = Object.values(world?.entities ?? {}).filter(item => !item.state.archived);
+  const items = entities.filter(item => item.kind === "item").map(item => ({ id: item.id, name: item.name }));
+  const locations = entities.filter(item => item.kind === "location").map(item => ({ id: item.id, name: item.name }));
+  const facts = entities.filter(item => item.kind === "fact").map(item => ({ id: item.id, name: item.name }));
+  const characterStats = stats.filter(item => item.compatible_owner_kinds.includes("character"));
+  const targetOwner: RuleOwnerKind | null = ability.target_type === "relationship" ? "relationship" : ability.target_type === "location" ? "location" : ["self", "character", "party", "allies", "enemies", "nearby_enemies", "faction_members"].includes(ability.target_type) ? "character" : null;
+  const compatibleEffects = targetOwner ? effects.filter(item => stats.find(stat => stat.stat_key === item.target_stat_key)?.compatible_owner_kinds.includes(targetOwner)) : effects;
   const updateCost = (index: number, patch: Partial<AbilityCost>) => setAbility({ ...ability, costs: ability.costs.map((item, i) => i === index ? { ...item, ...patch } : item) });
   const updateAction = (index: number, patch: Partial<AbilityAction>) => setAbility({ ...ability, actions: ability.actions.map((item, i) => i === index ? { ...item, ...patch } : item) });
-  const requirementChildren = Array.isArray(ability.requirements?.children) ? ability.requirements.children as Array<Record<string, unknown>> : [];
-  const setRequirements = (children: Array<Record<string, unknown>>) => setAbility({ ...ability, requirements: children.length ? { kind: "and", children } : {} });
-  return <Dialog open onClose={close} maxWidth="md" fullWidth><DialogTitle>{editing ? "Edit" : "Add"} ability</DialogTitle><DialogContent className="music-dialog">
-    <TextField label="Stable key" disabled={editing} value={ability.ability_key} onChange={e => setAbility({ ...ability, ability_key: e.target.value })}/><TextField label="Name" value={ability.name} onChange={e => setAbility({ ...ability, name: e.target.value })}/><TextField multiline label="Description" value={ability.description} onChange={e => setAbility({ ...ability, description: e.target.value })}/>
-    <Stack direction="row" spacing={1}><TextField select label="Kind" value={ability.ability_kind} onChange={e => setAbility({ ...ability, ability_kind: e.target.value as "active" | "passive" })}><MenuItem value="active">Active</MenuItem><MenuItem value="passive">Passive</MenuItem></TextField><TextField select label="Target" value={ability.target_type} onChange={e => setAbility({ ...ability, target_type: e.target.value as AbilityDefinition["target_type"] })}>{["self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>{(["character", "item"] as const).map(kind => <FormControlLabel key={kind} control={<Checkbox checked={ability.compatible_owner_kinds.includes(kind)} onChange={e => setAbility({ ...ability, compatible_owner_kinds: e.target.checked ? [...ability.compatible_owner_kinds, kind] : ability.compatible_owner_kinds.filter(value => value !== kind) })}/>} label={kind}/>)}</Stack>
-    <h3>Requirements</h3>{requirementChildren.map((requirement, index) => <Stack key={index} direction="row" spacing={1}><TextField select label="Participant" value={String(requirement.target ?? "actor")} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, target: e.target.value } : item))}>{["actor", "target"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>{requirement.kind === "has_tag" ? <TextField label="Required tag" value={String(requirement.tag ?? "")} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, tag: e.target.value } : item))}/> : <><TextField select label="Stat" value={String(requirement.stat_key ?? "")} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, stat_key: e.target.value } : item))}>{stats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}</TextField><TextField select label="Comparison" value={String(requirement.comparison ?? "gte")} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, comparison: e.target.value } : item))}>{["eq", "ne", "lt", "lte", "gt", "gte"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField type="number" label="Value" value={Number(requirement.value ?? 0)} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, value: Number(e.target.value) } : item))}/></>}<Button onClick={() => setRequirements(requirementChildren.filter((_, i) => i !== index))}>Remove</Button></Stack>)}<Stack direction="row"><Button disabled={!stats.length} onClick={() => setRequirements([...requirementChildren, { kind: "compare", target: "actor", stat_key: stats[0]?.stat_key ?? "", comparison: "gte", value: 0 }])}>Add stat requirement</Button><Button onClick={() => setRequirements([...requirementChildren, { kind: "has_tag", target: "actor", tag: "" }])}>Add tag requirement</Button></Stack>
-    <h3>Costs</h3>{ability.costs.map((cost, index) => <Stack key={index} direction="row" spacing={1}><TextField select label="Cost" value={cost.kind} onChange={e => updateCost(index, { kind: e.target.value as AbilityCost["kind"] })}>{["stat", "consume_source", "consume_fuel"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>{cost.kind === "stat" && <TextField select label="Stat" value={cost.stat_key ?? ""} onChange={e => updateCost(index, { stat_key: e.target.value })}>{stats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}</TextField>}{cost.kind === "consume_fuel" && <TextField label="Fuel item ID" value={cost.item_id ?? ""} onChange={e => updateCost(index, { item_id: e.target.value })}/>}<TextField type="number" label="Amount" value={cost.amount} onChange={e => updateCost(index, { amount: Number(e.target.value) })}/><Button onClick={() => setAbility({ ...ability, costs: ability.costs.filter((_, i) => i !== index) })}>Remove</Button></Stack>)}<Button onClick={() => setAbility({ ...ability, costs: [...ability.costs, { kind: "stat", stat_key: stats[0]?.stat_key ?? "", amount: 1 }] })}>Add cost</Button>
-    <h3>Ordered actions</h3>{ability.actions.map((action, index) => <Stack key={index} direction="row" spacing={1}><TextField select label="Action" value={action.kind} onChange={e => updateAction(index, { kind: e.target.value as AbilityAction["kind"] })}>{["apply_effect", "move", "create", "remove", "reveal_knowledge", "change_relationship", "advance_time", "play_noise"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField label="Target selector" value={action.target} onChange={e => updateAction(index, { target: e.target.value })}/>{action.kind === "apply_effect" && <TextField select label="Effect" value={action.effect_key ?? ""} onChange={e => updateAction(index, { effect_key: e.target.value })}>{effects.map(item => <MenuItem key={item.effect_key} value={item.effect_key}>{item.name}</MenuItem>)}</TextField>}{action.kind === "advance_time" && <TextField type="number" label="Minutes" value={action.minutes ?? 0} onChange={e => updateAction(index, { minutes: Number(e.target.value) })}/>}<Button onClick={() => setAbility({ ...ability, actions: ability.actions.filter((_, i) => i !== index) })}>Remove</Button></Stack>)}<Button disabled={!effects.length} onClick={() => setAbility({ ...ability, actions: [...ability.actions, { kind: "apply_effect", target: "target", effect_key: effects[0]?.effect_key }] })}>Add effect action</Button>
-    {ability.ability_kind === "passive" && <><h3>Passive triggers</h3>{["ability_used", "stat_changed", "damage", "owner_action", "movement", "time_advanced"].map(kind => <FormControlLabel key={kind} control={<Checkbox checked={ability.passive_triggers.some(item => item.kind === kind)} onChange={e => setAbility({ ...ability, passive_triggers: e.target.checked ? [...ability.passive_triggers, { kind: kind as AbilityDefinition["passive_triggers"][number]["kind"] }] : ability.passive_triggers.filter(item => item.kind !== kind) })}/>} label={kind}/>)}</>}
-    <h3>Minigames</h3><Stack direction="row" flexWrap="wrap">{bulletSkills.map(skill => <FormControlLabel key={skill.id} control={<Checkbox checked={ability.bullethell_skill_ids.includes(skill.id)} onChange={e => setAbility({ ...ability, bullethell_skill_ids: e.target.checked ? [...ability.bullethell_skill_ids, skill.id] : ability.bullethell_skill_ids.filter(id => id !== skill.id) })}/>} label={skill.name}/>)}</Stack>
+  const replaceAction = (index: number, kind: AbilityAction["kind"]) => {
+    const next: AbilityAction = { kind, target: "target" };
+    if (kind === "apply_effect") next.effect_key = compatibleEffects[0]?.effect_key ?? "";
+    if (kind === "move") next.destination_id = locations[0]?.id ?? "";
+    if (kind === "create") { next.entity_kind = "item"; next.entity_name = ""; next.state = {}; }
+    if (kind === "reveal_knowledge") next.fact_id = facts[0]?.id ?? "";
+    if (kind === "change_relationship") next.relation = "";
+    if (kind === "advance_time") next.minutes = 0;
+    if (kind === "play_noise") next.noise_id = "";
+    setAbility({ ...ability, actions: ability.actions.map((item, i) => i === index ? next : item) });
+  };
+  const moveAction = (index: number, delta: number) => {
+    const next = [...ability.actions];
+    const targetIndex = index + delta;
+    if (targetIndex < 0 || targetIndex >= next.length) return;
+    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+    setAbility({ ...ability, actions: next });
+  };
+  const requirements = ability.requirements?.kind ? ability.requirements : null;
+  return <Dialog open onClose={close} maxWidth="lg" fullWidth><DialogTitle>{editing ? "Edit" : "Add"} ability</DialogTitle><DialogContent className="music-dialog">
+    <TextField label="Stable key" disabled={editing} value={ability.ability_key} onChange={e => setAbility({ ...ability, ability_key: e.target.value })}/>
+    <TextField label="Name" value={ability.name} onChange={e => setAbility({ ...ability, name: e.target.value })}/>
+    <TextField multiline label="Description" value={ability.description} onChange={e => setAbility({ ...ability, description: e.target.value })}/>
+    <TextField label="Semantic icon" value={ability.icon ?? ""} onChange={e => setAbility({ ...ability, icon: e.target.value || null })} helperText="Short semantic glyph/name used by the UI; this is not image media." />
+    <Stack direction="row" spacing={1} flexWrap="wrap">
+      <TextField select label="Kind" value={ability.ability_kind} onChange={e => setAbility({ ...ability, ability_kind: e.target.value as "active" | "passive", passive_triggers: e.target.value === "passive" && ability.passive_triggers.length === 0 ? [{ kind: "owner_action" }] : ability.passive_triggers })}>
+        <MenuItem value="active">Active</MenuItem><MenuItem value="passive">Passive</MenuItem>
+      </TextField>
+      <TextField select label="Target" value={ability.target_type} onChange={e => setAbility({ ...ability, target_type: e.target.value as AbilityDefinition["target_type"] })}>
+        {["self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+      </TextField>
+      {(["character", "item"] as const).map(kind => <FormControlLabel key={kind} control={<Checkbox checked={ability.compatible_owner_kinds.includes(kind)} onChange={e => setAbility({ ...ability, compatible_owner_kinds: e.target.checked ? [...ability.compatible_owner_kinds, kind] : ability.compatible_owner_kinds.filter(value => value !== kind) })}/>} label={kind}/>)}
+    </Stack>
+
+    <h3>Requirements</h3>
+    {requirements
+      ? <Stack spacing={1}><RequirementEditor node={requirements} stats={stats} items={items} locations={locations} abilities={abilities.filter(item => item.ability_key !== ability.ability_key)} onChange={next => setAbility({ ...ability, requirements: next })}/><Button onClick={() => setAbility({ ...ability, requirements: {} })}>Clear requirements</Button></Stack>
+      : <Button onClick={() => setAbility({ ...ability, requirements: { kind: "compare", target: "actor", stat_key: characterStats[0]?.stat_key ?? "", comparison: "gte", value: 0 } })} disabled={!stats.length}>Add requirement</Button>}
+
+    <h3>Costs</h3>
+    {ability.costs.map((cost, index) => <Stack key={index} direction="row" spacing={1} alignItems="center">
+      <TextField select label="Cost" value={cost.kind} onChange={e => updateCost(index, { kind: e.target.value as AbilityCost["kind"], stat_key: e.target.value === "stat" ? characterStats[0]?.stat_key ?? "" : null, item_id: e.target.value === "consume_fuel" ? items[0]?.id ?? "" : null })}>
+        <MenuItem value="stat">Stat</MenuItem>
+        {ability.compatible_owner_kinds.includes("item") && <MenuItem value="consume_source">Consume source item</MenuItem>}
+        <MenuItem value="consume_fuel">Consume fuel item</MenuItem>
+      </TextField>
+      {cost.kind === "stat" && <TextField select label="Stat" value={cost.stat_key ?? ""} onChange={e => updateCost(index, { stat_key: e.target.value })}>
+        {characterStats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}
+      </TextField>}
+      {cost.kind === "consume_fuel" && <TextField select label="Fuel item" value={cost.item_id ?? ""} onChange={e => updateCost(index, { item_id: e.target.value })} sx={{ minWidth: 180 }}>
+        {items.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+      </TextField>}
+      <TextField type="number" label="Amount" value={cost.amount} onChange={e => updateCost(index, { amount: Number(e.target.value) })}/>
+      <Button onClick={() => setAbility({ ...ability, costs: ability.costs.filter((_, i) => i !== index) })}>Remove</Button>
+    </Stack>)}
+    <Button disabled={!characterStats.length} onClick={() => setAbility({ ...ability, costs: [...ability.costs, { kind: "stat", stat_key: characterStats[0]?.stat_key ?? "", amount: 1 }] })}>Add cost</Button>
+
+    <h3>Ordered actions</h3>
+    {ability.actions.map((action, index) => <Stack key={index} spacing={1} sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1 }}>
+      <Stack direction="row" spacing={1} alignItems="center">
+        <TextField select label="Action" value={action.kind} onChange={e => replaceAction(index, e.target.value as AbilityAction["kind"])}>
+          {["apply_effect", "move", "create", "remove", "reveal_knowledge", "change_relationship", "advance_time", "play_noise"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+        </TextField>
+        <TextField select label="Target selector" value={action.target} onChange={e => updateAction(index, { target: e.target.value })}>
+          {["actor", "target", "party", "location", "nearby_enemies", "faction_members", "relationship_target", "allies", "enemies", "all", "random"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+        </TextField>
+        <Button disabled={index === 0} onClick={() => moveAction(index, -1)}>↑</Button>
+        <Button disabled={index === ability.actions.length - 1} onClick={() => moveAction(index, 1)}>↓</Button>
+        <Button onClick={() => setAbility({ ...ability, actions: ability.actions.filter((_, i) => i !== index) })}>Remove</Button>
+      </Stack>
+      {action.kind === "apply_effect" && <Stack direction="row" spacing={1}>
+        <TextField select fullWidth label="Effect" value={action.effect_key ?? ""} onChange={e => updateAction(index, { effect_key: e.target.value })}>
+          {compatibleEffects.map(item => <MenuItem key={item.effect_key} value={item.effect_key}>{item.name} · {item.target_stat_key}</MenuItem>)}
+        </TextField>
+        <TextField type="number" label="Duration override" value={action.duration_override ?? ""} onChange={e => updateAction(index, { duration_override: e.target.value === "" ? null : Number(e.target.value) })} />
+        <TextField type="number" label="Tick override" value={action.tick_override ?? ""} onChange={e => updateAction(index, { tick_override: e.target.value === "" ? null : Number(e.target.value) })} />
+      </Stack>}
+      {action.kind === "move" && <TextField select label="Destination" value={action.destination_id ?? ""} onChange={e => updateAction(index, { destination_id: e.target.value })}>
+        {locations.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+      </TextField>}
+      {action.kind === "create" && <Stack direction="row" spacing={1}><TextField select label="Entity kind" value={action.entity_kind ?? "item"} onChange={e => updateAction(index, { entity_kind: e.target.value })}>{["character", "location", "faction", "item", "lore_system", "fact", "plot_beat"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField label="Entity name" value={action.entity_name ?? ""} onChange={e => updateAction(index, { entity_name: e.target.value })}/><TextField label="Description" value={String(action.state?.description ?? "")} onChange={e => updateAction(index, { state: { ...(action.state ?? {}), description: e.target.value } })}/></Stack>}
+      {action.kind === "reveal_knowledge" && <TextField select label="Fact" value={action.fact_id ?? ""} onChange={e => updateAction(index, { fact_id: e.target.value })}>{facts.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField>}
+      {action.kind === "change_relationship" && <TextField label="Relationship" value={action.relation ?? ""} onChange={e => updateAction(index, { relation: e.target.value })}/>}
+      {action.kind === "advance_time" && <TextField type="number" label="Minutes" value={action.minutes ?? 0} onChange={e => updateAction(index, { minutes: Number(e.target.value) })}/>}
+      {action.kind === "play_noise" && <TextField label="Noise ID" value={action.noise_id ?? ""} onChange={e => updateAction(index, { noise_id: e.target.value })}/>}
+    </Stack>)}
+    <Button disabled={!compatibleEffects.length} onClick={() => setAbility({ ...ability, actions: [...ability.actions, { kind: "apply_effect", target: "target", effect_key: compatibleEffects[0]?.effect_key ?? "" }] })}>Add effect action</Button>
+    <Button onClick={() => setAbility({ ...ability, actions: [...ability.actions, { kind: "advance_time", target: "actor", minutes: 0 }] })}>Add other action</Button>
+
+    {ability.ability_kind === "passive" && <><h3>Passive triggers</h3>
+      {ability.passive_triggers.map((trigger, index) => <Stack key={index} direction="row" spacing={1}>
+        <TextField select label="Trigger" value={trigger.kind} onChange={e => setAbility({ ...ability, passive_triggers: ability.passive_triggers.map((item, i) => i === index ? { kind: e.target.value as AbilityDefinition["passive_triggers"][number]["kind"] } : item) })}>
+          {["ability_used", "stat_changed", "damage", "owner_action", "movement", "time_advanced"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+        </TextField>
+        {["stat_changed", "damage"].includes(trigger.kind) && <TextField select label="Optional stat filter" value={trigger.stat_key ?? ""} onChange={e => setAbility({ ...ability, passive_triggers: ability.passive_triggers.map((item, i) => i === index ? { ...item, stat_key: e.target.value || null } : item) })}>
+          <MenuItem value="">Any stat</MenuItem>{characterStats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}
+        </TextField>}
+        <Button onClick={() => setAbility({ ...ability, passive_triggers: ability.passive_triggers.filter((_, i) => i !== index) })}>Remove</Button>
+      </Stack>)}
+      <Button onClick={() => setAbility({ ...ability, passive_triggers: [...ability.passive_triggers, { kind: "owner_action" }] })}>Add trigger</Button>
+    </>}
+
+    <h3>Minigames</h3>
+    <Stack direction="row" spacing={1}>
+      <TextField type="number" label="Timed attack lines" value={ability.timed_attack_line_count ?? ""} onChange={e => setAbility({ ...ability, timed_attack_line_count: e.target.value === "" ? null : Number(e.target.value) })}/>
+      <TextField type="number" label="Damage per line" value={ability.timed_attack_damage_per_line ?? ""} onChange={e => setAbility({ ...ability, timed_attack_damage_per_line: e.target.value === "" ? null : Number(e.target.value) })}/>
+    </Stack>
+    <Stack direction="row" flexWrap="wrap">{bulletSkills.map(skill => <FormControlLabel key={skill.id} control={<Checkbox checked={ability.bullethell_skill_ids.includes(skill.id)} onChange={e => setAbility({ ...ability, bullethell_skill_ids: e.target.checked ? [...ability.bullethell_skill_ids, skill.id] : ability.bullethell_skill_ids.filter(id => id !== skill.id) })}/>} label={skill.name}/>)}</Stack>
     <FormControlLabel control={<Switch checked={ability.enabled} onChange={e => setAbility({ ...ability, enabled: e.target.checked })}/>} label="Enabled"/>
   </DialogContent><DialogActions><Button onClick={close}>Cancel</Button><Button variant="contained" onClick={save}>Save</Button></DialogActions></Dialog>;
 }
