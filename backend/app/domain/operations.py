@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import secrets
+import math
 from typing import Any, Callable, Literal
 
 from app.domain.adapters import entity_from_projection, relationship_from_projection
-from app.domain.world import Ability, ActionEffect, Character, ComparisonOperator, DomainReference, EffectOperation, EffectTarget, Location, Relationship, RequirementExpression, Stat, resolve_stat_bounds
+from app.domain.world import Ability, AbilityAction, AbilityCostKind, Character, ComparisonOperator, DomainReference, EffectDefinition, EffectTarget, FormulaNode, Item, Location, Relationship, RequirementExpression, Stat, resolve_stat_bounds
 
 
 class DomainOperationError(ValueError):
@@ -15,8 +16,8 @@ class DomainOperationError(ValueError):
 @dataclass(frozen=True, slots=True)
 class ResolvedTarget:
     reference: DomainReference
-    scope: Literal["character", "relationship", "location"]
-    container: Character | Relationship | Location
+    scope: str
+    container: Any
 
     @property
     def id(self) -> str:
@@ -88,8 +89,8 @@ class TargetResolver:
                 if raw.get("kind") == "character" and raw.get("state", {}).get("current_location_id") == location
                 and not raw.get("state", {}).get("archived")]
 
-    def resolve_effect_targets(self, projection: dict[str, Any], actor: Character, primary: ResolvedTarget, ability: Ability, effect: ActionEffect) -> list[ResolvedTarget]:
-        selector = str(effect.target or EffectTarget.TARGET)
+    def resolve_effect_targets(self, projection: dict[str, Any], actor: Character, primary: ResolvedTarget, ability: Ability, action: AbilityAction) -> list[ResolvedTarget]:
+        selector = str(action.target or EffectTarget.TARGET)
         if selector == "actor": return [self._entity(projection, str(actor.id), "character")]
         if selector == "location":
             location_id = primary.id if primary.scope == "location" else actor.state.current_location_id
@@ -117,17 +118,22 @@ class TargetResolver:
             candidates = [item for item in self._local(projection, actor) if item.id != actor.id]
             return [secrets.choice(candidates)] if candidates else []
         if selector == "target" and str(ability.target_type) in {"all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"}:
-            return self.resolve_effect_targets(projection, actor, primary, ability, effect.model_copy(update={"target": str(ability.target_type)}))
+            return self.resolve_effect_targets(projection, actor, primary, ability, action.model_copy(update={"target": str(ability.target_type)}))
         return [primary]
 
     def resolve_stat_target(self, projection: dict[str, Any], *, entity_id: Any = None, relation_id: Any = None) -> ResolvedTarget:
         try:
-            return self._entity(projection, str(entity_id), "character") if entity_id else self._relationship(projection, str(relation_id or ""))
+            if relation_id:
+                return self._relationship(projection, str(relation_id))
+            raw = projection.get("entities", {}).get(str(entity_id))
+            if not raw: raise DomainOperationError("Stat target is not available")
+            value = entity_from_projection(raw)
+            return ResolvedTarget(value.reference, str(value.kind), value)
         except DomainOperationError as exc:
             raise DomainOperationError("Stat target is not available") from exc
 
 
-StatLookup = Callable[[str, str], Stat]
+StatLookup = Callable[..., Stat]
 EffectiveStats = Callable[[Character], dict[str, float]]
 
 
@@ -231,8 +237,11 @@ class EffectExecutor:
             return working[key]
         actor_target = self.targets._entity(projection, str(actor.id), "character")
         costs: list[dict[str, Any]] = []
-        for key, raw in ability.costs.items():
-            definition, cost = stat_lookup(key, "character"), float(raw)
+        for ability_cost in ability.costs:
+            if str(ability_cost.kind) != AbilityCostKind.STAT:
+                continue
+            key, cost = str(ability_cost.stat_key), float(ability_cost.amount)
+            definition = stat_lookup(key, "character")
             current = base(actor_target, definition)
             if cost < 0: raise DomainOperationError("Ability costs cannot be negative")
             if float(effective_stats(actor).get(key, current)) < cost: raise DomainOperationError(f"{actor.name} lacks enough {definition.label}")
@@ -249,60 +258,51 @@ class EffectExecutor:
             )
             working[("character", str(actor.id), key)] = float(value)
             costs.append({"entity_id": str(actor.id), "stat_key": key, "value": value, "previous_value": current})
-        effects: list[dict[str, Any]] = []
-        global_ops = {"advance_time", "play_noise", "create"}
-        for effect in ability.effects:
-            targets = self.targets.resolve_effect_targets(projection, actor, primary_target, ability, effect)
-            if str(effect.operation) in global_ops: targets = targets[:1] or [actor_target]
-            for target in targets:
-                operation = str(effect.operation); common = {"operation": operation}
-                if operation in {"add", "subtract", "set", "multiply"}:
-                    if target.scope == "location": raise DomainOperationError("Stat effects cannot target locations")
-                    definition = stat_lookup(str(effect.stat_key), "relationship" if target.scope == "relationship" else "character")
-                    current, amount = base(target, definition), float(effect.amount)
-                    value = self._bounded_value(
-                        definition,
-                        current,
-                        operation,
-                        amount,
-                        values={
-                            key: float(value)
-                            for key, value in target.container.stats.items()
-                        },
-                        stat_lookup=stat_lookup,
-                    )
-                    key = "relation_id" if target.scope == "relationship" else "entity_id"
-                    row = {**common, key: target.id, "stat_key": definition.stat_key, "amount": amount, "previous_value": current, "value": value}
-                    duration = int(effect.duration_value or 0)
-                    if effect.duration_type == "turns" and duration > 0: row["expires_sequence"] = next_sequence + duration
-                    elif effect.duration_type == "minutes" and duration > 0: row["expires_elapsed_minutes"] = elapsed_minutes + duration
-                    else: working[(target.scope, target.id, definition.stat_key)] = float(value)
-                    effects.append(row)
-                elif operation == "move":
-                    if target.scope != "character": raise DomainOperationError("Move effects require character targets")
-                    effects.append({**common, "event_type": "character.moved", "entity_id": target.id, "character_id": target.id, "destination_id": str(effect.destination_id)})
-                elif operation == "remove":
-                    if target.scope == "relationship": effects.append({**common, "event_type": "relationship.removed", "relationship_id": target.id})
-                    else: effects.append({**common, "event_type": "entity.updated", "entity_id": target.id, "patch": {"archived": True}})
-                elif operation == "apply_status":
-                    key = "relation_id" if target.scope == "relationship" else "entity_id"
-                    row = {**common, "event_type": "effect.applied", key: target.id, "status": effect.status or effect.name or "status", "duration_type": effect.duration_type, "duration_value": effect.duration_value}
-                    duration = int(effect.duration_value or 0)
-                    if effect.duration_type == "turns" and duration > 0: row["expires_sequence"] = next_sequence + duration
-                    elif effect.duration_type == "minutes" and duration > 0: row["expires_elapsed_minutes"] = elapsed_minutes + duration
-                    effects.append(row)
-                elif operation == "reveal_knowledge":
-                    if target.scope != "character": raise DomainOperationError("Knowledge effects require character targets")
-                    effects.append({**common, "event_type": "knowledge.revealed", "entity_id": str(effect.fact_id), "fact_id": str(effect.fact_id), "character_ids": [target.id], "faction_ids": []})
-                elif operation == "change_relationship":
-                    other = target.id
-                    if isinstance(target.container, Relationship):
-                        other = str(target.container.target_id if target.container.source_id == actor.id else target.container.source_id)
-                    effects.append({**common, "event_type": "relationship.set", "source_id": str(actor.id), "target_id": other, "relation": effect.relation})
-                elif operation == "advance_time": effects.append({**common, "event_type": "time.advanced", "minutes": max(0, int(effect.minutes or effect.amount))})
-                elif operation == "play_noise": effects.append({**common, "event_type": "noise.played", "noise_id": str(effect.noise_id)})
-                elif operation == "create": effects.append({**common, "event_type": "entity.created", "entity_id": (id_factory or (lambda: ""))(), "kind": effect.entity_kind, "name": effect.name, "state": effect.state, "aliases": [], "tags": []})
-        return EffectExecution(costs, effects)
+        return EffectExecution(costs, [])
+
+
+class FormulaEvaluator:
+    MAX_DEPTH = 12
+    MAX_NODES = 64
+
+    def evaluate(self, formula: FormulaNode, participants: dict[str, Any]) -> tuple[float, dict[str, float]]:
+        inputs: dict[str, float] = {}
+        count = 0
+
+        def visit(node: FormulaNode, depth: int) -> float:
+            nonlocal count
+            count += 1
+            if depth > self.MAX_DEPTH or count > self.MAX_NODES:
+                raise DomainOperationError("Effect formula exceeds complexity limits")
+            kind = str(node.kind)
+            if kind == "constant":
+                result = float(node.value)  # type: ignore[arg-type]
+            elif kind == "stat":
+                participant = participants.get(str(node.participant))
+                if participant is None:
+                    raise DomainOperationError(f"Effect needs a {node.participant} participant")
+                stats = participant.get("stats", {}) if isinstance(participant, dict) else participant.stats
+                if str(node.stat_key) not in stats:
+                    raise DomainOperationError(f"{node.participant} is missing stat {node.stat_key}")
+                result = float(stats[str(node.stat_key)])
+                inputs[f"{node.participant}.{node.stat_key}"] = result
+            else:
+                values = [visit(child, depth + 1) for child in node.children]
+                if kind == "negate": result = -values[0]
+                elif kind == "add": result = values[0] + values[1]
+                elif kind == "subtract": result = values[0] - values[1]
+                elif kind == "multiply": result = values[0] * values[1]
+                elif kind == "divide":
+                    if values[1] == 0: raise DomainOperationError("Effect formula divides by zero")
+                    result = values[0] / values[1]
+                elif kind == "minimum": result = min(values)
+                elif kind == "maximum": result = max(values)
+                else: raise DomainOperationError(f"Unknown formula node: {kind}")
+            if not math.isfinite(result):
+                raise DomainOperationError("Effect formula produced a non-finite result")
+            return result
+
+        return visit(formula, 1), inputs
 
 
 class StatAdjustmentExecutor:
@@ -323,4 +323,4 @@ class StatAdjustmentExecutor:
             },
             stat_lookup=stat_lookup,
         )
-        return {"entity_id" if target.scope == "character" else "relation_id": target.id, "stat_key": definition.stat_key, "value": value, "previous_value": current}
+        return {"relation_id" if target.scope == "relationship" else "entity_id": target.id, "stat_key": definition.stat_key, "value": value, "previous_value": current}
