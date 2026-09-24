@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Stack, Switch, TextField } from "@mui/material";
 import { api } from "./api";
-import type { AbilityAction, AbilityCost, AbilityDefinition, EffectDefinition, FormulaNode, RuleMigrationWarning, RuleOwnerKind, StatDefinition } from "./types";
+import type { AbilityAction, AbilityCost, AbilityDefinition, EffectDefinition, FormulaNode, RequirementExpression, RuleMigrationWarning, RuleOwnerKind, StatDefinition, WorldProjection } from "./types";
 import type { BulletCatalog } from "./BulletHellStudio";
 
 const ownerKinds: RuleOwnerKind[] = ["character", "item", "location", "faction", "lore_system", "fact", "plot_beat", "relationship"];
@@ -31,9 +31,17 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
   const [ability, setAbility] = useState<AbilityDefinition | null>(null);
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [bulletSkills, setBulletSkills] = useState<Array<{ id: string; name: string }>>([]);
+  const [world, setWorld] = useState<WorldProjection | null>(null);
   const load = useCallback(async () => {
-    const [next, catalog, settings] = await Promise.all([api<typeof rules>(`/projects/${projectId}/rules`), api<BulletCatalog>("/bullethell/catalog"), api<{ allowed_skill_ids: string[] }>(`/projects/${projectId}/bullethell`)]);
-    setRules(next); setBulletSkills(catalog.skills.filter(item => settings.allowed_skill_ids.includes(item.id)));
+    const [next, catalog, settings, nextWorld] = await Promise.all([
+      api<typeof rules>(`/projects/${projectId}/rules`),
+      api<BulletCatalog>("/bullethell/catalog"),
+      api<{ allowed_skill_ids: string[] }>(`/projects/${projectId}/bullethell`),
+      api<WorldProjection>(`/projects/${projectId}/world`),
+    ]);
+    setRules(next);
+    setWorld(nextWorld);
+    setBulletSkills(catalog.skills.filter(item => settings.allowed_skill_ids.includes(item.id)));
   }, [projectId]);
   useEffect(() => { void load().catch(cause => fail(String(cause))); }, [load, revision, fail]);
 
@@ -71,7 +79,7 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
       <Stack direction="row" spacing={1}><TextField select label="Evaluation" value={effect.evaluation_mode} onChange={e => setEffect({ ...effect, evaluation_mode: e.target.value as EffectDefinition["evaluation_mode"] })}><MenuItem value="snapshot">Snapshot</MenuItem><MenuItem value="live">Live</MenuItem></TextField><TextField select label="Stacking" value={effect.stacking_policy} onChange={e => setEffect({ ...effect, stacking_policy: e.target.value as EffectDefinition["stacking_policy"] })}>{["replace", "refresh", "stack", "independent"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField type="number" label="Max stacks" value={effect.max_stacks} onChange={e => setEffect({ ...effect, max_stacks: Number(e.target.value) })}/></Stack>
       <FormControlLabel control={<Switch checked={effect.enabled} onChange={e => setEffect({ ...effect, enabled: e.target.checked })}/>} label="Enabled"/>
     </>}</DialogContent><DialogActions><Button onClick={() => setEffect(null)}>Cancel</Button><Button variant="contained" onClick={() => effect && void save("effects", effect)}>Save</Button></DialogActions></Dialog>
-    <AbilityDialog ability={ability} editing={Boolean(editingKey)} stats={rules.stats} effects={rules.effects} bulletSkills={bulletSkills} setAbility={setAbility} close={() => setAbility(null)} save={() => ability && void save("abilities", ability)} />
+    <AbilityDialog ability={ability} editing={Boolean(editingKey)} stats={rules.stats} effects={rules.effects} abilities={rules.abilities} world={world} bulletSkills={bulletSkills} setAbility={setAbility} close={() => setAbility(null)} save={() => ability && void save("abilities", ability)} />
   </div>;
 }
 
