@@ -127,6 +127,7 @@ class SpatialRepository:
                 source_anchor = {
                     "id": f"legacy:{relation_id}:source",
                     "location_id": source["id"],
+                    "coordinate_space_id": source_state.get("parent_location_id") or source["id"],
                     "name": f"{source['name']} route",
                     "kind": "waypoint",
                     "x": source_state.get("x"),
@@ -139,6 +140,7 @@ class SpatialRepository:
                 target_anchor = {
                     "id": f"legacy:{relation_id}:target",
                     "location_id": target["id"],
+                    "coordinate_space_id": target_state.get("parent_location_id") or target["id"],
                     "name": f"{target['name']} route",
                     "kind": "waypoint",
                     "x": target_state.get("x"),
@@ -171,12 +173,17 @@ class SpatialRepository:
             for anchor_id, item in anchors.items():
                 if str(item.get("location_id")) not in locations:
                     continue
+                owner_id = str(item["location_id"])
+                owner_state = locations[owner_id].get("state", {})
+                coordinate_space_id = str(item.get("coordinate_space_id") or owner_state.get("parent_location_id") or owner_id)
+                if coordinate_space_id not in locations:
+                    coordinate_space_id = owner_id
                 self.db.execute(
                     "INSERT INTO spatial_anchors_current("
-                    "id,project_id,location_id,name,kind,x,y,hidden,discovered,enabled,requires_map_review,updated_at"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "id,project_id,location_id,coordinate_space_id,name,kind,x,y,hidden,discovered,enabled,requires_map_review,updated_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        anchor_id, project_id, str(item["location_id"]), str(item.get("name") or "Anchor"),
+                        anchor_id, project_id, owner_id, coordinate_space_id, str(item.get("name") or "Anchor"),
                         str(item.get("kind") or "waypoint"), item.get("x"), item.get("y"),
                         int(bool(item.get("hidden", False))), int(bool(item.get("discovered", True))),
                         int(item.get("enabled", True) is not False), int(bool(item.get("requires_map_review", False))), now,
@@ -418,16 +425,15 @@ class SpatialRepository:
                 mapped["local_bounds"] = self._location_geometry(item["location_id"], "local_bounds")
             locations.append(mapped)
 
-        child_ids = {focus_id, *(str(item["id"]) for item in locations)}
-        placeholders = ",".join("?" for _ in child_ids)
         anchor_rows = self.db.fetch_all(
-            f"SELECT * FROM spatial_anchors_current WHERE project_id=? AND location_id IN ({placeholders})"
+            "SELECT * FROM spatial_anchors_current WHERE project_id=? AND coordinate_space_id=?"
             + ("" if administrative else " AND discovered=1 AND hidden=0"),
-            (project_id, *child_ids),
+            (project_id, focus_id),
         )
         anchors = [
             {
-                "id": item["id"], "location_id": item["location_id"], "name": item["name"], "kind": item["kind"],
+                "id": item["id"], "location_id": item["location_id"], "coordinate_space_id": item["coordinate_space_id"],
+                "name": item["name"], "kind": item["kind"],
                 **({"x": item["x"], "y": item["y"]} if administrative and include_geometry else {}),
                 "hidden": bool(item["hidden"]), "discovered": bool(item["discovered"]),
                 "enabled": bool(item["enabled"]), "requires_map_review": bool(item["requires_map_review"]),
