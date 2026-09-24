@@ -173,7 +173,7 @@ def test_formula_potion_and_safety_errors() -> None:
             "kind": "divide",
             "children": [{"kind": "constant", "value": 1}, {"kind": "constant", "value": 0}],
         }), {"actor": {"stats": {}}, "source": {"stats": {}}, "target": {"stats": {}}})
-    with pytest.raises(DomainOperationError, match="Missing source stat"):
+    with pytest.raises(DomainOperationError, match="source is missing stat"):
         FormulaEvaluator().evaluate(formula, {
             "actor": {"stats": {}}, "source": {"stats": {}}, "target": {"stats": {}},
         })
