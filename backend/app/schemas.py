@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, Field, HttpUrl, field_validator, model_validator
-from app.domain.world import ActionEffect, RequirementExpression
+from app.domain.world import AbilityAction, AbilityCost, FormulaNode, PassiveTrigger, RequirementExpression
 
 
 class LoginRequest(BaseModel):
@@ -766,7 +766,7 @@ class StatDefinitionCreate(BaseModel):
     stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     label: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=5000)
-    scope: Literal["character", "relationship"] = "character"
+    compatible_owner_kinds: list[Literal["character", "item", "location", "faction", "lore_system", "fact", "plot_beat", "relationship"]] = Field(default_factory=lambda: ["character"], min_length=1)
     default_value: float = 0
     minimum: float = 0
     maximum: float = 100
@@ -811,57 +811,74 @@ class AbilityDefinitionCreate(BaseModel):
     ability_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=5000)
+    ability_kind: Literal["active", "passive"] = "active"
+    compatible_owner_kinds: list[Literal["character", "item"]] = Field(default_factory=lambda: ["character"], min_length=1)
     target_type: Literal["self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"] = "self"
     requirements: dict[str, Any] = Field(default_factory=dict)
-    costs: dict[str, float] = Field(default_factory=dict)
-    effects: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
-    minigame_profile: dict[str, Any] = Field(default_factory=dict)
-
-    @field_validator("minigame_profile")
-    @classmethod
-    def validate_minigame_profile(cls, profile: dict[str, Any]) -> dict[str, Any]:
-        unknown = set(profile) - {"timed_attack", "bullethell_skill_ids"}
-        if unknown:
-            raise ValueError("unsupported ability minigame profile")
-        attack = profile.get("timed_attack")
-        if attack is not None:
-            if not isinstance(attack, dict) or isinstance(attack.get("line_count"), bool) or not isinstance(attack.get("line_count"), int):
-                raise ValueError("timed_attack profile requires an integer line_count")
-            try:
-                damage = float(attack["damage_per_line"])
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError("timed_attack profile requires numeric damage_per_line") from exc
-            if not 1 <= attack["line_count"] <= 8 or not 0 <= damage <= 1_000_000:
-                raise ValueError("timed_attack profile values are outside valid ranges")
-            profile = {**profile, "timed_attack": {"line_count": attack["line_count"], "damage_per_line": damage}}
-        skill_ids = profile.get("bullethell_skill_ids")
-        if skill_ids is not None:
-            if not isinstance(skill_ids, list) or len(skill_ids) > 50 or any(not isinstance(value, str) for value in skill_ids):
-                raise ValueError("bullethell_skill_ids must be a list of definition IDs")
-            profile = {**profile, "bullethell_skill_ids": list(dict.fromkeys(skill_ids))}
-        return profile
-
-    @field_validator("costs")
-    @classmethod
-    def validate_costs(cls, costs: dict[str, float]) -> dict[str, float]:
-        if any(value < 0 for value in costs.values()):
-            raise ValueError("ability costs cannot be negative")
-        return costs
-
-    @field_validator("effects")
-    @classmethod
-    def validate_effects(cls, effects: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        for effect in effects:
-            if effect.get("duration_type") not in {None, "turns", "minutes"}:
-                raise ValueError("effect duration_type must be turns or minutes")
-            ActionEffect.model_validate(effect)
-        return effects
+    costs: list[AbilityCost] = Field(default_factory=list, max_length=50)
+    actions: list[AbilityAction] = Field(default_factory=list, max_length=50)
+    passive_triggers: list[PassiveTrigger] = Field(default_factory=list, max_length=20)
+    icon: str | None = None
+    enabled: bool = True
+    timed_attack_line_count: int | None = Field(default=None, ge=1, le=8)
+    timed_attack_damage_per_line: float | None = Field(default=None, ge=0, le=1_000_000)
+    bullethell_skill_ids: list[str] = Field(default_factory=list, max_length=50)
 
     @field_validator("requirements")
     @classmethod
     def validate_requirements(cls, requirements: dict[str, Any]) -> dict[str, Any]:
         RequirementExpression.model_validate(requirements)
         return requirements
+
+    @model_validator(mode="after")
+    def validate_ability_shape(self) -> "AbilityDefinitionCreate":
+        if self.ability_kind == "passive" and not self.passive_triggers:
+            raise ValueError("passive abilities need at least one trigger")
+        if (self.timed_attack_line_count is None) != (self.timed_attack_damage_per_line is None):
+            raise ValueError("timed attack line count and damage must be configured together")
+        return self
+
+
+class EffectDefinitionCreate(BaseModel):
+    effect_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=5000)
+    target_stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    operation: Literal["add", "subtract", "set", "multiply"] = "add"
+    formula: FormulaNode
+    clock: Literal["story_minutes", "target_actions", "world_actions"] = "world_actions"
+    duration: int = Field(default=0, ge=-1)
+    tick_interval: int = Field(default=0, ge=0)
+    evaluation_mode: Literal["snapshot", "live"] = "snapshot"
+    stacking_policy: Literal["replace", "refresh", "stack", "independent"] = "replace"
+    max_stacks: int = Field(default=1, ge=1)
+    visibility: Literal["public", "private", "narrator"] = "public"
+    icon: str | None = None
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_timing(self) -> "EffectDefinitionCreate":
+        if not ((self.duration == 0 and self.tick_interval == 0) or (self.duration > 0 and self.tick_interval <= self.duration) or (self.duration == -1 and self.tick_interval > 0)):
+            raise ValueError("invalid effect duration/tick combination")
+        return self
+
+
+class ApplyEffectRequest(BaseModel):
+    effect_key: str
+    target_id: str
+    actor_id: str | None = None
+    source_id: str | None = None
+
+
+class AbilityUseRequest(BaseModel):
+    actor_id: str
+    ability_key: str
+    source_item_id: str | None = None
+    target_id: str | None = None
+
+
+class RemoveEffectRequest(BaseModel):
+    active_instance_id: str
 
 
 class WorldHeadUpdate(BaseModel):
