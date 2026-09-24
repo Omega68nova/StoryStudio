@@ -651,6 +651,7 @@ class WorldRootCreate(BaseModel):
 class MapAnchorUpdate(BaseModel):
     id: str | None = None
     location_id: str
+    coordinate_space_id: str | None = None
     name: str = Field(min_length=1, max_length=200)
     kind: Literal["landmark", "entrance", "exit", "waypoint", "encounter"] = "waypoint"
     x: float | None = None
@@ -722,6 +723,21 @@ class GeometryEditRequest(BaseModel):
     def require_point_for_add_or_move(self) -> "GeometryEditRequest":
         if self.operation != "remove_point" and (self.x is None or self.y is None):
             raise ValueError("add_point and move_point require x and y")
+        return self
+
+
+class MapGeometryUpdate(BaseModel):
+    kind: Literal["point", "polyline", "polygon"]
+    points: list[dict[str, float]]
+
+    @model_validator(mode="after")
+    def require_enough_points(self) -> "MapGeometryUpdate":
+        minimum = {"point": 1, "polyline": 2, "polygon": 3}[self.kind]
+        if len(self.points) < minimum:
+            raise ValueError(f"{self.kind} geometry requires at least {minimum} point(s)")
+        for point in self.points:
+            if set(point) != {"x", "y"}:
+                raise ValueError("geometry points must contain exactly x and y")
         return self
 
 
