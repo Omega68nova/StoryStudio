@@ -454,25 +454,31 @@ class SpatialRepository:
             }
             for item in anchor_rows
         ]
-        anchor_ids = {item["id"] for item in anchors}
         connections: list[dict[str, Any]] = []
-        if anchor_ids:
-            ph = ",".join("?" for _ in anchor_ids)
-            connection_rows = self.db.fetch_all(
-                f"SELECT * FROM spatial_connections_current WHERE project_id=? "
-                f"AND source_anchor_id IN ({ph}) AND target_anchor_id IN ({ph})"
-                + ("" if administrative else " AND discovered=1 AND hidden=0"),
-                (project_id, *anchor_ids, *anchor_ids),
-            )
-            for item in connection_rows:
-                connections.append({
-                    "id": item["id"], "kind": item["kind"], "source_anchor_id": item["source_anchor_id"],
-                    "target_anchor_id": item["target_anchor_id"], "travel_minutes": item["travel_minutes"],
-                    "modes": json.loads(item["modes_json"] or "[]"), "bidirectional": bool(item["bidirectional"]),
-                    "requirements": json.loads(item["requirements_json"]) if item["requirements_json"] else None,
-                    "lock": json.loads(item["lock_json"]) if item["lock_json"] else None,
-                    "hidden": bool(item["hidden"]), "discovered": bool(item["discovered"]), "enabled": bool(item["enabled"]),
-                })
+        connection_rows = self.db.fetch_all(
+            "SELECT c.*, "
+            "sa.location_id AS source_location_id,sa.coordinate_space_id AS source_coordinate_space_id,"
+            "ta.location_id AS target_location_id,ta.coordinate_space_id AS target_coordinate_space_id "
+            "FROM spatial_connections_current c "
+            "JOIN spatial_anchors_current sa ON sa.id=c.source_anchor_id "
+            "JOIN spatial_anchors_current ta ON ta.id=c.target_anchor_id "
+            "WHERE c.project_id=? AND (sa.coordinate_space_id=? OR ta.coordinate_space_id=?)"
+            + ("" if administrative else " AND c.discovered=1 AND c.hidden=0"),
+            (project_id, focus_id, focus_id),
+        )
+        for item in connection_rows:
+            connections.append({
+                "id": item["id"], "kind": item["kind"], "source_anchor_id": item["source_anchor_id"],
+                "target_anchor_id": item["target_anchor_id"], "source_location_id": item["source_location_id"],
+                "target_location_id": item["target_location_id"],
+                "source_coordinate_space_id": item["source_coordinate_space_id"],
+                "target_coordinate_space_id": item["target_coordinate_space_id"],
+                "travel_minutes": item["travel_minutes"],
+                "modes": json.loads(item["modes_json"] or "[]"), "bidirectional": bool(item["bidirectional"]),
+                "requirements": json.loads(item["requirements_json"]) if item["requirements_json"] else None,
+                "lock": json.loads(item["lock_json"]) if item["lock_json"] else None,
+                "hidden": bool(item["hidden"]), "discovered": bool(item["discovered"]), "enabled": bool(item["enabled"]),
+            })
 
         barrier_rows = self.db.fetch_all(
             "SELECT * FROM spatial_barriers_current WHERE project_id=? AND location_id=?"
