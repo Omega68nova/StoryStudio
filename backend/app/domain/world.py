@@ -985,6 +985,10 @@ class AbilityAction(DomainModel):
         }
         if self.kind in required and not required[self.kind]:
             raise ValueError(f"{self.kind} action is missing its required reference")
+        if self.kind != AbilityActionKind.APPLY_EFFECT and (
+            self.duration_override is not None or self.tick_override is not None
+        ):
+            raise ValueError("effect timing overrides are valid only for apply_effect actions")
         return self
 
 
@@ -1022,6 +1026,9 @@ class Ability(DomainModel):
         self.compatible_owner_kinds = list(dict.fromkeys(self.compatible_owner_kinds))
         if self.ability_kind == AbilityKind.PASSIVE and not self.passive_triggers:
             raise ValueError("passive ability needs at least one trigger")
+        trigger_keys = [(str(item.kind), item.stat_key) for item in self.passive_triggers]
+        if len(trigger_keys) != len(set(trigger_keys)):
+            raise ValueError("passive ability triggers must be unique")
         if (self.timed_attack_line_count is None) != (self.timed_attack_damage_per_line is None):
             raise ValueError("timed attack line count and damage must be configured together")
         return self
