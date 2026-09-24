@@ -3,6 +3,8 @@ name: Rules migration checks
 on:
   push:
     branches: [finish-stats-effects-abilities]
+  pull_request:
+    branches: [master]
   workflow_dispatch:
 
 jobs:
