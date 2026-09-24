@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.database import Database, utc_now
 from app.domain.operations import DomainOperationError, FormulaEvaluator
-from app.domain.world import EffectDefinition, FormulaNode, Stat
+from app.domain.world import Ability, EffectDefinition, FormulaNode, Stat
 from app.services.rules import RulesRuntime, RulesRuntimeError
 
 
@@ -135,8 +135,8 @@ def target():
     return SimpleNamespace(id="target", scope="entity")
 
 
-def runtime(stats: list[Stat], effects: list[EffectDefinition] | None = None) -> RulesRuntime:
-    return RulesRuntime(FakeData(FakeRules(stats, effects)), apply_event)
+def runtime(stats: list[Stat], effects: list[EffectDefinition] | None = None, abilities: list[Ability] | None = None) -> RulesRuntime:
+    return RulesRuntime(FakeData(FakeRules(stats, effects, abilities)), apply_event)
 
 
 def test_formula_bleed_uses_source_stats() -> None:
@@ -381,3 +381,73 @@ def test_canonical_rule_keys_are_database_immutable(tmp_path) -> None:
             "UPDATE stat_definitions SET stat_key='health' WHERE project_id=? AND stat_key='hp'",
             (project["id"],),
         )
+
+
+
+def test_multiple_stat_costs_cannot_spend_the_same_resource_twice() -> None:
+    mana = stat("mana", default=10, minimum=0, maximum=10)
+    ability = Ability.model_validate({
+        "project_id": PROJECT,
+        "ability_key": "double_cost",
+        "name": "Double cost",
+        "target_type": "self",
+        "compatible_owner_kinds": ["character"],
+        "costs": [
+            {"kind": "stat", "stat_key": "mana", "amount": 6},
+            {"kind": "stat", "stat_key": "mana", "amount": 6},
+        ],
+        "actions": [],
+    })
+    rt = runtime([mana], abilities=[ability])
+    world = projection()
+    world["entities"]["actor"]["state"]["abilities"] = ["double_cost"]
+    world["entities"]["actor"]["stats"]["mana"] = 10
+    with pytest.raises(RulesRuntimeError, match="lacks enough mana"):
+        rt.normalize_ability(PROJECT, world, {"actor_id": "actor", "ability_key": "double_cost"}, "player")
+
+
+def test_item_costs_are_cumulative_and_rollback_on_failure() -> None:
+    ability = Ability.model_validate({
+        "project_id": PROJECT,
+        "ability_key": "item_cast",
+        "name": "Item cast",
+        "target_type": "self",
+        "compatible_owner_kinds": ["item"],
+        "costs": [
+            {"kind": "consume_source", "amount": 1},
+            {"kind": "consume_source", "amount": 1},
+        ],
+        "actions": [],
+    })
+    rt = runtime([], abilities=[ability])
+    world = projection()
+    world["entities"]["wand"] = {"id": "wand", "kind": "item", "name": "Wand", "state": {"abilities": ["item_cast"]}, "stats": {}}
+    world["entities"]["actor"]["state"]["inventory"] = [{"item_id": "wand", "quantity": 1}]
+    with pytest.raises(RulesRuntimeError, match="item cost"):
+        rt.normalize_ability(PROJECT, world, {"actor_id": "actor", "ability_key": "item_cast", "source_item_id": "wand"}, "player")
+    assert world["entities"]["actor"]["state"]["inventory"] == [{"item_id": "wand", "quantity": 1}]
+
+
+def test_ability_created_effect_starts_after_committing_action() -> None:
+    hp = stat("hp")
+    definition = effect("bleed_after", {"kind": "constant", "value": 1}, duration=1, tick=1)
+    ability = Ability.model_validate({
+        "project_id": PROJECT,
+        "ability_key": "apply_bleed",
+        "name": "Apply bleed",
+        "target_type": "self",
+        "compatible_owner_kinds": ["character"],
+        "actions": [{"kind": "apply_effect", "target": "target", "effect_key": "bleed_after"}],
+    })
+    rt = runtime([hp], [definition], [ability])
+    world = projection()
+    world["entities"]["actor"]["state"]["abilities"] = ["apply_bleed"]
+    world["entities"]["actor"]["stats"]["hp"] = 100
+    world["world_action_count"] = 5
+    world["target_action_counts"]["actor"] = 5
+    normalized = rt.normalize_ability(PROJECT, world, {"actor_id": "actor", "ability_key": "apply_bleed"}, "player")
+    active = normalized["effects"][0]
+    assert active["event_type"] == "effect.instance_applied"
+    assert active["started_at"] == 6
+    assert active["next_tick"] == 7
+    assert active["expires_at"] == 7
