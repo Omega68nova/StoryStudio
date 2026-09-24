@@ -80,8 +80,20 @@ class SpatialRepository:
 
             for location_id, entity in locations.items():
                 state = entity.get("state", {})
-                footprint_kind, footprint = self._geometry(state.get("footprint"))
-                bounds_kind, bounds = self._geometry(state.get("local_bounds"))
+                footprint_raw = state.get("footprint")
+                bounds_raw = state.get("local_bounds")
+                footprint_kind, footprint = self._geometry(footprint_raw)
+                bounds_kind, bounds = self._geometry(bounds_raw)
+                footprint_space_id = (
+                    str(footprint_raw.get("location_id"))
+                    if isinstance(footprint_raw, dict) and footprint_raw.get("location_id") in locations
+                    else str(state.get("parent_location_id") or location_id)
+                )
+                bounds_space_id = (
+                    str(bounds_raw.get("location_id"))
+                    if isinstance(bounds_raw, dict) and bounds_raw.get("location_id") in locations
+                    else location_id
+                )
                 if not footprint and isinstance(state.get("x"), (int, float)) and isinstance(state.get("y"), (int, float)):
                     footprint_kind = "point"
                     footprint = [{"x": float(state["x"]), "y": float(state["y"])}]
@@ -93,8 +105,8 @@ class SpatialRepository:
                     "INSERT INTO spatial_locations("
                     "location_id,project_id,parent_location_id,topology,occupancy,boundary_access,spatial_kind,exposure,"
                     "x,y,hidden,discovered,enabled,random_encounter,minutes_per_unit,base_visibility_units,encounter_rate,"
-                    "requires_map_review,footprint_kind,local_bounds_kind,updated_at"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "requires_map_review,footprint_kind,footprint_space_id,local_bounds_kind,local_bounds_space_id,updated_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         location_id, project_id, state.get("parent_location_id"),
                         state.get("topology", "closed"), state.get("occupancy", "direct_allowed"),
@@ -104,7 +116,7 @@ class SpatialRepository:
                         int(state.get("enabled", True) is not False), int(bool(state.get("random_encounter", False))),
                         float(state.get("minutes_per_unit", 1) or 0),
                         state.get("base_visibility_units"), float(state.get("encounter_rate", 0) or 0),
-                        int(requires_map_review), footprint_kind, bounds_kind, now,
+                        int(requires_map_review), footprint_kind, footprint_space_id, bounds_kind, bounds_space_id, now,
                     ),
                 )
                 for role, points in (("footprint", footprint), ("local_bounds", bounds)):
@@ -342,19 +354,22 @@ class SpatialRepository:
 
     def _location_geometry(self, location_id: str, role: str) -> dict[str, Any] | None:
         row = self.db.fetch_one(
-            "SELECT footprint_kind,local_bounds_kind FROM spatial_locations WHERE location_id=?",
+            "SELECT footprint_kind,footprint_space_id,local_bounds_kind,local_bounds_space_id "
+            "FROM spatial_locations WHERE location_id=?",
             (location_id,),
         )
         if not row:
             return None
-        kind = row["footprint_kind" if role == "footprint" else "local_bounds_kind"]
+        kind_key = "footprint_kind" if role == "footprint" else "local_bounds_kind"
+        space_key = "footprint_space_id" if role == "footprint" else "local_bounds_space_id"
+        kind = row[kind_key]
         if not kind:
             return None
         points = self.db.fetch_all(
             "SELECT x,y FROM spatial_location_vertices WHERE location_id=? AND geometry_role=? ORDER BY position",
             (location_id, role),
         )
-        return {"location_id": location_id, "kind": kind, "points": [{"x": item["x"], "y": item["y"]} for item in points]}
+        return {"location_id": row[space_key] or location_id, "kind": kind, "points": [{"x": item["x"], "y": item["y"]} for item in points]}
 
     def local_map(self, project_id: str, location_id: str | None, *, administrative: bool = False, include_geometry: bool = False) -> dict[str, Any]:
         state = self.state(project_id)
