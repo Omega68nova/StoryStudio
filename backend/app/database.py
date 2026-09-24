@@ -185,15 +185,45 @@ class Database:
                     (record["project_id"], record["stat_key"], owner_kind),
                 )
             for project in connection.execute("SELECT DISTINCT project_id FROM stat_definitions").fetchall():
-                graph = {row["stat_key"]: [key for key in (row["minimum_stat_key"], row["maximum_stat_key"]) if key] for row in connection.execute("SELECT stat_key,minimum_stat_key,maximum_stat_key FROM stat_definitions WHERE project_id=?", (project["project_id"],)).fetchall()}
-                visiting: set[str] = set(); visited: set[str] = set()
+                project_id = project["project_id"]
+                stat_rows = connection.execute(
+                    "SELECT stat_key,minimum_stat_key,maximum_stat_key FROM stat_definitions WHERE project_id=?",
+                    (project_id,),
+                ).fetchall()
+                graph = {
+                    row["stat_key"]: [key for key in (row["minimum_stat_key"], row["maximum_stat_key"]) if key]
+                    for row in stat_rows
+                }
+                owners = {
+                    row["stat_key"]: {
+                        owner["owner_kind"]
+                        for owner in connection.execute(
+                            "SELECT owner_kind FROM stat_definition_owner_kinds WHERE project_id=? AND stat_key=?",
+                            (project_id, row["stat_key"]),
+                        ).fetchall()
+                    }
+                    for row in stat_rows
+                }
+                for stat_key, dependencies in graph.items():
+                    for dependency in dependencies:
+                        if dependency not in graph:
+                            raise ValueError(f"Stat {stat_key} references unavailable bound stat {dependency}")
+                        if not owners.get(stat_key, set()).intersection(owners.get(dependency, set())):
+                            raise ValueError(f"Stat {stat_key} has no compatible owner kind in common with bound stat {dependency}")
+                visiting: set[str] = set()
+                visited: set[str] = set()
                 def visit(key: str) -> None:
-                    if key in visiting: raise ValueError(f"Stat bound dependency cycle in project {project['project_id']}")
-                    if key in visited: return
+                    if key in visiting:
+                        raise ValueError(f"Stat bound dependency cycle in project {project_id}")
+                    if key in visited:
+                        return
                     visiting.add(key)
-                    for child in graph.get(key, []): visit(child)
-                    visiting.remove(key); visited.add(key)
-                for key in graph: visit(key)
+                    for child in graph.get(key, []):
+                        visit(child)
+                    visiting.remove(key)
+                    visited.add(key)
+                for key in graph:
+                    visit(key)
 
         if legacy_abilities:
             rows = connection.execute("SELECT * FROM ability_definitions_legacy_v2").fetchall()
