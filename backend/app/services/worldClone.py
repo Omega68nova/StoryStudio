@@ -4,7 +4,7 @@ import copy
 from typing import Any
 
 from app.database import new_id
-from app.services.world import WorldEngine, WorldValidationError
+from app.services.world import NormalizedMutation, WorldEngine, WorldValidationError
 
 
 class WorldCloneService:
@@ -33,18 +33,6 @@ class WorldCloneService:
         if isinstance(value, str) and (field.endswith("_id") or field.endswith("_ids")):
             return ids.get(value, value)
         return copy.deepcopy(value)
-
-    @staticmethod
-    def _rebase_effects(effects: list[dict[str, Any]], source: dict[str, Any], target: dict[str, Any]) -> list[dict[str, Any]]:
-        rows = copy.deepcopy(effects)
-        for effect in rows:
-            if effect.get("expires_sequence") is not None:
-                remaining = max(1, int(effect["expires_sequence"]) - int(source.get("branch_sequence", 0)))
-                effect["expires_sequence"] = int(target.get("branch_sequence", 0)) + remaining
-            if effect.get("expires_elapsed_minutes") is not None:
-                remaining = max(1, int(effect["expires_elapsed_minutes"]) - int(source.get("elapsed_minutes", 0)))
-                effect["expires_elapsed_minutes"] = int(target.get("elapsed_minutes", 0)) + remaining
-        return rows
 
     def clone(self, target_project_id: str, *, source_project_id: str, entity_ids: list[str],
               include_children: bool = True, include_relationships: bool = True,
@@ -108,16 +96,12 @@ class WorldCloneService:
                 "aliases": copy.deepcopy(item.get("aliases", [])), "tags": copy.deepcopy(item.get("tags", [])),
                 "state": cloned_state,
                 "stats": copy.deepcopy(item.get("stats", {})),
-                "active_effects": self._remap(self._rebase_effects(item.get("active_effects", []), source, target), id_map),
             }})
         relationship_count = 0
         if include_relationships:
             for relation in source.get("relations", {}).values():
                 if relation.get("source_id") in selected and relation.get("target_id") in selected:
                     relation_data = {k: v for k, v in relation.items() if k != "id"}
-                    relation_data["active_effects"] = self._rebase_effects(
-                        relation.get("active_effects", []), source, target
-                    )
                     raw.append({"tool": "setRelationship", "arguments": {
                         **self._remap(relation_data, id_map),
                         "source_id": id_map[relation["source_id"]], "target_id": id_map[relation["target_id"]],
@@ -139,22 +123,33 @@ class WorldCloneService:
             transaction = self.world.commit_to_existing_node(target_project_id, project["active_node_id"], mutations, provenance="clone", summary="Cloned world subgraph")
         else:
             transaction = self.world.commit_root(target_project_id, mutations, provenance="clone", summary="Cloned world subgraph")
-        cloned_stats = cloned_abilities = 0
+        cloned_stats = cloned_effects = cloned_abilities = 0
         if include_rules:
-            now = self.world.db.fetch_one("SELECT CURRENT_TIMESTAMP value")["value"]
-            for row in self.world.db.fetch_all("SELECT * FROM stat_definitions WHERE project_id=?", (source_project_id,)):
-                if self.world.db.fetch_one("SELECT id FROM stat_definitions WHERE project_id=? AND stat_key=?", (target_project_id, row["stat_key"])): continue
-                self.world.db.execute(
-                    "INSERT INTO stat_definitions(id,project_id,stat_key,label,scope,default_value,minimum,maximum,integer_only,visibility,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (new_id(), target_project_id, row["stat_key"], row["label"], row["scope"], row["default_value"], row["minimum"], row["maximum"], row["integer_only"], row["visibility"], now, now),
-                ); cloned_stats += 1
-            for row in self.world.db.fetch_all("SELECT * FROM ability_definitions WHERE project_id=?", (source_project_id,)):
-                if self.world.db.fetch_one("SELECT id FROM ability_definitions WHERE project_id=? AND ability_key=?", (target_project_id, row["ability_key"])): continue
-                self.world.db.execute(
-                    "INSERT INTO ability_definitions(id,project_id,ability_key,name,description,target_type,requirements_json,costs_json,effects_json,created_at,updated_at,minigame_profile_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (new_id(), target_project_id, row["ability_key"], row["name"], row["description"], row["target_type"], row["requirements_json"], row["costs_json"], row["effects_json"], now, now, row.get("minigame_profile_json") or "{}"),
-                ); cloned_abilities += 1
+            source_rules, target_rules = self.world.data.rules, self.world.data.rules
+            for definition in source_rules.stats(source_project_id):
+                if target_rules.stat(target_project_id, definition.stat_key): continue
+                target_rules.save_stat(definition.model_copy(update={"project_id": target_project_id})); cloned_stats += 1
+            for definition in source_rules.effects(source_project_id):
+                if target_rules.effect(target_project_id, definition.effect_key): continue
+                target_rules.save_effect(definition.model_copy(update={"project_id": target_project_id})); cloned_effects += 1
+            for definition in source_rules.abilities(source_project_id):
+                if target_rules.ability(target_project_id, definition.ability_key): continue
+                target_rules.save_ability(definition.model_copy(update={"project_id": target_project_id})); cloned_abilities += 1
+            active_mutations: list[NormalizedMutation] = []
+            target_projection = self.world.projection(target_project_id, project.get("active_node_id"))
+            for instance in source.get("active_effects", {}).values():
+                if instance.get("target_id") not in selected: continue
+                cloned = self._remap(instance, id_map)
+                cloned["id"] = new_id()
+                clock = cloned.get("clock")
+                source_progress = int(source.get("elapsed_minutes", 0)) if clock == "story_minutes" else int(source.get("world_action_count", 0)) if clock == "world_actions" else int(source.get("target_action_counts", {}).get(instance.get("target_id"), 0))
+                target_progress = int(target_projection.get("elapsed_minutes", 0)) if clock == "story_minutes" else int(target_projection.get("world_action_count", 0)) if clock == "world_actions" else int(target_projection.get("target_action_counts", {}).get(cloned.get("target_id"), 0))
+                for field in ("started_at", "next_tick", "expires_at"):
+                    if cloned.get(field) is not None: cloned[field] = target_progress + (int(cloned[field]) - source_progress)
+                active_mutations.append(NormalizedMutation("cloneEffectInstance", cloned, False))
+            if active_mutations:
+                transaction = self.world.commit_to_existing_node(target_project_id, project["active_node_id"], active_mutations, provenance="clone", summary="Cloned active effect instances") if project.get("active_node_id") else self.world.commit_root(target_project_id, active_mutations, provenance="clone", summary="Cloned active effect instances")
         return {"transaction_id": transaction["id"], "entity_id_map": id_map,
                 "entity_count": len(selected), "relationship_count": relationship_count,
                 "spatial_object_id_map": spatial_id_map, "spatial_object_count": len(spatial_id_map),
-                "stat_count": cloned_stats, "ability_count": cloned_abilities}
+                "stat_count": cloned_stats, "effect_count": cloned_effects, "ability_count": cloned_abilities}

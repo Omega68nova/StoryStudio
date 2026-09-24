@@ -189,7 +189,7 @@ class BulletHellService:
             references += int((self.db.fetch_one("SELECT COUNT(*) n FROM project_bullethell_settings WHERE default_mode_id=?", (identifier,)) or {"n": 0})["n"])
         else:
             references += int((self.db.fetch_one("SELECT COUNT(*) n FROM project_bullethell_attacks WHERE attack_id=?", (identifier,)) or {"n": 0})["n"])
-        references += int((self.db.fetch_one("SELECT COUNT(*) n FROM ability_definitions WHERE minigame_profile_json LIKE ?", (f'%"{identifier}"%',)) or {"n": 0})["n"])
+        references += int((self.db.fetch_one("SELECT COUNT(*) n FROM ability_bullethell_skills WHERE skill_id=?", (identifier,)) or {"n": 0})["n"])
         references += int((self.db.fetch_one("SELECT COUNT(*) n FROM world_events WHERE payload_json LIKE ?", (f'%"{identifier}"%',)) or {"n": 0})["n"])
         if references:
             raise WorldValidationError(f"Definition is still referenced in {references} place(s)")
@@ -209,9 +209,9 @@ class BulletHellService:
             raise WorldValidationError("Bullet-hell attack or resolved mode is unavailable to this project")
         direct = set(participant.get("state", {}).get("bullethell_skill_ids", []))
         owned = set(participant.get("state", {}).get("abilities", []))
-        for row in self.db.fetch_all("SELECT ability_key,name,minigame_profile_json FROM ability_definitions WHERE project_id=?", (project_id,)):
+        for row in self.db.fetch_all("SELECT ability_key,name FROM ability_definitions WHERE project_id=?", (project_id,)):
             if {row["ability_key"], row["name"]} & owned:
-                direct.update(_json(row["minigame_profile_json"], {}).get("bullethell_skill_ids", []))
+                direct.update(item["skill_id"] for item in self.db.fetch_all("SELECT skill_id FROM ability_bullethell_skills WHERE project_id=? AND ability_key=?", (project_id, row["ability_key"])))
         mode = modes[mode_id]
         if mode["movement_skill_id"] not in settings["allowed_skill_ids"]:
             raise WorldValidationError("The resolved mode's movement skill is not enabled for this project")

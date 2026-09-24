@@ -150,7 +150,6 @@ export type WorldEntity = {
   card: LoreCard;
   reason?: string;
   stats?: Record<string, number>;
-  active_effects?: Array<Record<string, unknown>>;
 };
 
 export type WorldProjection = {
@@ -161,6 +160,7 @@ export type WorldProjection = {
   elapsed_minutes: number;
   display_time: string | null;
   current_theme_id?: string | null;
+  active_effects?: Record<string, { id: string; effect_key: string; target_id: string; source_id?: string | null; clock: string; duration: number; next_tick: number; expires_at?: number | null; stacks: number }>;
   transactions: Array<Record<string, unknown>>;
 };
 
@@ -262,8 +262,14 @@ export type UserAmbientPreferences = { enabled: boolean; master_volume: number }
 export type UserNoisePreferences = { enabled: boolean; master_volume: number };
 export type NoiseVariant = { id: string; source_path: string; url: string; label: string; playback_rate: number; default_gain: number; tags: string[]; enabled: boolean; available: boolean };
 export type NoiseEvent = { project_id: string; noise_id: string; label: string; url: string; playback_rate: number; gain: number; source: string };
-export type StatDefinition = { id: string; stat_key: string; label: string; description: string; scope: "character" | "relationship"; default_value: number; minimum: number; maximum: number; integer_only: boolean; visibility: string; color?: string | null; minimum_stat_key?: string | null; maximum_stat_key?: string | null; minimum_color?: string | null; maximum_color?: string | null; display_style: "compact" | "bar" };
-export type AbilityDefinition = { id: string; ability_key: string; name: string; description: string; icon_url?: string | null; target_type: "self" | "character" | "choice" | "relationship" | "location" | "all" | "party" | "allies" | "enemies" | "nearby_enemies" | "faction_members" | "random"; requirements?: Record<string, unknown>; costs: Record<string, number>; effects: Array<Record<string, unknown>>; minigame_profile?: { timed_attack?: { line_count: number; damage_per_line: number }; bullethell_skill_ids?: string[] } };
+export type RuleOwnerKind = "character" | "item" | "location" | "faction" | "lore_system" | "fact" | "plot_beat" | "relationship";
+export type StatDefinition = { project_id?: string; stat_key: string; label: string; description: string; compatible_owner_kinds: RuleOwnerKind[]; default_value: number; minimum: number; maximum: number; integer_only: boolean; visibility: "public" | "private" | "narrator"; color?: string | null; minimum_stat_key?: string | null; maximum_stat_key?: string | null; minimum_color?: string | null; maximum_color?: string | null; display_style: "compact" | "bar" };
+export type FormulaNode = { kind: "constant"; value: number } | { kind: "stat"; participant: "actor" | "source" | "target"; stat_key: string } | { kind: "negate"; children: [FormulaNode] } | { kind: "add" | "subtract" | "multiply" | "divide" | "minimum" | "maximum"; children: [FormulaNode, FormulaNode] };
+export type EffectDefinition = { project_id?: string; effect_key: string; name: string; description: string; target_stat_key: string; operation: "add" | "subtract" | "set" | "multiply"; formula: FormulaNode; clock: "story_minutes" | "target_actions" | "world_actions"; duration: number; tick_interval: number; evaluation_mode: "snapshot" | "live"; stacking_policy: "replace" | "refresh" | "stack" | "independent"; max_stacks: number; visibility: "public" | "private" | "narrator"; icon?: string | null; enabled: boolean };
+export type AbilityCost = { kind: "stat" | "consume_source" | "consume_fuel"; stat_key?: string | null; item_id?: string | null; amount: number };
+export type AbilityAction = { kind: "apply_effect" | "move" | "create" | "remove" | "reveal_knowledge" | "change_relationship" | "advance_time" | "play_noise"; target: string; effect_key?: string | null; destination_id?: string | null; entity_kind?: string | null; entity_name?: string | null; state?: Record<string, unknown>; fact_id?: string | null; relation?: string | null; minutes?: number | null; noise_id?: string | null };
+export type AbilityDefinition = { project_id?: string; ability_key: string; name: string; description: string; ability_kind: "active" | "passive"; compatible_owner_kinds: Array<"character" | "item">; target_type: "self" | "character" | "choice" | "relationship" | "location" | "all" | "party" | "allies" | "enemies" | "nearby_enemies" | "faction_members" | "random"; requirements?: Record<string, unknown>; costs: AbilityCost[]; actions: AbilityAction[]; passive_triggers: Array<{ kind: "ability_used" | "stat_changed" | "damage" | "owner_action" | "movement" | "time_advanced"; stat_key?: string | null }>; icon?: string | null; enabled: boolean; timed_attack_line_count?: number | null; timed_attack_damage_per_line?: number | null; bullethell_skill_ids: string[] };
+export type RuleMigrationWarning = { id: string; warning_kind: string; message: string; details: Record<string, unknown>; acknowledged: boolean };
 
 export type GenerationTaskStatus =
   | "pending" | "blocked" | "ready" | "queued" | "running"

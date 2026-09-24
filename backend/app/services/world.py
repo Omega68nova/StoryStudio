@@ -11,18 +11,11 @@ from typing import Any, Iterable
 from app.database import Database, new_id, utc_now
 from app.data.dataProvider import DataProvider
 from app.domain.adapters import (
-    ability_from_record,
     entity_from_projection,
-    stat_from_record,
 )
-from app.domain.operations import (
-    DomainOperationError,
-    EffectExecutor,
-    RequirementEvaluator,
-    StatAdjustmentExecutor,
-    TargetResolver,
-)
-from app.domain.world import Character, TypedWorldEntity, resolve_stat_bounds
+from app.domain.operations import DomainOperationError
+from app.domain.world import Character, TypedWorldEntity
+from app.services.rules import RulesRuntime, RulesRuntimeError
 
 
 ENTITY_KINDS = {"character", "location", "faction", "item", "lore_system", "fact", "relationship", "plot_beat"}
@@ -35,7 +28,7 @@ READ_TOOLS = {
 }
 WRITE_TOOLS = {
     "createEntity", "updateEntity", "moveCharacter", "setRelationship", "revealKnowledge", "advanceTime", "updatePlotBeat",
-    "removeRelationship", "adjustStat", "useAbility", "selectTheme",
+    "removeRelationship", "adjustStat", "useAbility", "applyEffect", "removeEffect", "selectTheme",
     "adjustInventory", "setSceneEnvironment", "proposeWeather", "playNoise",
     "setWorldRoot", "upsertMapAnchor", "upsertBarrier", "upsertTravelConnection", "upsertEncounterRule",
     "setMapDiscovery", "travelTo", "travelTowards", "exploreFor", "resumeTravel",
@@ -101,8 +94,6 @@ def make_lore_card(entity: dict[str, Any], projection: dict[str, Any]) -> dict[s
             pieces.append(f"{field.replace('_', ' ')}: {value}")
     if entity.get("stats"):
         pieces.append("stats: " + _text(entity["stats"]))
-    if entity.get("active_effects"):
-        pieces.append("active effects: " + _text(entity["active_effects"]))
     compact = ". ".join(pieces)[:2400]
     primary_visual = (
         _text(state.get("imagegen_description")).strip()
@@ -133,6 +124,7 @@ class WorldEngine:
         self.db = db
         self.data = data_provider or DataProvider(db)
         self.repo = self.data.world
+        self.rules_runtime = RulesRuntime(self.data, self.apply_event)
 
     def _spatial_projection(self, project_id: str, projection: dict[str, Any]) -> dict[str, Any]:
         enriched = dict(projection)
@@ -185,6 +177,9 @@ class WorldEngine:
             "travel_connections": {},
             "encounter_rules": {},
             "travel_itineraries": {},
+            "active_effects": {},
+            "world_action_count": 0,
+            "target_action_counts": {},
             "transactions": [],
         }
         for transaction in visible:
@@ -255,10 +250,21 @@ class WorldEngine:
             container = entities.get(payload.get("entity_id")) or relations.get(payload.get("relation_id"))
             if container is not None:
                 container.setdefault("stats", {})[payload["stat_key"]] = payload["value"]
-        elif event_type == "effect.applied":
-            container = entities.get(payload.get("entity_id")) or relations.get(payload.get("relation_id"))
-            if container is not None:
-                container.setdefault("active_effects", []).append(copy.deepcopy(payload))
+        elif event_type == "effect.instance_applied":
+            for replaced in payload.get("replace_instance_ids", []):
+                projection.setdefault("active_effects", {}).pop(replaced, None)
+            projection.setdefault("active_effects", {})[payload["id"]] = copy.deepcopy(payload)
+        elif event_type == "effect.instance_updated":
+            instance = projection.setdefault("active_effects", {}).get(payload["id"])
+            if instance: instance.update(copy.deepcopy(payload))
+        elif event_type == "effect.instance_removed":
+            projection.setdefault("active_effects", {}).pop(payload["id"], None)
+        elif event_type == "story.action_committed":
+            projection["world_action_count"] = int(projection.get("world_action_count", 0)) + 1
+            actor_id = payload.get("actor_id")
+            if actor_id:
+                counts = projection.setdefault("target_action_counts", {})
+                counts[actor_id] = int(counts.get(actor_id, 0)) + 1
         elif event_type == "theme.selected":
             projection["current_theme_id"] = payload.get("theme_id")
         elif event_type == "environment.scene_set":
@@ -277,6 +283,8 @@ class WorldEngine:
             if not found and payload["quantity"] > 0:
                 inventory.append({"item_id": payload["item_id"], "quantity": payload["quantity"]})
             entities[entity_id]["state"]["inventory"] = [entry for entry in inventory if int(entry.get("quantity", 0)) > 0]
+            if int(payload["quantity"]) <= 0:
+                entities[entity_id]["state"]["equipment"] = [item for item in entities[entity_id]["state"].get("equipment", []) if str(item) != str(payload["item_id"])]
         elif event_type == "world.root_set":
             previous = projection.get("root_location_id")
             projection["root_location_id"] = payload["root_location_id"]
@@ -308,13 +316,8 @@ class WorldEngine:
 
     @staticmethod
     def _expire_effects(projection: dict[str, Any]) -> None:
-        sequence, elapsed = projection.get("branch_sequence", 0), projection.get("elapsed_minutes", 0)
-        for container in [*projection["entities"].values(), *projection["relations"].values()]:
-            container["active_effects"] = [
-                effect for effect in container.get("active_effects", [])
-                if not ((effect.get("expires_sequence") is not None and sequence >= effect["expires_sequence"])
-                        or (effect.get("expires_elapsed_minutes") is not None and elapsed >= effect["expires_elapsed_minutes"]))
-            ]
+        # Canonical instances expire through explicit events so replay remains deterministic.
+        return
 
     def normalize_mutations(
         self, project_id: str, head_node_id: str | None, raw: Iterable[dict[str, Any]], *, provenance: str = "ai",
@@ -641,6 +644,8 @@ class WorldEngine:
                 if minutes < 0:
                     raise WorldValidationError("Story time cannot move backward")
                 arguments["minutes"] = minutes
+                try: arguments["scheduled_effects"] = self.rules_runtime.due_effects(project_id, projection, "story_minutes", int(projection.get("elapsed_minutes", 0)) + minutes)
+                except RulesRuntimeError as exc: raise WorldValidationError(str(exc)) from exc
             elif tool == "setSceneEnvironment":
                 settings = self.db.fetch_one("SELECT enabled,initial_weather_id FROM project_environment_settings WHERE project_id=?", (project_id,)) or {"enabled": 0}
                 if not settings["enabled"]:
@@ -677,9 +682,23 @@ class WorldEngine:
                 if arguments.get("status") not in {"planned", "available", "active", "resolved", "abandoned"}:
                     raise WorldValidationError("Unsupported plot-beat status")
             elif tool == "adjustStat":
-                arguments = self._normalize_stat_adjustment(project_id, projection, arguments)
+                try: arguments = self.rules_runtime.adjust_stat(project_id, projection, arguments)
+                except RulesRuntimeError as exc: raise WorldValidationError(str(exc)) from exc
             elif tool == "useAbility":
-                arguments = self._normalize_ability(project_id, projection, arguments, provenance)
+                try:
+                    arguments = self.rules_runtime.normalize_ability(project_id, projection, arguments, provenance)
+                    arguments["scheduled_effects"] = [
+                        *self.rules_runtime.due_effects(project_id, projection, "world_actions", int(projection.get("world_action_count", 0)) + 1),
+                        *self.rules_runtime.due_effects(project_id, projection, "target_actions", int(projection.get("target_action_counts", {}).get(arguments["actor_id"], 0)) + 1, target_id=str(arguments["actor_id"])),
+                    ]
+                except RulesRuntimeError as exc: raise WorldValidationError(str(exc)) from exc
+            elif tool == "applyEffect":
+                try: arguments = self.rules_runtime.direct_effect(project_id, projection, arguments)
+                except RulesRuntimeError as exc: raise WorldValidationError(str(exc)) from exc
+            elif tool == "removeEffect":
+                instance_id = str(arguments.get("active_instance_id") or "")
+                if instance_id not in projection.get("active_effects", {}): raise WorldValidationError("Active effect instance not found")
+                arguments = {"id": instance_id}
             elif tool == "selectTheme":
                 theme_id = str(arguments.get("theme_id", ""))
                 settings = self.db.fetch_one("SELECT mode FROM project_music_settings WHERE project_id = ?", (project_id,))
@@ -717,143 +736,17 @@ class WorldEngine:
                     raise WorldValidationError(f"{character['name']} does not have enough {item['name']}")
                 arguments = {"character_id": character["id"], "item_id": item["id"], "delta": delta, "previous_quantity": current, "quantity": current + delta}
             mutation = NormalizedMutation(tool, arguments, major, reason)
+            base_events = self._base_mutation_events(mutation)
+            try:
+                passive = self.rules_runtime.passive_cascade(project_id, projection, base_events)
+            except (DomainOperationError, RulesRuntimeError) as exc:
+                raise WorldValidationError(str(exc)) from exc
+            derived = [*passive, *self.rules_runtime.dependent_clamps(project_id, projection, [*base_events, *[(item["event_type"], item.get("entity_id"), {key: value for key, value in item.items() if key != "event_type"}) for item in passive]])]
+            if derived:
+                mutation.arguments["_derived_events"] = derived
             normalized.append(mutation)
             self._apply_mutation_preview(projection, mutation)
         return normalized
-
-    def _stat_definition(self, project_id: str, key: str, scope: str) -> dict[str, Any]:
-        definition = self.db.fetch_one(
-            "SELECT * FROM stat_definitions WHERE project_id = ? AND stat_key = ? AND scope = ?", (project_id, key, scope)
-        )
-        if not definition:
-            raise WorldValidationError(f"Unknown {scope} stat: {key}")
-        return definition
-
-    def _normalize_stat_adjustment(self, project_id: str, projection: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
-        def stat_lookup(key: str, scope: str):
-            return stat_from_record(
-                self._stat_definition(project_id, key, scope)
-            )
-
-        try:
-            return StatAdjustmentExecutor().normalize(
-                projection=projection,
-                entity_id=arguments.get("entity_id"),
-                relation_id=arguments.get("relation_id"),
-                stat_key=str(arguments.get("stat_key", "")),
-                operation=str(arguments.get("operation", "add")),
-                amount=arguments.get("amount", 0),
-                stat_lookup=stat_lookup,
-            )
-        except DomainOperationError as exc:
-            raise WorldValidationError(str(exc)) from exc
-
-    def _normalize_ability(self, project_id: str, projection: dict[str, Any], arguments: dict[str, Any], provenance: str) -> dict[str, Any]:
-        actor_raw = self._entity(
-            projection,
-            arguments.get("actor_id"),
-            "character",
-        )
-        actor = entity_from_projection(actor_raw)
-        if not isinstance(actor, Character):
-            raise WorldValidationError("Ability actor is not a character")
-        if actor.state.player_controlled and provenance not in {"player", "author"}:
-            raise WorldValidationError("Player-character abilities require an explicit player request")
-        row = self.db.fetch_one("SELECT * FROM ability_definitions WHERE project_id = ? AND ability_key = ?", (project_id, arguments.get("ability_key")))
-        if not row:
-            raise WorldValidationError("Unknown ability")
-        try:
-            ability = ability_from_record(row)
-        except ValueError as exc:
-            raise WorldValidationError(
-                f"Ability definition is structurally invalid: {exc}"
-            ) from exc
-        known = actor.state.abilities
-        if ability.ability_key not in known and ability.name not in known:
-            raise WorldValidationError(
-                f"{actor.name} does not know {ability.name}"
-            )
-
-        def stat_lookup(key: str, scope: str):
-            return stat_from_record(
-                self._stat_definition(project_id, key, scope)
-            )
-
-        def effective_stats(character: Character) -> dict[str, float]:
-            raw = projection["entities"].get(character.id, actor_raw)
-            return self.effective_stats(project_id, raw)
-
-        targets = TargetResolver()
-        try:
-            phases = self.data.environment.phases(
-                project_id,
-                enabled_only=True,
-            )
-            total = sum(int(item["duration_minutes"]) for item in phases)
-            if total > 0:
-                offset = int(projection.get("elapsed_minutes", 0)) % total
-                for phase in phases:
-                    if offset < int(phase["duration_minutes"]):
-                        projection["current_time_phase_id"] = phase["id"]
-                        break
-                    offset -= int(phase["duration_minutes"])
-            primary_target = targets.resolve_ability_target(
-                projection,
-                actor,
-                ability,
-                arguments.get("target_id"),
-            )
-            RequirementEvaluator().ensure_satisfied(
-                actor,
-                ability,
-                projection=projection,
-                primary_target=primary_target,
-                stat_lookup=stat_lookup,
-                effective_stats=effective_stats,
-            )
-            proposed_names = {
-                str(entity.get("name", "")).casefold()
-                for entity in projection["entities"].values()
-                if not entity.get("state", {}).get("archived")
-            }
-            for effect in ability.effects:
-                if effect.destination_id:
-                    self._entity(projection, effect.destination_id, "location")
-                if effect.fact_id:
-                    self._entity(projection, effect.fact_id, "fact")
-                if str(effect.operation) == "play_noise" and not self.data.sound.noise_variant(
-                    project_id, str(effect.noise_id), playable_only=True
-                ):
-                    raise WorldValidationError("Ability noise is not enabled or available")
-                if str(effect.operation) == "create":
-                    proposed = str(effect.name or "").casefold()
-                    if proposed in proposed_names:
-                        raise WorldValidationError(
-                            f"An entity named '{effect.name}' already exists on this branch"
-                        )
-                    proposed_names.add(proposed)
-            execution = EffectExecutor(targets).normalize(
-                projection=projection,
-                actor=actor,
-                primary_target=primary_target,
-                ability=ability,
-                next_sequence=int(projection.get("_next_sequence", 0)),
-                elapsed_minutes=int(projection.get("elapsed_minutes", 0)),
-                stat_lookup=stat_lookup,
-                effective_stats=effective_stats,
-                id_factory=new_id,
-            )
-        except DomainOperationError as exc:
-            raise WorldValidationError(str(exc)) from exc
-
-        return {
-            "actor_id": actor.id,
-            "target_id": primary_target.id,
-            "ability_key": ability.ability_key,
-            "ability_name": ability.name,
-            "costs": execution.costs,
-            "effects": execution.effects,
-        }
 
     @staticmethod
     def _entity(projection: dict[str, Any], entity_id: Any, expected_kind: str | None = None) -> dict[str, Any]:
@@ -926,6 +819,15 @@ class WorldEngine:
 
     @staticmethod
     def _mutation_events(mutation: NormalizedMutation) -> list[tuple[str, str | None, dict[str, Any]]]:
+        rows = WorldEngine._base_mutation_events(mutation)
+        rows.extend(
+            (str(item["event_type"]), item.get("entity_id"), {key: value for key, value in item.items() if key != "event_type"})
+            for item in mutation.arguments.get("_derived_events", [])
+        )
+        return rows
+
+    @staticmethod
+    def _base_mutation_events(mutation: NormalizedMutation) -> list[tuple[str, str | None, dict[str, Any]]]:
         tool, args = mutation.tool, mutation.arguments
         if tool == "createEntity":
             entity = {
@@ -934,8 +836,6 @@ class WorldEngine:
             }
             if "stats" in args:
                 entity["stats"] = args["stats"]
-            if "active_effects" in args:
-                entity["active_effects"] = args["active_effects"]
             return [("entity.created", entity["id"], {"entity": entity})]
         if tool == "createLocationFromPreset":
             entity = {key: args[key] for key in ("entity_id", "kind", "name", "aliases", "tags", "state")}
@@ -989,7 +889,9 @@ class WorldEngine:
         if tool == "revealKnowledge":
             return [("knowledge.revealed", args["fact_id"], args)]
         if tool == "advanceTime":
-            return [("time.advanced", None, args)]
+            rows = [("time.advanced", None, {key: value for key, value in args.items() if key != "scheduled_effects"})]
+            rows.extend((str(item["event_type"]), item.get("entity_id"), {key: value for key, value in item.items() if key != "event_type"}) for item in args.get("scheduled_effects", []))
+            return rows
         if tool == "updatePlotBeat":
             return [("plot_beat.updated", args["entity_id"], args)]
         if tool == "adjustStat":
@@ -1001,6 +903,7 @@ class WorldEngine:
         if tool == "useAbility":
             rows: list[tuple[str, str | None, dict[str, Any]]] = [("ability.used", args["actor_id"], args)]
             rows.extend(("stat.changed", cost.get("entity_id"), cost) for cost in args.get("costs", []))
+            rows.extend(("inventory.adjusted", change.get("entity_id"), change) for change in args.get("inventory_changes", []))
             for effect in args.get("effects", []):
                 payload = {**effect, "ability_key": args["ability_key"]}
                 event_type = str(payload.pop("event_type", "stat.changed"))
@@ -1015,6 +918,19 @@ class WorldEngine:
                     entity["id"] = entity.pop("entity_id")
                     payload = {"entity": entity, "ability_key": args["ability_key"]}
                 rows.append((event_type, effect.get("entity_id"), payload))
+            rows.extend((str(item["event_type"]), item.get("entity_id"), {key: value for key, value in item.items() if key != "event_type"}) for item in args.get("scheduled_effects", []))
+            rows.append(("story.action_committed", args["actor_id"], {"actor_id": args["actor_id"]}))
+            return rows
+        if tool == "applyEffect":
+            event_type = str(args.get("event_type", "stat.changed"))
+            return [(event_type, args.get("entity_id"), {key: value for key, value in args.items() if key != "event_type"})]
+        if tool == "removeEffect":
+            return [("effect.instance_removed", None, args)]
+        if tool == "cloneEffectInstance":
+            return [("effect.instance_applied", None, args)]
+        if tool == "storyAction":
+            rows = [("story.action_committed", args.get("actor_id"), {"actor_id": args.get("actor_id")})]
+            rows.extend((str(item["event_type"]), item.get("entity_id"), {key: value for key, value in item.items() if key != "event_type"}) for item in args.get("scheduled_effects", []))
             return rows
         if tool == "adjustInventory":
             return [("inventory.adjusted", args["character_id"], args)]
@@ -1048,6 +964,23 @@ class WorldEngine:
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         if narration_mode not in NARRATION_MODES:
             raise WorldValidationError("Unsupported narration mode")
+        if not any(item.tool == "useAbility" for item in mutations):
+            projected = self.preview(project_id, parent_node_id, mutations)
+            try:
+                action_args = {
+                    "actor_id": pov_character_id,
+                    "scheduled_effects": [
+                        *self.rules_runtime.due_effects(project_id, projected, "world_actions", int(projected.get("world_action_count", 0)) + 1),
+                        *(self.rules_runtime.due_effects(project_id, projected, "target_actions", int(projected.get("target_action_counts", {}).get(pov_character_id, 0)) + 1, target_id=pov_character_id) if pov_character_id else []),
+                    ],
+                }
+                action = NormalizedMutation("storyAction", action_args, False)
+                base_events = self._base_mutation_events(action)
+                passive = self.rules_runtime.passive_cascade(project_id, projected, base_events)
+                action.arguments["_derived_events"] = [*passive, *self.rules_runtime.dependent_clamps(project_id, projected, [*base_events, *[(row["event_type"], row.get("entity_id"), {key: value for key, value in row.items() if key != "event_type"}) for row in passive]])]
+            except RulesRuntimeError as exc:
+                raise WorldValidationError(str(exc)) from exc
+            mutations = [*mutations, action]
         assistant_id = new_id()
         return self._commit(
             project_id, assistant_id, parent_node_id, mutations, provenance=provenance,
@@ -1142,80 +1075,7 @@ class WorldEngine:
         )
 
     def effective_stats(self, project_id: str, container: dict[str, Any], scope: str = "character") -> dict[str, float]:
-        rows = self.db.fetch_all(
-            "SELECT * FROM stat_definitions WHERE project_id=? AND scope=?",
-            (project_id, scope),
-        )
-        definitions = {
-            row["stat_key"]: stat_from_record(row)
-            for row in rows
-        }
-
-        def lookup(key: str, requested_scope: str):
-            definition = definitions.get(key)
-            if definition is None or str(definition.scope) != requested_scope:
-                raise WorldValidationError(
-                    f"Unknown {requested_scope} stat: {key}"
-                )
-            return definition
-
-        raw_values = {
-            key: float(
-                container.get("stats", {}).get(
-                    key,
-                    definition.default_value,
-                )
-            )
-            for key, definition in definitions.items()
-        }
-        values: dict[str, float] = {}
-        for key, definition in definitions.items():
-            try:
-                bounds = resolve_stat_bounds(
-                    definition,
-                    raw_values,
-                    lookup,
-                )
-            except ValueError as exc:
-                raise WorldValidationError(str(exc)) from exc
-            values[key] = max(
-                float(bounds.minimum),
-                min(float(bounds.maximum), raw_values[key]),
-            )
-            if definition.integer_only:
-                values[key] = int(round(values[key]))
-
-        for effect in container.get("active_effects", []):
-            key = effect.get("stat_key")
-            if key not in values:
-                continue
-            definition = definitions[key]
-            operation = effect.get("operation", "add")
-            amount = float(effect.get("amount", 0))
-            if operation == "set":
-                values[key] = amount
-            elif operation == "multiply":
-                values[key] *= amount
-            else:
-                values[key] += amount * (
-                    1 if operation == "add" else -1
-                )
-            try:
-                bounds = resolve_stat_bounds(
-                    definition,
-                    values,
-                    lookup,
-                )
-            except ValueError as exc:
-                raise WorldValidationError(str(exc)) from exc
-            values[key] = max(
-                float(bounds.minimum),
-                min(float(bounds.maximum), values[key]),
-            )
-            if definition.integer_only:
-                values[key] = int(round(values[key]))
-        return values
-
+        return self.rules_runtime.effective_stats(project_id, container, scope)
     def _validate_projection(self, projection: dict[str, Any]) -> None:
         entities = projection["entities"]
         for entity in entities.values():
@@ -1576,17 +1436,14 @@ class WorldEngine:
             return self.effective_stats(project_id, entity)
         if tool == "getAbilities":
             return [
-                ability_from_record(row).model_dump(
+                ability.model_dump(
                     mode="json",
                     include={
                         "ability_key", "name", "description", "target_type",
-                        "requirements", "costs", "effects", "minigame_profile",
+                        "ability_kind", "compatible_owner_kinds", "requirements", "costs", "actions",
                     },
                 )
-                for row in self.db.fetch_all(
-                    "SELECT * FROM ability_definitions WHERE project_id = ?",
-                    (project_id,),
-                )
+                for ability in self.data.rules.abilities(project_id)
             ]
         kind = "fact" if tool == "getKnownFacts" else "plot_beat"
         return self.search(project_id, str(arguments.get("query", "")), head_node_id=head_node_id,

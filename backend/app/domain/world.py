@@ -42,6 +42,7 @@ class DomainKind(StrEnum):
     PLOT_BEAT = "plot_beat"
     WEATHER = "weather"
     STAT = "stat"
+    EFFECT = "effect"
     ABILITY = "ability"
     OUTFIT = "outfit"
 
@@ -104,8 +105,14 @@ class ItineraryStatus(StrEnum):
     CANCELLED = "cancelled"
 
 
-class StatScope(StrEnum):
+class StatOwnerKind(StrEnum):
     CHARACTER = "character"
+    ITEM = "item"
+    LOCATION = "location"
+    FACTION = "faction"
+    LORE_SYSTEM = "lore_system"
+    FACT = "fact"
+    PLOT_BEAT = "plot_beat"
     RELATIONSHIP = "relationship"
 
 
@@ -135,14 +142,78 @@ class EffectOperation(StrEnum):
     SUBTRACT = "subtract"
     SET = "set"
     MULTIPLY = "multiply"
+
+
+class FormulaParticipant(StrEnum):
+    ACTOR = "actor"
+    SOURCE = "source"
+    TARGET = "target"
+
+
+class FormulaNodeKind(StrEnum):
+    CONSTANT = "constant"
+    STAT = "stat"
+    ADD = "add"
+    SUBTRACT = "subtract"
+    MULTIPLY = "multiply"
+    DIVIDE = "divide"
+    MINIMUM = "minimum"
+    MAXIMUM = "maximum"
+    NEGATE = "negate"
+
+
+class EffectClock(StrEnum):
+    STORY_MINUTES = "story_minutes"
+    TARGET_ACTIONS = "target_actions"
+    WORLD_ACTIONS = "world_actions"
+
+
+class EffectEvaluationMode(StrEnum):
+    SNAPSHOT = "snapshot"
+    LIVE = "live"
+
+
+class EffectStackingPolicy(StrEnum):
+    REPLACE = "replace"
+    REFRESH = "refresh"
+    STACK = "stack"
+    INDEPENDENT = "independent"
+
+
+class AbilityKind(StrEnum):
+    ACTIVE = "active"
+    PASSIVE = "passive"
+
+
+class AbilityOwnerKind(StrEnum):
+    CHARACTER = "character"
+    ITEM = "item"
+
+
+class AbilityActionKind(StrEnum):
+    APPLY_EFFECT = "apply_effect"
     MOVE = "move"
     CREATE = "create"
     REMOVE = "remove"
-    APPLY_STATUS = "apply_status"
     REVEAL_KNOWLEDGE = "reveal_knowledge"
     CHANGE_RELATIONSHIP = "change_relationship"
     ADVANCE_TIME = "advance_time"
     PLAY_NOISE = "play_noise"
+
+
+class AbilityCostKind(StrEnum):
+    STAT = "stat"
+    CONSUME_SOURCE = "consume_source"
+    CONSUME_FUEL = "consume_fuel"
+
+
+class PassiveTriggerKind(StrEnum):
+    ABILITY_USED = "ability_used"
+    STAT_CHANGED = "stat_changed"
+    DAMAGE = "damage"
+    OWNER_ACTION = "owner_action"
+    MOVEMENT = "movement"
+    TIME_ADVANCED = "time_advanced"
 
 
 class EffectTarget(StrEnum):
@@ -458,7 +529,6 @@ class WorldEntity(DomainModel):
     aliases: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     stats: dict[str, Number] = Field(default_factory=dict)
-    active_effects: list[dict[str, Any]] = Field(default_factory=list)
     last_changed_sequence: int | None = None
 
     @property
@@ -523,7 +593,6 @@ class Relationship(DomainModel):
     target_id: DomainId
     relation: str = Field(min_length=1)
     stats: dict[str, Number] = Field(default_factory=dict)
-    active_effects: list[dict[str, Any]] = Field(default_factory=list)
 
     @property
     def reference(self) -> DomainReference:
@@ -571,12 +640,13 @@ class StatDisplayStyle(StrEnum):
 
 
 class Stat(DomainModel):
-    id: DomainId
     project_id: DomainId
     stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     label: str = Field(min_length=1)
     description: str = ""
-    scope: StatScope = StatScope.CHARACTER
+    compatible_owner_kinds: list[StatOwnerKind] = Field(
+        default_factory=lambda: [StatOwnerKind.CHARACTER]
+    )
     default_value: Number = 0
     minimum: Number = 0
     maximum: Number = 100
@@ -593,6 +663,9 @@ class Stat(DomainModel):
 
     @model_validator(mode="after")
     def validate_bounds(self) -> Stat:
+        if not self.compatible_owner_kinds:
+            raise ValueError("stat needs at least one compatible owner kind")
+        self.compatible_owner_kinds = list(dict.fromkeys(self.compatible_owner_kinds))
         if self.minimum > self.maximum:
             raise ValueError("stat minimum cannot exceed maximum")
         if not self.minimum_stat_key and not self.maximum_stat_key:
@@ -606,7 +679,7 @@ class Stat(DomainModel):
 
     @property
     def reference(self) -> DomainReference:
-        return DomainReference(id=self.id, kind=DomainKind.STAT)
+        return DomainReference(id=self.stat_key, kind=DomainKind.STAT)
 
 
 class ResolvedStatBounds(DomainModel):
@@ -628,7 +701,7 @@ def resolve_stat_bounds(
             return values[key]
         if stat_lookup is None:
             return fallback
-        referenced = stat_lookup(key, str(definition.scope))
+        referenced = stat_lookup(key)
         return values.get(key, referenced.default_value)
 
     minimum = resolve_reference(
@@ -802,78 +875,156 @@ class TravelItinerary(DomainModel):
     traversal_seed: str = ""
 
 
-class ActionEffect(DomainModel):
-    """A typed stat, world-state, relationship, time, or noise effect."""
-
-    # Unknown legacy target labels historically behaved like "target". Keep
-    # accepting them unless a separate migration slice changes that contract.
-    target: str = EffectTarget.TARGET
+class FormulaNode(DomainModel):
+    kind: FormulaNodeKind
+    value: Number | None = None
+    participant: FormulaParticipant | None = None
     stat_key: str | None = None
-    operation: EffectOperation = EffectOperation.ADD
-    amount: Number = 0
-    # Unknown duration labels historically meant an immediate effect.
-    duration_type: str | None = None
-    duration_value: int = 0
-    destination_id: DomainId | None = None
-    entity_kind: EntityKind | None = None
-    name: str | None = None
-    state: dict[str, Any] = Field(default_factory=dict)
-    status: str | None = None
-    fact_id: DomainId | None = None
-    relation: str | None = None
-    minutes: int = 0
-    noise_id: DomainId | None = None
+    children: list[FormulaNode] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def validate_operation_shape(self) -> ActionEffect:
-        if int(self.duration_value or 0) < 0:
-            raise ValueError("effect duration cannot be negative")
-        if self.operation in {
-            EffectOperation.ADD,
-            EffectOperation.SUBTRACT,
-            EffectOperation.SET,
-            EffectOperation.MULTIPLY,
-        } and not self.stat_key:
-            raise ValueError("stat effect needs stat_key")
-        if self.operation == EffectOperation.MOVE and not self.destination_id:
-            raise ValueError("move effect needs destination_id")
-        if self.operation == EffectOperation.CREATE and (
-            self.entity_kind is None or not (self.name or "").strip()
-        ):
-            raise ValueError("create effect needs entity_kind and name")
-        if self.operation == EffectOperation.REVEAL_KNOWLEDGE and not self.fact_id:
-            raise ValueError("reveal_knowledge effect needs fact_id")
-        if self.operation == EffectOperation.CHANGE_RELATIONSHIP and not self.relation:
-            raise ValueError("change_relationship effect needs relation")
-        if self.operation == EffectOperation.PLAY_NOISE and not self.noise_id:
-            raise ValueError("play_noise effect needs noise_id")
-        if self.operation == EffectOperation.ADVANCE_TIME and int(
-            self.minutes or self.amount
-        ) < 0:
-            raise ValueError("advance_time effect cannot move backward")
-        if self.operation == EffectOperation.APPLY_STATUS and not (
-            self.status or self.name
-        ):
-            raise ValueError("apply_status effect needs status")
+    def validate_shape(self) -> "FormulaNode":
+        if self.kind == FormulaNodeKind.CONSTANT:
+            if self.value is None or self.participant or self.stat_key or self.children:
+                raise ValueError("constant formula nodes contain only a value")
+        elif self.kind == FormulaNodeKind.STAT:
+            if not self.participant or not self.stat_key or self.value is not None or self.children:
+                raise ValueError("stat formula nodes need participant and stat_key")
+        else:
+            expected = 1 if self.kind == FormulaNodeKind.NEGATE else 2
+            if len(self.children) != expected or self.value is not None or self.participant or self.stat_key:
+                raise ValueError(f"{self.kind} formula nodes need {expected} children")
         return self
 
 
+class EffectDefinition(DomainModel):
+    project_id: DomainId
+    effect_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    name: str = Field(min_length=1)
+    description: str = ""
+    target_stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    operation: EffectOperation = EffectOperation.ADD
+    formula: FormulaNode
+    clock: EffectClock = EffectClock.WORLD_ACTIONS
+    duration: int = Field(default=0, ge=-1)
+    tick_interval: int = Field(default=0, ge=0)
+    evaluation_mode: EffectEvaluationMode = EffectEvaluationMode.SNAPSHOT
+    stacking_policy: EffectStackingPolicy = EffectStackingPolicy.REPLACE
+    max_stacks: int = Field(default=1, ge=1)
+    visibility: StatVisibility = StatVisibility.PUBLIC
+    icon: str | None = None
+    enabled: bool = True
+    created_at: str | None = None
+    updated_at: str | None = None
+
+    @model_validator(mode="after")
+    def validate_timing(self) -> "EffectDefinition":
+        valid = (
+            (self.duration == 0 and self.tick_interval == 0)
+            or (self.duration > 0 and self.tick_interval <= self.duration)
+            or (self.duration == -1 and self.tick_interval > 0)
+        )
+        if not valid:
+            raise ValueError("invalid effect duration/tick combination")
+        count = 0
+        def visit(node: FormulaNode, depth: int) -> None:
+            nonlocal count
+            count += 1
+            if depth > 12 or count > 64:
+                raise ValueError("effect formula exceeds complexity limits")
+            for child in node.children: visit(child, depth + 1)
+        visit(self.formula, 1)
+        return self
+
+    @property
+    def reference(self) -> DomainReference:
+        return DomainReference(id=self.effect_key, kind=DomainKind.EFFECT)
+
+
+class AbilityCost(DomainModel):
+    kind: AbilityCostKind = AbilityCostKind.STAT
+    stat_key: str | None = None
+    item_id: DomainId | None = None
+    amount: Number = Field(gt=0)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "AbilityCost":
+        if self.kind == AbilityCostKind.STAT and not self.stat_key:
+            raise ValueError("stat cost needs stat_key")
+        if self.kind == AbilityCostKind.CONSUME_FUEL and not self.item_id:
+            raise ValueError("fuel cost needs item_id")
+        return self
+
+
+class AbilityAction(DomainModel):
+    kind: AbilityActionKind
+    target: str = EffectTarget.TARGET
+    effect_key: str | None = None
+    destination_id: DomainId | None = None
+    entity_kind: EntityKind | None = None
+    entity_name: str | None = None
+    state: dict[str, Any] = Field(default_factory=dict)
+    fact_id: DomainId | None = None
+    relation: str | None = None
+    minutes: int | None = Field(default=None, ge=0)
+    noise_id: DomainId | None = None
+    duration_override: int | None = Field(default=None, ge=-1)
+    tick_override: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_shape(self) -> "AbilityAction":
+        required = {
+            AbilityActionKind.APPLY_EFFECT: self.effect_key,
+            AbilityActionKind.MOVE: self.destination_id,
+            AbilityActionKind.CREATE: self.entity_kind and self.entity_name,
+            AbilityActionKind.REVEAL_KNOWLEDGE: self.fact_id,
+            AbilityActionKind.CHANGE_RELATIONSHIP: self.relation,
+            AbilityActionKind.ADVANCE_TIME: self.minutes is not None,
+            AbilityActionKind.PLAY_NOISE: self.noise_id,
+        }
+        if self.kind in required and not required[self.kind]:
+            raise ValueError(f"{self.kind} action is missing its required reference")
+        return self
+
+
+class PassiveTrigger(DomainModel):
+    kind: PassiveTriggerKind
+    stat_key: str | None = None
+
+
 class Ability(DomainModel):
-    id: DomainId
     project_id: DomainId
     ability_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     name: str = Field(min_length=1)
     description: str = ""
-    target_type: AbilityTarget = AbilityTarget.SELF
-    requirements: RequirementExpression = Field(
-        default_factory=RequirementExpression,
+    ability_kind: AbilityKind = AbilityKind.ACTIVE
+    compatible_owner_kinds: list[AbilityOwnerKind] = Field(
+        default_factory=lambda: [AbilityOwnerKind.CHARACTER]
     )
-    costs: dict[str, Number] = Field(default_factory=dict)
-    effects: list[ActionEffect] = Field(default_factory=list)
-    minigame_profile: dict[str, Any] = Field(default_factory=dict)
+    target_type: AbilityTarget = AbilityTarget.SELF
+    requirements: RequirementExpression = Field(default_factory=RequirementExpression)
+    costs: list[AbilityCost] = Field(default_factory=list)
+    actions: list[AbilityAction] = Field(default_factory=list)
+    passive_triggers: list[PassiveTrigger] = Field(default_factory=list)
+    icon: str | None = None
+    enabled: bool = True
+    timed_attack_line_count: int | None = Field(default=None, ge=1, le=8)
+    timed_attack_damage_per_line: Number | None = Field(default=None, ge=0)
+    bullethell_skill_ids: list[str] = Field(default_factory=list)
     created_at: str | None = None
     updated_at: str | None = None
 
+    @model_validator(mode="after")
+    def validate_ability(self) -> "Ability":
+        if not self.compatible_owner_kinds:
+            raise ValueError("ability needs at least one compatible owner kind")
+        self.compatible_owner_kinds = list(dict.fromkeys(self.compatible_owner_kinds))
+        if self.ability_kind == AbilityKind.PASSIVE and not self.passive_triggers:
+            raise ValueError("passive ability needs at least one trigger")
+        if (self.timed_attack_line_count is None) != (self.timed_attack_damage_per_line is None):
+            raise ValueError("timed attack line count and damage must be configured together")
+        return self
+
     @property
     def reference(self) -> DomainReference:
-        return DomainReference(id=self.id, kind=DomainKind.ABILITY)
+        return DomainReference(id=self.ability_key, kind=DomainKind.ABILITY)

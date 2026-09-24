@@ -478,9 +478,8 @@ class MinigameService:
                 raise WorldValidationError("Attack line range must be between 1 and 8")
             if not 0 <= damage_min <= damage_max <= 1_000_000:
                 raise WorldValidationError("Attack damage range must be ordered between 0 and 1000000")
-            for row in self.db.fetch_all("SELECT ability_key,minigame_profile_json FROM ability_definitions WHERE project_id=?", (project_id,)):
-                profile = _json(row["minigame_profile_json"], {}).get("timed_attack")
-                if profile and not (line_min <= int(profile["line_count"]) <= line_max and damage_min <= float(profile["damage_per_line"]) <= damage_max):
+            for row in self.db.fetch_all("SELECT ability_key,timed_attack_line_count,timed_attack_damage_per_line FROM ability_definitions WHERE project_id=?", (project_id,)):
+                if row["timed_attack_line_count"] is not None and not (line_min <= int(row["timed_attack_line_count"]) <= line_max and damage_min <= float(row["timed_attack_damage_per_line"]) <= damage_max):
                     raise WorldValidationError(f"Attack ranges exclude the existing ability profile '{row['ability_key']}'")
             options.update({"min_attack_lines": line_min, "max_attack_lines": line_max, "min_attack_damage": damage_min, "max_attack_damage": damage_max})
         elif game_key == "dodge_box":
@@ -548,14 +547,13 @@ class MinigameService:
             ) and (entity.get("state", {}).get("player_controlled") or "acted_on" in config["allowed_directions"])]
             combat_guidance = None
             if config["game_key"] == "timed_attack":
-                definitions = self.db.fetch_all("SELECT ability_key,name,minigame_profile_json FROM ability_definitions WHERE project_id=?", (project_id,))
+                definitions = self.db.fetch_all("SELECT ability_key,name,timed_attack_line_count,timed_attack_damage_per_line FROM ability_definitions WHERE project_id=?", (project_id,))
                 profiles = []
                 for entity in eligible_actors:
                     owned = {str(value) for value in entity.get("state", {}).get("abilities", [])}
                     for definition in definitions:
-                        profile = _json(definition["minigame_profile_json"], {}).get("timed_attack")
-                        if profile and ({definition["ability_key"], definition["name"]} & owned):
-                            profiles.append({"actor_id": entity["id"], "ability_key": definition["ability_key"], **profile})
+                        if definition["timed_attack_line_count"] is not None and ({definition["ability_key"], definition["name"]} & owned):
+                            profiles.append({"actor_id": entity["id"], "ability_key": definition["ability_key"], "line_count": definition["timed_attack_line_count"], "damage_per_line": definition["timed_attack_damage_per_line"]})
                 combat_guidance = {
                     "ability_profiles": profiles,
                     "fallback": {"line_count": [config["min_attack_lines"], config["max_attack_lines"]], "damage_per_line": [config["min_attack_damage"], config["max_attack_damage"]]},
@@ -780,11 +778,11 @@ class MinigameService:
             ability_key = str(arguments.get("ability_key") or "").strip() or None
             profile = None
             if ability_key:
-                ability = self.db.fetch_one("SELECT ability_key,name,minigame_profile_json FROM ability_definitions WHERE project_id=? AND ability_key=?", (project_id, ability_key))
+                ability = self.db.fetch_one("SELECT ability_key,name,timed_attack_line_count,timed_attack_damage_per_line FROM ability_definitions WHERE project_id=? AND ability_key=?", (project_id, ability_key))
                 owned = {str(value) for value in actor.get("state", {}).get("abilities", [])}
                 if not ability or not ({ability["ability_key"], ability["name"]} & owned):
                     raise WorldValidationError("Timed-attack ability must be owned by the actor")
-                profile = _json(ability["minigame_profile_json"], {}).get("timed_attack")
+                profile = {"line_count": ability["timed_attack_line_count"], "damage_per_line": ability["timed_attack_damage_per_line"]} if ability["timed_attack_line_count"] is not None else None
             if profile:
                 line_count = int(profile["line_count"])
                 damage_per_line = _finite_number(profile["damage_per_line"], "ability damage_per_line")
