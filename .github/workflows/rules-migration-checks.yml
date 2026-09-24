@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: '3.13'
       - run: python -m compileall app
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements.txt pytest
       - run: pytest -q tests/test_phase5_typed_operations.py tests/test_phase5_typed_world.py tests/test_phase6_domain_contract.py tests/test_world.py tests/test_spatial.py tests/test_spatial_repository.py
   frontend:
     runs-on: ubuntu-latest
