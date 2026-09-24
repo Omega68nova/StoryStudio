@@ -2772,9 +2772,35 @@ async def create_ability(project_id: str, request: AbilityDefinitionCreate) -> d
 
 @app.put("/api/projects/{project_id}/abilities/{ability_key}")
 async def update_ability(project_id: str, ability_key: str, request: AbilityDefinitionCreate) -> dict[str, Any]:
-    if not data.rules.ability(project_id, ability_key): raise HTTPException(404, "Ability definition not found")
-    if request.ability_key != ability_key: raise HTTPException(422, "ability_key is immutable")
-    return await create_ability(project_id, request)
+    if not data.rules.ability(project_id, ability_key):
+        raise HTTPException(404, "Ability definition not found")
+    if request.ability_key != ability_key:
+        raise HTTPException(422, "ability_key is immutable")
+    known_bullet_skills = {row["id"] for row in scheduler.minigames.bullethell.catalog()["skills"]}
+    if not set(request.bullethell_skill_ids) <= known_bullet_skills:
+        raise HTTPException(422, "Ability references an unavailable bullet-hell skill")
+    if request.timed_attack_line_count is not None:
+        config = next(row for row in scheduler.minigames.configs(project_id) if row["game_key"] == "timed_attack")
+        if not (
+            config["min_attack_lines"] <= request.timed_attack_line_count <= config["max_attack_lines"]
+            and config["min_attack_damage"] <= request.timed_attack_damage_per_line <= config["max_attack_damage"]
+        ):
+            raise HTTPException(422, "Timed-attack ability profile is outside the project minigame ranges")
+    try:
+        requirement = _validate_ability_references(project_id, request)
+        result = data.rules.save_ability(
+            Ability.model_validate({
+                "project_id": project_id,
+                **request.model_dump(),
+                "requirements": requirement,
+            }),
+            previous_key=ability_key,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return result.model_dump(mode="json")
 
 
 @app.post("/api/projects/{project_id}/abilities/use")
