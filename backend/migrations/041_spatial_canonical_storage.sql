@@ -50,6 +50,7 @@ CREATE TABLE spatial_anchors_current (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
     location_id TEXT NOT NULL REFERENCES world_entities(id) ON DELETE CASCADE,
+    coordinate_space_id TEXT NOT NULL REFERENCES world_entities(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     kind TEXT NOT NULL CHECK(kind IN ('landmark','entrance','exit','waypoint','encounter')),
     x REAL,
@@ -61,6 +62,7 @@ CREATE TABLE spatial_anchors_current (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_spatial_anchors_location ON spatial_anchors_current(project_id, location_id);
+CREATE INDEX idx_spatial_anchors_space ON spatial_anchors_current(project_id, coordinate_space_id);
 
 CREATE TABLE spatial_barriers_current (
     id TEXT PRIMARY KEY,
