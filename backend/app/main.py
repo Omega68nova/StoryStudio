@@ -2746,7 +2746,11 @@ async def remove_active_effect(project_id: str, instance_id: str) -> dict[str, A
 async def delete_ability(project_id: str, ability_key: str) -> None:
     require_idle_project(project_id)
     if db.fetch_one("SELECT 1 FROM ability_requirement_nodes WHERE project_id=? AND required_ability_key=?", (project_id, ability_key)): raise HTTPException(409, "Ability is referenced by another ability requirement")
-    if db.fetch_one("SELECT 1 FROM world_events WHERE project_id=? AND payload_json LIKE ? LIMIT 1", (project_id, f'%"{ability_key}"%')): raise HTTPException(409, "Ability is referenced by world state or history")
+    if db.fetch_one(
+        "SELECT 1 FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
+        "WHERE t.project_id=? AND e.payload_json LIKE ? LIMIT 1",
+        (project_id, f'%"{ability_key}"%'),
+    ): raise HTTPException(409, "Ability is referenced by world state or history")
     db.execute("DELETE FROM ability_definitions WHERE ability_key = ? AND project_id = ?", (ability_key, project_id))
 
 
