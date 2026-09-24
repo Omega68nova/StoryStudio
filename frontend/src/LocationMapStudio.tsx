@@ -58,6 +58,7 @@ type SpatialBarrier = {
   id: string;
   name: string;
   location_id: string;
+  blocked_modes?: string[];
   hidden?: boolean;
   discovered?: boolean;
   geometry?: Geometry;
