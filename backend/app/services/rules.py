@@ -284,8 +284,12 @@ class RulesRuntime:
         working, emitted, queue = copy.deepcopy(projection), [], []
         for event_type, entity_id, payload in events:
             self.apply_event(working, event_type, payload, entity_id)
-            hook = "damage" if event_type == "stat.changed" and payload.get("operation") == "subtract" else hooks.get(event_type)
-            if hook: queue.append((hook, entity_id or payload.get("entity_id"), payload, 1, ()))
+            owner = entity_id or payload.get("entity_id")
+            hook = hooks.get(event_type)
+            if hook:
+                queue.append((hook, owner, payload, 1, ()))
+            if event_type == "stat.changed" and payload.get("operation") == "subtract":
+                queue.append(("damage", owner, payload, 1, ()))
         definitions = self.data.rules.abilities(project_id)
         by_key = {item.ability_key: item for item in definitions}
         while queue:
@@ -356,7 +360,15 @@ class RulesRuntime:
                                 if not effect: raise RulesRuntimeError(f"Passive ability references missing effect {action.effect_key}")
                                 row = self.normalize_effect(project_id, working, effect, target, participants, action.duration_override, action.tick_override)
                             else: row = self.normalize_action(action, target, actor)
-                            emitted.append(row); event_type = str(row["event_type"]); event_payload = {key: value for key, value in row.items() if key != "event_type"}; self.apply_event(working, event_type, event_payload, row.get("entity_id")); next_hook = "damage" if event_type == "stat.changed" and row.get("operation") == "subtract" else hooks.get(event_type)
-                            if next_hook: queue.append((next_hook, row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
-                            if len(emitted) > 64: raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
+                            emitted.append(row)
+                            event_type = str(row["event_type"])
+                            event_payload = {key: value for key, value in row.items() if key != "event_type"}
+                            self.apply_event(working, event_type, event_payload, row.get("entity_id"))
+                            next_hook = hooks.get(event_type)
+                            if next_hook:
+                                queue.append((next_hook, row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                            if event_type == "stat.changed" and row.get("operation") == "subtract":
+                                queue.append(("damage", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                            if len(emitted) > 64:
+                                raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
         return emitted
