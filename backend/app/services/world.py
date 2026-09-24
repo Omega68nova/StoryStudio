@@ -504,7 +504,12 @@ class WorldEngine:
                 from app.domain.world import MapAnchor
                 try:
                     arguments.setdefault("id", new_id())
-                    self._entity(projection, arguments.get("location_id"), "location")
+                    owner = self._entity(projection, arguments.get("location_id"), "location")
+                    coordinate_space_id = arguments.get("coordinate_space_id")
+                    if not coordinate_space_id:
+                        coordinate_space_id = owner.get("state", {}).get("parent_location_id") or owner["id"]
+                        arguments["coordinate_space_id"] = coordinate_space_id
+                    self._entity(projection, coordinate_space_id, "location")
                     arguments = MapAnchor.model_validate(arguments).model_dump(mode="json")
                 except ValueError as exc:
                     raise WorldValidationError(f"Invalid map anchor: {exc}") from exc
