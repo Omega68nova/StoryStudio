@@ -503,7 +503,7 @@ export function CharacterEditorForm({
               <MenuItem value="">Select ability</MenuItem>
               {abilities
                 .filter(item => !array(state.abilities).includes(item.ability_key))
-                .map(item => <MenuItem key={item.id} value={item.ability_key}>{item.name}</MenuItem>)}
+                .map(item => <MenuItem key={item.ability_key} value={item.ability_key}>{item.name}</MenuItem>)}
             </TextField>
             <Button
               disabled={!abilityCandidate}
@@ -1016,7 +1016,7 @@ function AbilityList({
         return <div className="character-linked-card" key={key}>
           <ResourceIcon
             name={ability?.name ?? key}
-            url={ability?.icon_url ?? undefined}
+            glyph={ability?.icon ?? undefined}
           />
           <span>
             <b>{ability?.name ?? key}</b>
@@ -1030,10 +1030,12 @@ function AbilityList({
 }
 
 
-function ResourceIcon({ name, url }: { name: string; url?: string }) {
+function ResourceIcon({ name, url, glyph }: { name: string; url?: string; glyph?: string }) {
   return <span className="character-linked-icon">
     {url
       ? <img src={url} alt="" />
-      : name.slice(0, 1).toUpperCase()}
+      : glyph?.trim()
+        ? glyph
+        : name.slice(0, 1).toUpperCase()}
   </span>;
 }
