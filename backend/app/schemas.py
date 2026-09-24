@@ -725,6 +725,21 @@ class GeometryEditRequest(BaseModel):
         return self
 
 
+class MapGeometryUpdate(BaseModel):
+    kind: Literal["point", "polyline", "polygon"]
+    points: list[dict[str, float]]
+
+    @model_validator(mode="after")
+    def require_enough_points(self) -> "MapGeometryUpdate":
+        minimum = {"point": 1, "polyline": 2, "polygon": 3}[self.kind]
+        if len(self.points) < minimum:
+            raise ValueError(f"{self.kind} geometry requires at least {minimum} point(s)")
+        for point in self.points:
+            if set(point) != {"x", "y"}:
+                raise ValueError("geometry points must contain exactly x and y")
+        return self
+
+
 class MapDiscoveryUpdate(BaseModel):
     discovered: bool
 
