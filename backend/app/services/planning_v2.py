@@ -5,7 +5,8 @@ import json
 from typing import Any
 
 from app.database import Database, new_id, utc_now
-from app.domain.world import ActionEffect, RequirementExpression
+from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat
+from app.data.dataProvider import DataProvider
 from app.services.world import WorldValidationError
 
 
@@ -74,7 +75,7 @@ def empty_draft(stage_number: int) -> dict[str, Any]:
         1: {"foundation": {"premise": "", "genres": [], "themes": [], "tone": "", "style": "", "world_description": "", "character_description": "", "narration_mode": "third_limited", "pov_strategy": "first_player"}},
         2: {"root_location_key": "", "locations": [], "anchors": [], "connections": [], "factions": [], "weather": [], "weather_transitions": [], "initial_weather_key": ""},
         3: {"locations": [], "anchors": [], "connections": []},
-        4: {"lore_systems": [], "stats": [], "abilities": [], "items": []},
+        4: {"lore_systems": [], "stats": [], "effects": [], "abilities": [], "items": []},
         5: {"characters": [], "factions": [], "facts": [], "default_pov_character_key": ""},
         6: {"character_updates": [], "outfits": [], "relationships": [], "routines": [], "facts": [], "plot_beats": []},
         7: {"minigames": [], "bullethell": {"mode_ids": [], "skill_ids": [], "attack_ids": []}, "ambient": [], "music": {"mode": "disabled", "enabled_theme_ids": [], "manual_theme_id": None}, "recommendations": []},
@@ -97,15 +98,17 @@ def compact_schema(stage_number: int, focus: str | None = None) -> dict[str, Any
                 },
             }],
             "stats": [
-                {"key": "hp", "stat_key": "hp", "label": "Health", "description": "Current physical health.", "scope": "character", "default_value": 100, "minimum": 0, "maximum": 100, "minimum_stat_key": None, "maximum_stat_key": None, "color": "#5a9b63", "minimum_color": "#b94a48", "maximum_color": None, "display_style": "bar", "integer_only": True, "visibility": "public"},
-                {"key": "stamina", "stat_key": "stamina", "label": "Stamina", "description": "Current exertion reserve.", "scope": "character", "default_value": 100, "minimum": 0, "maximum": 100, "minimum_stat_key": None, "maximum_stat_key": None, "color": "#5a9b63", "minimum_color": "#b94a48", "maximum_color": None, "display_style": "bar", "integer_only": True, "visibility": "public"},
+                {"key": "hp", "stat_key": "hp", "label": "Health", "description": "Current physical health.", "compatible_owner_kinds": ["character"], "default_value": 100, "minimum": 0, "maximum": 100, "minimum_stat_key": None, "maximum_stat_key": None, "color": "#5a9b63", "minimum_color": "#b94a48", "maximum_color": None, "display_style": "bar", "integer_only": True, "visibility": "public"},
+                {"key": "stamina", "stat_key": "stamina", "label": "Stamina", "description": "Current exertion reserve.", "compatible_owner_kinds": ["character"], "default_value": 100, "minimum": 0, "maximum": 100, "minimum_stat_key": None, "maximum_stat_key": None, "color": "#5a9b63", "minimum_color": "#b94a48", "maximum_color": None, "display_style": "bar", "integer_only": True, "visibility": "public"},
             ],
+            "effects": [{"key": "basic_damage", "effect_key": "basic_damage", "name": "Basic damage", "description": "Deals fixed damage.", "target_stat_key": "hp", "operation": "subtract", "formula": {"kind": "constant", "value": 10}, "clock": "world_actions", "duration": 0, "tick_interval": 0, "evaluation_mode": "snapshot", "stacking_policy": "replace", "max_stacks": 1, "visibility": "public", "enabled": True}],
             "abilities": [{
                 "key": "basic_attack", "ability_key": "basic_attack", "name": "Basic Attack",
                 "description": "Deals a fixed amount of physical damage to one character.",
-                "target_type": "character", "requirements": {}, "costs": {"stamina": 10},
-                "effects": [{"target": "target", "stat_key": "hp", "operation": "subtract", "amount": 10}],
-                "minigame_profile": {},
+                "ability_kind": "active", "compatible_owner_kinds": ["character"], "target_type": "character", "requirements": {},
+                "costs": [{"kind": "stat", "stat_key": "stamina", "amount": 10}],
+                "actions": [{"kind": "apply_effect", "target": "target", "effect_key": "basic_damage"}],
+                "passive_triggers": [], "bullethell_skill_ids": [], "enabled": True,
             }],
             "items": [],
         },
@@ -339,34 +342,23 @@ def validate_stage(stage_number: int, draft: dict[str, Any], settings: dict[str,
                 raise WorldValidationError(f"Lore system '{lore_name}' requires a description")
         for ability in draft.get("abilities", []):
             ability_name = str(ability.get("name") or ability.get("ability_key") or ability.get("key") or "Unnamed ability")
-            aliases = {"target": "target_type", "cost": "costs", "effect": "effects"}
+            aliases = {"target": "target_type", "cost": "costs", "effect": "actions", "effects": "actions", "minigame_profile": "typed minigame fields"}
             invalid_aliases = [f"'{wrong}' (use '{right}')" for wrong, right in aliases.items() if wrong in ability]
             if invalid_aliases:
                 raise WorldValidationError(f"Ability '{ability_name}' uses unsupported field(s): {', '.join(invalid_aliases)}")
             if ability.get("target_type", "self") not in {"self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"}:
                 raise WorldValidationError(f"Ability '{ability_name}' has invalid target_type")
-            if not isinstance(ability.get("costs", {}), dict) or not isinstance(ability.get("effects", []), list):
-                raise WorldValidationError(f"Ability '{ability_name}' requires a costs object and an effects array")
+            if not isinstance(ability.get("costs", []), list) or not isinstance(ability.get("actions", []), list):
+                raise WorldValidationError(f"Ability '{ability_name}' requires typed costs and actions arrays")
             try:
                 RequirementExpression.model_validate(ability.get("requirements", {}))
             except ValueError as exc:
                 raise WorldValidationError(f"Ability '{ability_name}' has invalid requirements: {exc}") from exc
-            for index, effect in enumerate(ability.get("effects", []), start=1):
-                if not isinstance(effect, dict):
-                    raise WorldValidationError(f"Ability '{ability_name}' effect {index} must be an object")
-                if effect.get("target", "target") not in {"actor", "target", "party", "location", "nearby_enemies", "faction_members", "relationship_target", "allies", "enemies", "all", "random"}:
-                    raise WorldValidationError(f"Ability '{ability_name}' effect {index} has invalid target")
-                operation = effect.get("operation", "add")
-                if operation not in {"add", "subtract", "set", "multiply", "move", "create", "remove", "apply_status", "reveal_knowledge", "change_relationship", "advance_time", "play_noise"}:
-                    raise WorldValidationError(f"Ability '{ability_name}' effect {index} has invalid operation")
-                if operation in {"add", "subtract", "set", "multiply"} and not str(effect.get("stat_key") or "").strip():
-                    raise WorldValidationError(f"Ability '{ability_name}' effect {index} requires stat_key")
-                try:
-                    ActionEffect.model_validate(effect)
-                except (TypeError, ValueError) as exc:
-                    raise WorldValidationError(
-                        f"Ability '{ability_name}' effect {index} is invalid: {exc}"
-                    ) from exc
+            try: Ability.model_validate({"project_id": "planning", **ability, "ability_key": ability.get("ability_key") or ability.get("key")})
+            except (TypeError, ValueError) as exc: raise WorldValidationError(f"Ability '{ability_name}' is invalid: {exc}") from exc
+        for effect in draft.get("effects", []):
+            try: EffectDefinition.model_validate({"project_id": "planning", **effect, "effect_key": effect.get("effect_key") or effect.get("key")})
+            except (TypeError, ValueError) as exc: raise WorldValidationError(f"Effect '{effect.get('name') or effect.get('key')}' is invalid: {exc}") from exc
     if stage_number == 7:
         mode = (draft.get("music") or {}).get("mode", "disabled")
         if mode not in {"disabled", "player_managed", "ai_managed"}:
@@ -411,16 +403,22 @@ def validate_catalog_references(db: Database, project_id: str, stage_number: int
     if stage_number == 4:
         defined = {str(item.get("stat_key") or "") for item in draft.get("stats", [])}
         defined.update(row["stat_key"] for row in db.fetch_all("SELECT stat_key FROM stat_definitions WHERE project_id=?", (project_id,)))
+        effect_keys = {str(item.get("effect_key") or item.get("key") or "") for item in draft.get("effects", [])}
+        effect_keys.update(row["effect_key"] for row in db.fetch_all("SELECT effect_key FROM effect_definitions WHERE project_id=?", (project_id,)))
+        for effect in draft.get("effects", []):
+            if str(effect.get("target_stat_key") or "") not in defined: raise WorldValidationError(f"Effect '{effect.get('name') or effect.get('key')}' targets an unavailable stat")
         for ability in draft.get("abilities", []):
-            referenced = {*dict(ability.get("costs") or {}), *[str(item.get("stat_key")) for item in ability.get("effects", []) if item.get("stat_key")]}
+            ability_name = str(ability.get("name") or ability.get("ability_key") or ability.get("key") or "Unnamed ability")
+            referenced = {str(item.get("stat_key")) for item in ability.get("costs", []) if isinstance(item, dict) and item.get("stat_key")}
             missing = sorted(referenced - defined)
             if missing:
-                ability_name = str(ability.get("name") or ability.get("ability_key") or ability.get("key") or "Unnamed ability")
                 available = ", ".join(sorted(defined)) or "none"
                 raise WorldValidationError(
                     f"Ability '{ability_name}' references unavailable stat(s): {', '.join(missing)}. "
                     f"Available stat keys: {available}"
                 )
+            missing_effects = sorted({str(item.get("effect_key")) for item in ability.get("actions", []) if isinstance(item, dict) and item.get("kind") == "apply_effect"} - effect_keys)
+            if missing_effects: raise WorldValidationError(f"Ability '{ability_name}' references unavailable effect(s): {', '.join(missing_effects)}")
     if stage_number != 7:
         return
     games = {row["game_key"] for row in db.fetch_all("SELECT game_key FROM project_minigame_configs WHERE project_id=?", (project_id,))}
@@ -577,93 +575,31 @@ def apply_weather(db: Database, project_id: str, owner_id: str, stage_number: in
 
 
 def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int, draft: dict[str, Any]) -> None:
-    now = utc_now()
+    rules = DataProvider(db).rules
     for stat in draft.get("stats", []):
         key = str(stat.get("key") or stat.get("stat_key") or "").strip()
-        if not key or stat.get("scope", "character") not in {"character", "relationship"}:
-            raise WorldValidationError("Invalid stat definition")
-        existing = _resource_row(db, owner_id, key, "stat")
-        stat_id = str(existing["resource_id"]) if existing else new_id()
-        values = (
-            stat["stat_key"],
-            stat.get("label") or stat["stat_key"],
-            stat.get("description", ""),
-            stat.get("scope", "character"),
-            float(stat.get("default_value", 0)),
-            float(stat.get("minimum", 0)),
-            float(stat.get("maximum", 100)),
-            stat.get("minimum_stat_key"),
-            stat.get("maximum_stat_key"),
-            stat.get("color"),
-            stat.get("minimum_color"),
-            stat.get("maximum_color"),
-            stat.get("display_style", "compact"),
-            int(stat.get("integer_only", True)),
-            stat.get("visibility", "public"),
-        )
-        if values[5] > values[6]:
-            raise WorldValidationError("Stat minimum cannot exceed maximum")
-        if values[7] == values[0] or values[8] == values[0]:
-            raise WorldValidationError("A stat cannot use itself as a bound")
-        if existing:
-            db.execute(
-                "UPDATE stat_definitions SET stat_key=?,label=?,description=?,"
-                "scope=?,default_value=?,minimum=?,maximum=?,minimum_stat_key=?,"
-                "maximum_stat_key=?,color=?,minimum_color=?,maximum_color=?,"
-                "display_style=?,integer_only=?,visibility=?,updated_at=? "
-                "WHERE id=? AND project_id=?",
-                (*values, now, stat_id, project_id),
-            )
-        else:
-            db.execute(
-                "INSERT INTO stat_definitions("
-                "id,project_id,stat_key,label,description,scope,default_value,"
-                "minimum,maximum,minimum_stat_key,maximum_stat_key,color,"
-                "minimum_color,maximum_color,display_style,integer_only,"
-                "visibility,created_at,updated_at"
-                ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (stat_id, project_id, *values, now, now),
-            )
-        record_resource(db, owner_id, stage_number, key, "stat", stat_id, stat)
-    known_stat_rows = db.fetch_all(
-        "SELECT stat_key,scope FROM stat_definitions WHERE project_id=?",
-        (project_id,),
-    )
-    known_stats = {row["stat_key"] for row in known_stat_rows}
-    stat_scopes = {row["stat_key"]: row["scope"] for row in known_stat_rows}
-    for stat in draft.get("stats", []):
-        key = str(stat.get("stat_key") or stat.get("key") or "")
-        scope = str(stat.get("scope") or "character")
-        for field in ("minimum_stat_key", "maximum_stat_key"):
-            reference = stat.get(field)
-            if not reference:
-                continue
-            if reference not in known_stats:
-                raise WorldValidationError(
-                    f"Stat '{key}' {field} references unknown stat '{reference}'"
-                )
-            if stat_scopes.get(reference) != scope:
-                raise WorldValidationError(
-                    f"Stat '{key}' {field} must reference a {scope} stat"
-                )
+        if not key: raise WorldValidationError("Invalid stat definition")
+        model = Stat.model_validate({"project_id": project_id, **stat, "stat_key": key, "label": stat.get("label") or key})
+        rules.save_stat(model, previous_key=key if rules.stat(project_id, key) else None)
+        record_resource(db, owner_id, stage_number, key, "stat", key, stat)
+    known_stats = {item.stat_key for item in rules.stats(project_id)}
+    for effect in draft.get("effects", []):
+        key = str(effect.get("key") or effect.get("effect_key") or "").strip()
+        if not key: raise WorldValidationError("Effect requires a stable key")
+        model = EffectDefinition.model_validate({"project_id": project_id, **effect, "effect_key": key})
+        if model.target_stat_key not in known_stats: raise WorldValidationError(f"Effect '{key}' targets an unavailable stat")
+        rules.save_effect(model, previous_key=key if rules.effect(project_id, key) else None)
+        record_resource(db, owner_id, stage_number, key, "effect", key, effect)
     for ability in draft.get("abilities", []):
         key = str(ability.get("key") or ability.get("ability_key") or "").strip()
-        referenced = {*dict(ability.get("costs") or {}), *[str(item.get("stat_key")) for item in ability.get("effects", []) if item.get("stat_key")]}
-        if not key:
-            raise WorldValidationError(f"Ability '{ability.get('name') or 'Unnamed ability'}' requires a stable key")
-        missing = sorted(referenced - known_stats)
-        if missing:
-            ability_name = str(ability.get("name") or ability.get("ability_key") or key)
-            available = ", ".join(sorted(known_stats)) or "none"
-            raise WorldValidationError(
-                f"Ability '{ability_name}' references unavailable stat(s): {', '.join(missing)}. "
-                f"Available stat keys: {available}"
-            )
-        existing = _resource_row(db, owner_id, key, "ability"); ability_id = str(existing["resource_id"]) if existing else new_id()
-        values = (ability.get("ability_key") or key, ability.get("name") or key, ability.get("description", ""), ability.get("target_type", "self"), json.dumps(ability.get("requirements", {})), json.dumps(ability.get("costs", {})), json.dumps(ability.get("effects", [])), json.dumps(ability.get("minigame_profile", {})))
-        if existing: db.execute("UPDATE ability_definitions SET ability_key=?,name=?,description=?,target_type=?,requirements_json=?,costs_json=?,effects_json=?,minigame_profile_json=?,updated_at=? WHERE id=? AND project_id=?", (*values, now, ability_id, project_id))
-        else: db.execute("INSERT INTO ability_definitions(id,project_id,ability_key,name,description,target_type,requirements_json,costs_json,effects_json,minigame_profile_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", (ability_id, project_id, *values, now, now))
-        record_resource(db, owner_id, stage_number, key, "ability", ability_id, ability)
+        if not key: raise WorldValidationError(f"Ability '{ability.get('name') or 'Unnamed ability'}' requires a stable key")
+        model = Ability.model_validate({"project_id": project_id, **ability, "ability_key": key, "name": ability.get("name") or key})
+        missing = sorted({str(cost.stat_key) for cost in model.costs if cost.stat_key} - known_stats)
+        if missing: raise WorldValidationError(f"Ability '{model.name}' references unavailable stat(s): {', '.join(missing)}")
+        for action in model.actions:
+            if action.effect_key and not rules.effect(project_id, action.effect_key): raise WorldValidationError(f"Ability '{model.name}' references unavailable effect '{action.effect_key}'")
+        rules.save_ability(model, previous_key=key if rules.ability(project_id, key) else None)
+        record_resource(db, owner_id, stage_number, key, "ability", key, ability)
 
 
 def apply_outfits(db: Database, project_id: str, owner_id: str, stage_number: int, draft: dict[str, Any]) -> None:
