@@ -243,18 +243,25 @@ class EffectExecutor:
             key, cost = str(ability_cost.stat_key), float(ability_cost.amount)
             definition = stat_lookup(key, "character")
             current = base(actor_target, definition)
-            if cost < 0: raise DomainOperationError("Ability costs cannot be negative")
-            if float(effective_stats(actor).get(key, current)) < cost: raise DomainOperationError(f"{actor.name} lacks enough {definition.label}")
+            if cost < 0:
+                raise DomainOperationError("Ability costs cannot be negative")
+            values = {
+                stat_key: float(value)
+                for stat_key, value in actor_target.container.stats.items()
+            }
+            for (scope, owner_id, stat_key), value in working.items():
+                if scope == "character" and owner_id == str(actor.id):
+                    values[stat_key] = float(value)
+            bounds = resolve_stat_bounds(definition, values, lambda candidate: stat_lookup(candidate, "character"))
+            if current - cost < float(bounds.minimum):
+                raise DomainOperationError(f"{actor.name} lacks enough {definition.label}")
             value = self._bounded_value(
                 definition,
                 current,
                 "subtract",
                 cost,
-                values={
-                    key: float(value)
-                    for key, value in actor_target.container.stats.items()
-                },
-                stat_lookup=stat_lookup,
+                values=values,
+                stat_lookup=lambda candidate: stat_lookup(candidate, "character"),
             )
             working[("character", str(actor.id), key)] = float(value)
             costs.append({"entity_id": str(actor.id), "stat_key": key, "value": value, "previous_value": current})
