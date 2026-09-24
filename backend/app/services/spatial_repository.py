@@ -82,12 +82,19 @@ class SpatialRepository:
                 state = entity.get("state", {})
                 footprint_kind, footprint = self._geometry(state.get("footprint"))
                 bounds_kind, bounds = self._geometry(state.get("local_bounds"))
+                if not footprint and isinstance(state.get("x"), (int, float)) and isinstance(state.get("y"), (int, float)):
+                    footprint_kind = "point"
+                    footprint = [{"x": float(state["x"]), "y": float(state["y"])}]
+                requires_map_review = (
+                    (state.get("spatial_kind", "spot") == "area" and footprint_kind != "polygon")
+                    or footprint_kind is None
+                )
                 self.db.execute(
                     "INSERT INTO spatial_locations("
                     "location_id,project_id,parent_location_id,topology,occupancy,boundary_access,spatial_kind,exposure,"
                     "x,y,hidden,discovered,enabled,random_encounter,minutes_per_unit,base_visibility_units,encounter_rate,"
-                    "footprint_kind,local_bounds_kind,updated_at"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "requires_map_review,footprint_kind,local_bounds_kind,updated_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         location_id, project_id, state.get("parent_location_id"),
                         state.get("topology", "closed"), state.get("occupancy", "direct_allowed"),
@@ -97,7 +104,7 @@ class SpatialRepository:
                         int(state.get("enabled", True) is not False), int(bool(state.get("random_encounter", False))),
                         float(state.get("minutes_per_unit", 1) or 0),
                         state.get("base_visibility_units"), float(state.get("encounter_rate", 0) or 0),
-                        footprint_kind, bounds_kind, now,
+                        int(requires_map_review), footprint_kind, bounds_kind, now,
                     ),
                 )
                 for role, points in (("footprint", footprint), ("local_bounds", bounds)):
@@ -106,6 +113,60 @@ class SpatialRepository:
                             "INSERT INTO spatial_location_vertices(location_id,geometry_role,position,x,y) VALUES(?,?,?,?,?)",
                             (location_id, role, position, point["x"], point["y"]),
                         )
+
+            legacy_connections: list[tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]] = []
+            typed_connection_ids = set(connections)
+            for relation_id, relation in (projection.get("relations") or {}).items():
+                if relation.get("relation") != "route" or str(relation_id) in typed_connection_ids:
+                    continue
+                source = locations.get(str(relation.get("source_id") or ""))
+                target = locations.get(str(relation.get("target_id") or ""))
+                if not source or not target:
+                    continue
+                source_state, target_state = source.get("state", {}), target.get("state", {})
+                source_anchor = {
+                    "id": f"legacy:{relation_id}:source",
+                    "location_id": source["id"],
+                    "name": f"{source['name']} route",
+                    "kind": "waypoint",
+                    "x": source_state.get("x"),
+                    "y": source_state.get("y"),
+                    "hidden": bool(relation.get("hidden", False)),
+                    "discovered": bool(relation.get("discovered", True)),
+                    "enabled": not bool(relation.get("blocked", False)),
+                    "requires_map_review": source_state.get("x") is None or source_state.get("y") is None,
+                }
+                target_anchor = {
+                    "id": f"legacy:{relation_id}:target",
+                    "location_id": target["id"],
+                    "name": f"{target['name']} route",
+                    "kind": "waypoint",
+                    "x": target_state.get("x"),
+                    "y": target_state.get("y"),
+                    "hidden": bool(relation.get("hidden", False)),
+                    "discovered": bool(relation.get("discovered", True)),
+                    "enabled": not bool(relation.get("blocked", False)),
+                    "requires_map_review": target_state.get("x") is None or target_state.get("y") is None,
+                }
+                connection = {
+                    "id": str(relation_id),
+                    "kind": "route",
+                    "source_anchor_id": source_anchor["id"],
+                    "target_anchor_id": target_anchor["id"],
+                    "travel_minutes": max(0, int(relation.get("travel_minutes", 0) or 0)),
+                    "modes": relation.get("modes") or ["walk"],
+                    "bidirectional": bool(relation.get("bidirectional", True)),
+                    "requirements": relation.get("requirements"),
+                    "lock": relation.get("lock"),
+                    "hidden": bool(relation.get("hidden", False)),
+                    "discovered": bool(relation.get("discovered", True)),
+                    "enabled": not bool(relation.get("blocked", False)),
+                }
+                anchors[source_anchor["id"]] = source_anchor
+                anchors[target_anchor["id"]] = target_anchor
+                legacy_connections.append((str(relation_id), connection, source_anchor, target_anchor))
+            for relation_id, connection, _source_anchor, _target_anchor in legacy_connections:
+                connections[relation_id] = connection
 
             for anchor_id, item in anchors.items():
                 if str(item.get("location_id")) not in locations:
@@ -349,6 +410,7 @@ class SpatialRepository:
                 "minutes_per_unit": item["minutes_per_unit"],
                 "base_visibility_units": item["base_visibility_units"],
                 "encounter_rate": item["encounter_rate"],
+                "requires_map_review": bool(item["requires_map_review"]),
             }
             if administrative and include_geometry:
                 mapped["x"], mapped["y"] = item["x"], item["y"]
