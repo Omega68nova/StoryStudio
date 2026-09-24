@@ -201,7 +201,9 @@ class Database:
                 self._migrate_legacy_ability(connection, dict(row), now)
 
         discarded = connection.execute(
-            "SELECT project_id,COUNT(*) count FROM world_events WHERE event_type='effect.applied' GROUP BY project_id"
+            "SELECT t.project_id,COUNT(*) count "
+            "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
+            "WHERE e.event_type='effect.applied' GROUP BY t.project_id"
         ).fetchall()
         for row in discarded:
             connection.execute(
@@ -213,7 +215,13 @@ class Database:
             )
         connection.execute("DELETE FROM world_events WHERE event_type='effect.applied'")
         embedded = connection.execute(
-            "SELECT project_id,COALESCE(SUM(COALESCE(json_array_length(json_extract(payload_json,'$.entity.active_effects')),0)+COALESCE(json_array_length(json_extract(payload_json,'$.patch.active_effects')),0)),0) count FROM world_events GROUP BY project_id"
+            "SELECT t.project_id,"
+            "COALESCE(SUM("
+            "COALESCE(json_array_length(json_extract(e.payload_json,'$.entity.active_effects')),0)+"
+            "COALESCE(json_array_length(json_extract(e.payload_json,'$.patch.active_effects')),0)"
+            "),0) count "
+            "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
+            "GROUP BY t.project_id"
         ).fetchall()
         connection.execute("DROP TRIGGER IF EXISTS world_events_no_update")
         connection.execute(
