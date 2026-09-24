@@ -14,7 +14,7 @@ PLANNING_STAGES = (
     (1, "foundation", "Core Bible, theme, style, world overview, cast direction, and narration defaults"),
     (2, "macro_world", "Scale-appropriate major geography, routes, factions, weather, and transitions"),
     (3, "detailed_locations", "Important minor locations and only the rooms likely to be revisited"),
-    (4, "systems", "Lore rules, stats, abilities, sickness, skills, and system-linked items"),
+    (4, "systems", "Lore rules, stats, reusable effects, abilities, sickness, skills, and system-linked items"),
     (5, "cast", "Playable characters, active NPCs, supporting cast, factions, knowledge, and starting locations"),
     (6, "character_details", "Character details, outfits, relationships, routines, arcs, secrets, and plot hooks"),
     (7, "runtime_presentation", "Minigames, ambient assignments, bullet-hell options, and Music themes"),
@@ -44,7 +44,7 @@ STAGE_CONSUMES = {
 STAGE_GENERATION_FOCI: dict[int, tuple[str, ...]] = {
     2: ("locations", "weather", "factions", "anchors", "connections"),
     3: ("locations", "anchors", "connections"),
-    4: ("lore_systems", "stats", "abilities", "items"),
+    4: ("lore_systems", "stats", "effects", "abilities", "items"),
     5: ("characters", "factions", "facts"),
     6: ("character_updates", "outfits", "relationships", "routines", "facts", "plot_beats"),
     7: ("minigames", "bullethell", "ambient", "music"),
@@ -167,7 +167,7 @@ def compact_schema(stage_number: int, focus: str | None = None) -> dict[str, Any
 def _record_identity(item: Any) -> str:
     if not isinstance(item, dict):
         return stable_hash(item)
-    for key in ("key", "id", "stat_key", "ability_key", "game_key"):
+    for key in ("key", "id", "stat_key", "effect_key", "ability_key", "game_key"):
         if item.get(key):
             return f"{key}:{str(item[key]).casefold()}"
     if item.get("source_key") and item.get("target_key"):
