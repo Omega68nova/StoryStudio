@@ -124,7 +124,7 @@ class RulesRuntime:
                 raise RulesRuntimeError("This ability cannot be supplied by an item")
             source_raw = self.entity(projection, source_item_id, "item")
             source_abilities = set(map(str, source_raw.get("state", {}).get("abilities", [])))
-            if ability.ability_key not in source_abilities and ability.name not in source_abilities:
+            if ability.ability_key not in source_abilities:
                 raise RulesRuntimeError("The source item does not provide this ability")
             inventory = {
                 str(entry.get("item_id")): int(entry.get("quantity", 0))
@@ -133,7 +133,8 @@ class RulesRuntime:
             if inventory.get(str(source_item_id), 0) <= 0 and str(source_item_id) not in set(map(str, actor_raw.get("state", {}).get("equipment", []))):
                 raise RulesRuntimeError("The source item must be held or equipped")
         elif "character" not in map(str, ability.compatible_owner_kinds): raise RulesRuntimeError("This ability requires a source item")
-        elif ability.ability_key not in actor.state.abilities and ability.name not in actor.state.abilities: raise RulesRuntimeError(f"{actor.name} does not know {ability.name}")
+        elif ability.ability_key not in actor.state.abilities:
+            raise RulesRuntimeError(f"{actor.name} does not know {ability.name}")
         lookup = lambda key, owner="character": self.stat(project_id, key, owner)
         effective = lambda character: self.effective_stats(project_id, projection["entities"].get(str(character.id), actor_raw), "character")
         targets = TargetResolver()
@@ -285,7 +286,8 @@ class RulesRuntime:
             self.apply_event(working, event_type, payload, entity_id)
             hook = "damage" if event_type == "stat.changed" and payload.get("operation") == "subtract" else hooks.get(event_type)
             if hook: queue.append((hook, entity_id or payload.get("entity_id"), payload, 1, ()))
-        definitions = self.data.rules.abilities(project_id); by_key = {item.ability_key: item for item in definitions}; by_name = {item.name: item for item in definitions}
+        definitions = self.data.rules.abilities(project_id)
+        by_key = {item.ability_key: item for item in definitions}
         while queue:
             hook, owner_id, payload, depth, ancestry = queue.pop(0)
             if depth > 8: raise RulesRuntimeError("Passive ability cascade exceeds depth 8")
@@ -293,12 +295,12 @@ class RulesRuntime:
             for owner_raw in [item for item in owners if item and item.get("kind") == "character"]:
                 sources: list[tuple[Any, dict[str, Any]]] = []
                 for key in owner_raw.get("state", {}).get("abilities", []):
-                    ability = by_key.get(str(key)) or by_name.get(str(key))
+                    ability = by_key.get(str(key))
                     if ability and str(ability.ability_kind) == "passive" and "character" in map(str, ability.compatible_owner_kinds): sources.append((ability, owner_raw))
                 for item_id in owner_raw.get("state", {}).get("equipment", []):
                     item_raw = working["entities"].get(str(item_id))
                     for key in (item_raw or {}).get("state", {}).get("abilities", []):
-                        ability = by_key.get(str(key)) or by_name.get(str(key))
+                        ability = by_key.get(str(key))
                         if ability and str(ability.ability_kind) == "passive" and "item" in map(str, ability.compatible_owner_kinds): sources.append((ability, item_raw))
                 actor = entity_from_projection(owner_raw)
                 if not isinstance(actor, Character): continue
