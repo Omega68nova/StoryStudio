@@ -24,6 +24,51 @@ function FormulaEditor({ node, stats, onChange }: { node: FormulaNode; stats: St
   </Stack>;
 }
 
+
+function EffectExampleCalculator({ effect }: { effect: EffectDefinition }) {
+  const refs = useMemo(() => {
+    const found: string[] = [];
+    const visit = (node: FormulaNode) => {
+      if (node.kind === "stat") found.push(`${node.participant}.${node.stat_key}`);
+      if ("children" in node) node.children.forEach(visit);
+    };
+    visit(effect.formula);
+    return [...new Set(found)];
+  }, [effect.formula]);
+  const [values, setValues] = useState<Record<string, number>>({});
+  const evaluate = (node: FormulaNode): number => {
+    if (node.kind === "constant") return node.value;
+    if (node.kind === "stat") return Number(values[`${node.participant}.${node.stat_key}`] ?? 0);
+    if (node.kind === "negate") return -evaluate(node.children[0]);
+    const left = evaluate(node.children[0]);
+    const right = evaluate(node.children[1]);
+    if (node.kind === "add") return left + right;
+    if (node.kind === "subtract") return left - right;
+    if (node.kind === "multiply") return left * right;
+    if (node.kind === "divide") {
+      if (right === 0) throw new Error("division by zero");
+      return left / right;
+    }
+    if (node.kind === "minimum") return Math.min(left, right);
+    return Math.max(left, right);
+  };
+  let result: string;
+  try {
+    const value = evaluate(effect.formula);
+    result = Number.isFinite(value) ? String(value) : "invalid";
+  } catch (cause) {
+    result = cause instanceof Error ? cause.message : "invalid";
+  }
+  return <Stack spacing={1} sx={{ border: "1px solid", borderColor: "divider", borderRadius: 1, p: 1 }}>
+    <strong>Example calculator</strong>
+    <Stack direction="row" spacing={1} flexWrap="wrap">
+      {refs.map(ref => <TextField key={ref} size="small" type="number" label={ref} value={values[ref] ?? 0} onChange={event => setValues(current => ({ ...current, [ref]: Number(event.target.value) }))} />)}
+      {refs.length === 0 && <small>This formula uses constants only.</small>}
+    </Stack>
+    <small>Resolved magnitude: <b>{result}</b></small>
+  </Stack>;
+}
+
 export function RulesStudio({ projectId, revision, fail }: { projectId: string; revision: number; fail: (message: string) => void }) {
   const [rules, setRules] = useState<{ stats: StatDefinition[]; effects: EffectDefinition[]; abilities: AbilityDefinition[]; migration_warnings: RuleMigrationWarning[] }>({ stats: [], effects: [], abilities: [], migration_warnings: [] });
   const [stat, setStat] = useState<StatDefinition | null>(null);
