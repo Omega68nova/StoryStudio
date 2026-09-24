@@ -308,12 +308,35 @@ class RulesRuntime:
                     cost_result = EffectExecutor().normalize(projection=working, actor=actor, primary_target=primary, ability=ability, next_sequence=int(working.get("branch_sequence", 0)) + 1, elapsed_minutes=int(working.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective)
                     for cost in cost_result.costs:
                         row = {"event_type": "stat.changed", **cost, "passive_ability_key": ability.ability_key}; emitted.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id")); queue.append(("stat_changed", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                    passive_inventory = {
+                        str(entry.get("item_id")): int(entry.get("quantity", 0))
+                        for entry in owner_raw.get("state", {}).get("inventory", [])
+                    }
+                    passive_equipment = set(map(str, owner_raw.get("state", {}).get("equipment", [])))
                     for cost in ability.costs:
-                        if str(cost.kind) == "stat": continue
-                        item_id = str(source_raw["id"]) if str(cost.kind) == "consume_source" else str(cost.item_id); current = next((int(entry.get("quantity", 0)) for entry in owner_raw.get("state", {}).get("inventory", []) if str(entry.get("item_id")) == item_id), 0)
-                        if str(cost.kind) == "consume_source" and item_id in set(map(str, owner_raw.get("state", {}).get("equipment", []))): current = max(current, 1)
-                        if current < int(cost.amount): raise RulesRuntimeError(f"Passive ability {ability.name} lacks its item cost")
-                        row = {"event_type": "inventory.adjusted", "entity_id": owner_raw["id"], "character_id": owner_raw["id"], "item_id": item_id, "previous_quantity": current, "quantity": current - int(cost.amount), "delta": -int(cost.amount), "passive_ability_key": ability.ability_key}; emitted.append(row); self.apply_event(working, "inventory.adjusted", row, owner_raw["id"])
+                        if str(cost.kind) == "stat":
+                            continue
+                        item_id = str(source_raw["id"]) if str(cost.kind) == "consume_source" else str(cost.item_id)
+                        current = passive_inventory.get(item_id, 0)
+                        if str(cost.kind) == "consume_source" and item_id in passive_equipment:
+                            current = max(current, 1)
+                        amount = int(cost.amount)
+                        if current < amount:
+                            raise RulesRuntimeError(f"Passive ability {ability.name} lacks its item cost")
+                        remaining = current - amount
+                        passive_inventory[item_id] = remaining
+                        row = {
+                            "event_type": "inventory.adjusted",
+                            "entity_id": owner_raw["id"],
+                            "character_id": owner_raw["id"],
+                            "item_id": item_id,
+                            "previous_quantity": current,
+                            "quantity": remaining,
+                            "delta": -amount,
+                            "passive_ability_key": ability.ability_key,
+                        }
+                        emitted.append(row)
+                        self.apply_event(working, "inventory.adjusted", row, owner_raw["id"])
                     participants = {"actor": self.participant(project_id, owner_raw), "source": self.participant(project_id, source_raw)}
                     for action in ability.actions:
                         targets = resolver.resolve_effect_targets(working, actor, primary, ability, action)
