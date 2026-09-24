@@ -18,6 +18,23 @@ def _json(value: str | None) -> list[Any]:
         return []
 
 
+def _root_location_id(projection: dict[str, Any]) -> str | None:
+    """Resolve the lightweight map root without loading the geometry engine."""
+    entities = projection.get("entities", {})
+    explicit = projection.get("root_location_id")
+    explicit_entity = entities.get(explicit)
+    if explicit_entity and explicit_entity.get("kind") == "location":
+        return str(explicit)
+    roots = [
+        str(item["id"])
+        for item in entities.values()
+        if item.get("kind") == "location"
+        and not item.get("state", {}).get("archived")
+        and not item.get("state", {}).get("parent_location_id")
+    ]
+    return roots[0] if len(roots) == 1 else None
+
+
 class EnvironmentService:
     def __init__(
         self,
@@ -541,6 +558,7 @@ class EnvironmentService:
                 not admin
                 and (
                     not effectively_enabled
+                    or state.get("hidden", False)
                     or not state.get(
                         "discovered",
                         not state.get("random_encounter", False),
@@ -561,6 +579,11 @@ class EnvironmentService:
                 "exposure": state.get("exposure", "outdoor"),
                 "enabled": bool(state.get("enabled", True)),
                 "effectively_enabled": effectively_enabled,
+                "topology": state.get("topology", "closed"),
+                "occupancy": state.get("occupancy", "direct_allowed"),
+                "boundary_access": state.get("boundary_access", "free"),
+                "spatial_kind": state.get("spatial_kind", "spot"),
+                "discovered": bool(state.get("discovered", True)),
             })
 
         locations.sort(key=lambda item: item["name"].casefold())
@@ -589,16 +612,34 @@ class EnvironmentService:
             }
             for relation in projection["relations"].values()
             if relation.get("relation") == "route"
+            and relation.get("id") not in projection.get("travel_connections", {})
             and relation.get("source_id") in visible
             and relation.get("target_id") in visible
         ]
+        anchors = projection.get("map_anchors", {})
+        for connection in projection.get("travel_connections", {}).values():
+            source = anchors.get(connection.get("source_anchor_id"), {})
+            target = anchors.get(connection.get("target_anchor_id"), {})
+            source_id, target_id = source.get("location_id"), target.get("location_id")
+            if source_id not in visible or target_id not in visible:
+                continue
+            if not admin and (connection.get("hidden") or not connection.get("discovered", True)):
+                continue
+            routes.append({
+                "id": connection["id"], "source_id": source_id, "target_id": target_id,
+                "kind": connection.get("kind", "route"),
+                "locked": bool((connection.get("lock") or {}).get("locked")),
+                "hidden": bool(connection.get("hidden")),
+            })
         parent = projection["entities"].get(parent_id) if parent_id else None
         return {
+            "root_location_id": _root_location_id(projection),
             "parent": (
                 {
                     "id": parent["id"],
                     "name": parent["name"],
                     "parent_id": parent.get("state", {}).get("parent_location_id"),
+                    "topology": parent.get("state", {}).get("topology", "closed"),
                 }
                 if parent else None
             ),

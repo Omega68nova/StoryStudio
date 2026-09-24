@@ -225,6 +225,7 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 .music-player-rnd .MuiOutlinedInput-root { background: transparent; background-clip: padding-box; }
 .music-player-rnd .MuiOutlinedInput-notchedOutline, .music-player-rnd .Mui-focused .MuiOutlinedInput-notchedOutline { border-width: 1px !important; }
 .music-player-rnd .MuiIconButton-root { color: #234c60; }
+.music-player-click { touch-action: manipulation; }
 .music-drag-handle { cursor: grab; user-select: none; }
 .music-drag-handle:active { cursor: grabbing; }
 .app-statusbar { flex: 0 0 42px; min-height: 42px; display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 3px 14px; border-bottom: 1px solid #ded7ca; background: #f7f3eb; }
@@ -638,6 +639,10 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
+.character-editor-tab-body .character-fields > .character-field-full {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
 .character-editor-tab-body .character-fields > .MuiFormControl-root:first-child:nth-last-child(1),
 .character-editor-tab-body .character-fields > .MuiFormControl-root:first-child:nth-last-child(3),
 .character-editor-tab-body .character-fields > .MuiFormControl-root:nth-child(3):last-child,
@@ -651,6 +656,13 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 .character-relationship-section {
   display: grid;
   gap: 10px;
+}
+.character-outfit-editor {
+  padding: 12px;
+  border: 1px solid #d5c9b8;
+  border-radius: 8px;
+  background: rgba(255, 253, 248, .72);
+  box-shadow: 0 1px 3px rgba(73, 54, 31, .08);
 }
 .character-outfit-switcher {
   display: grid;
@@ -802,6 +814,12 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   border: 1px solid #d9cfbf;
   border-radius: 10px;
   background: rgba(247, 241, 230, .8);
+  cursor: default;
+  outline: none;
+}
+.character-stat-group:focus-visible {
+  border-color: #9a7951;
+  box-shadow: 0 0 0 2px rgba(154, 121, 81, .2);
 }
 .character-stat-group-header {
   display: flex;
@@ -814,13 +832,21 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   font-variant-numeric: tabular-nums;
   opacity: .75;
 }
-.character-stat-group-chips {
+.character-stat-tooltip-chips {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(76px, 1fr));
   gap: 5px;
+  min-width: 270px;
+  color: #29251e;
 }
-.character-stat-group-chips .character-stat-chip {
+.character-stat-tooltip-chips .character-stat-chip {
   width: 100%;
+}
+.character-stat-detail-tooltip {
+  max-width: none !important;
+  padding: 8px !important;
+  background: #332e27 !important;
+  box-shadow: 0 8px 24px rgba(34, 29, 23, .28);
 }
 .character-stat-track.grouped {
   position: relative;

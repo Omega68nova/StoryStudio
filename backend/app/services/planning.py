@@ -711,6 +711,46 @@ class PlanningService:
                 }
             )
 
+        anchor_ids = {
+            str(anchor["key"]): ((self.db.fetch_one(
+                "SELECT resource_id FROM generation_resource_keys WHERE generation_plan_id=? AND resource_key=? AND resource_type='map_anchor'",
+                (plan_id, anchor["key"]),
+            ) or {}).get("resource_id") or new_id())
+            for anchor in draft.get("anchors", [])
+            if isinstance(anchor, dict) and anchor.get("key")
+        }
+        for anchor in draft.get("anchors", []):
+            if not isinstance(anchor, dict) or not anchor.get("key"):
+                continue
+            location_key = str(anchor.get("location_key") or "")
+            raw.append({"tool": "upsertMapAnchor", "arguments": {
+                **{key: value for key, value in anchor.items() if key not in {"key", "location_key"}},
+                "id": anchor_ids[str(anchor["key"])],
+                "location_id": existing_keys.get(location_key, location_key),
+                "requires_map_review": anchor.get("x") is None or anchor.get("y") is None,
+            }})
+        for connection in draft.get("connections", []):
+            if not isinstance(connection, dict):
+                continue
+            connection_key = str(connection.get("key") or "")
+            connection_id = ((self.db.fetch_one(
+                "SELECT resource_id FROM generation_resource_keys WHERE generation_plan_id=? AND resource_key=? AND resource_type='travel_connection'",
+                (plan_id, connection_key),
+            ) or {}).get("resource_id") if connection_key else None)
+            raw.append({"tool": "upsertTravelConnection", "arguments": {
+                **{key: value for key, value in connection.items() if key not in {"key", "source_anchor_key", "target_anchor_key"}},
+                "id": connection_id or new_id(),
+                "source_anchor_id": anchor_ids[str(connection.get("source_anchor_key"))],
+                "target_anchor_id": anchor_ids[str(connection.get("target_anchor_key"))],
+            }})
+        root_key = str(draft.get("root_location_key") or "")
+        if root_key:
+            raw.append({"tool": "setWorldRoot", "arguments": {
+                "root_location_id": existing_keys.get(root_key, root_key),
+                "adopt_top_level": True,
+                "reparent_previous": True,
+            }})
+
         normalized = self.world.normalize_mutations(
             project_id,
             None,
@@ -833,6 +873,17 @@ class PlanningService:
                     relation_id,
                     relation,
                 )
+        for anchor in draft.get("anchors", []):
+            if isinstance(anchor, dict) and anchor.get("key"):
+                record_resource(self.db, plan_id, stage_number, anchor["key"], "map_anchor", anchor_ids[str(anchor["key"])], anchor)
+        for connection in draft.get("connections", []):
+            if not isinstance(connection, dict) or not connection.get("key"):
+                continue
+            source_id = anchor_ids.get(str(connection.get("source_anchor_key")))
+            target_id = anchor_ids.get(str(connection.get("target_anchor_key")))
+            connection_id = next((item["id"] for item in projection.get("travel_connections", {}).values() if item.get("source_anchor_id") == source_id and item.get("target_anchor_id") == target_id and item.get("kind", "route") == connection.get("kind", "route")), None)
+            if connection_id:
+                record_resource(self.db, plan_id, stage_number, connection["key"], "travel_connection", connection_id, connection)
 
         return {"transaction": transaction}
 

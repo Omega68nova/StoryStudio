@@ -9,8 +9,9 @@ from pydantic import ValidationError
 from app.database import Database
 from app.domain.adapters import outfit_from_record, outfit_to_record, stat_from_record
 from app.domain.world import Character, DomainKind, Stat, resolve_stat_bounds
+from app.schemas import OutfitCreate
 from app.services.planning_v2 import compact_schema
-from app.services.world import WorldEngine
+from app.services.world import WorldEngine, make_lore_card
 
 
 def test_character_legacy_fields_normalize_to_canonical_contract() -> None:
@@ -43,6 +44,34 @@ def test_character_legacy_fields_normalize_to_canonical_contract() -> None:
     assert "secrets" not in dumped["state"]
 
 
+def test_character_image_description_is_canonical_and_falls_back_to_appearance() -> None:
+    character = Character.model_validate({
+        "id": "character-1",
+        "kind": "character",
+        "name": "Mara",
+        "state": {
+            "appearance": "Black curls and a scarred left hand.",
+            "imagegen_description": "Weathered courier in a red mountain cloak.",
+        },
+    })
+
+    assert character.state.imagegen_description.startswith("Weathered courier")
+    card = make_lore_card(
+        character.model_dump(mode="json"),
+        {"entities": {}},
+    )
+    assert "Weathered courier" in card["visual_description"]
+    assert "Black curls" not in card["visual_description"]
+
+    fallback = character.model_copy(deep=True)
+    fallback.state.imagegen_description = ""
+    fallback_card = make_lore_card(
+        fallback.model_dump(mode="json"),
+        {"entities": {}},
+    )
+    assert "Black curls" in fallback_card["visual_description"]
+
+
 def test_outfit_round_trip_has_semantic_and_image_descriptions() -> None:
     row = {
         "id": "outfit-1",
@@ -60,6 +89,33 @@ def test_outfit_round_trip_has_semantic_and_image_descriptions() -> None:
     assert outfit.imagegen_description.startswith("Long yellow")
     assert outfit.reference.kind == DomainKind.OUTFIT
     assert outfit_to_record(outfit) == row
+
+
+def test_outfit_accepts_legacy_appearance_but_serializes_canonical_field() -> None:
+    legacy_row = {
+        "id": "outfit-legacy",
+        "entity_id": "character-1",
+        "name": "Old coat",
+        "description": "A practical coat.",
+        "appearance": "Green wool with brass buttons.",
+        "equipment_json": "[]",
+    }
+
+    outfit = outfit_from_record(legacy_row)
+    request = OutfitCreate.model_validate({
+        "name": "Old coat",
+        "appearance": "Green wool with brass buttons.",
+    })
+
+    assert outfit.imagegen_description == "Green wool with brass buttons."
+    assert request.imagegen_description == "Green wool with brass buttons."
+    assert outfit_to_record(outfit)["imagegen_description"] == "Green wool with brass buttons."
+
+    cleared = outfit_from_record({
+        **legacy_row,
+        "imagegen_description": "",
+    })
+    assert cleared.imagegen_description == ""
 
 
 def test_stat_dynamic_bounds_resolve_from_live_values() -> None:

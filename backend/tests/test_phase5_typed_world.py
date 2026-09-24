@@ -22,7 +22,12 @@ from app.domain.adapters import (
 from app.domain.world import (
     Character,
     DomainKind,
+    Fact,
+    Faction,
+    Item,
     Location,
+    LoreSystem,
+    PlotBeat,
     Weather,
 )
 from app.managers.environmentManager import EnvironmentManager
@@ -134,6 +139,149 @@ def test_location_round_trip_and_parent_reference() -> None:
     assert typed.state.parent_location.id == "location-1"
     assert typed.state.parent_location.kind == DomainKind.LOCATION
     assert entity_to_projection(typed) == raw
+
+
+@pytest.mark.parametrize(
+    ("kind", "model", "state"),
+    [
+        (
+            "faction",
+            Faction,
+            {
+                "description": "A coastal trading league.",
+                "culture": "Consensus and careful record keeping.",
+                "goals": ["Keep the sea lanes open"],
+                "secrets": ["The oldest charter is forged"],
+            },
+        ),
+        (
+            "item",
+            Item,
+            {
+                "description": "A brass survey compass.",
+                "appearance": "Salt-stained brass",
+                "abilities": ["find_hidden_road"],
+                "current_location_id": "location-1",
+            },
+        ),
+        (
+            "lore_system",
+            LoreSystem,
+            {
+                "description": "Names bind promises.",
+                "rules": ["A true name must be offered freely"],
+                "limits": "A name cannot compel the dead.",
+                "costs": ["The speaker forgets a lesser name"],
+            },
+        ),
+        (
+            "fact",
+            Fact,
+            {
+                "description": "The northern gate has a hidden hinge.",
+                "visibility": "private",
+                "known_character_ids": ["character-1"],
+                "known_faction_ids": ["faction-1"],
+            },
+        ),
+        (
+            "plot_beat",
+            PlotBeat,
+            {
+                "description": "The forged charter is challenged.",
+                "status": "available",
+                "goals": ["Choose which claimant to support"],
+            },
+        ),
+    ],
+)
+def test_explicit_entity_models_round_trip_losslessly(
+    kind: str,
+    model: type,
+    state: dict[str, object],
+) -> None:
+    raw = {
+        "id": f"{kind}-1",
+        "kind": kind,
+        "name": f"Typed {kind}",
+        "aliases": [f"Alias {kind}"],
+        "tags": ["typed"],
+        "state": {
+            **state,
+            "plugin_state": {"source": "extension", "rank": 4},
+        },
+        "plugin_projection": {"preserved": True},
+    }
+
+    typed = entity_from_projection(raw)
+
+    assert isinstance(typed, model)
+    assert typed.reference.kind == DomainKind(kind)
+    assert entity_to_projection(typed) == raw
+
+
+def test_new_typed_entity_references_are_canonical() -> None:
+    item = entity_from_projection({
+        "id": "item-1",
+        "kind": "item",
+        "name": "Compass",
+        "state": {"current_location_id": "location-1"},
+    })
+    fact = entity_from_projection({
+        "id": "fact-1",
+        "kind": "fact",
+        "name": "Hidden hinge",
+        "state": {
+            "known_character_ids": ["character-1"],
+            "known_faction_ids": ["faction-1"],
+        },
+    })
+
+    assert isinstance(item, Item)
+    assert item.state.current_location is not None
+    assert item.state.current_location.kind == DomainKind.LOCATION
+    assert isinstance(fact, Fact)
+    assert fact.state.known_characters[0].kind == DomainKind.CHARACTER
+    assert fact.state.known_factions[0].kind == DomainKind.FACTION
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {
+            "id": "faction-1",
+            "kind": "faction",
+            "name": "League",
+            "state": {"goals": "not-a-list"},
+        },
+        {
+            "id": "fact-1",
+            "kind": "fact",
+            "name": "Secret",
+            "state": {"known_character_ids": [""]},
+        },
+        {
+            "id": "plot-1",
+            "kind": "plot_beat",
+            "name": "Impossible state",
+            "state": {"status": "unknown"},
+        },
+    ],
+)
+def test_explicit_entity_models_reject_invalid_known_fields(
+    raw: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        entity_from_projection(raw)
+
+
+def test_explicit_entity_model_rejects_mismatched_kind() -> None:
+    with pytest.raises(ValidationError):
+        Faction.model_validate({
+            "id": "item-1",
+            "kind": "item",
+            "name": "Not a faction",
+        })
 
 
 def test_weather_record_round_trip_preserves_json_and_extra_columns() -> None:

@@ -69,6 +69,27 @@ class WorldCloneService:
             if not added: break
             selected.update(added); frontier = added
         id_map = {item: new_id() for item in sorted(selected)}
+        selected_anchors = {
+            key: value for key, value in source.get("map_anchors", {}).items()
+            if value.get("location_id") in selected
+        }
+        selected_barriers = {
+            key: value for key, value in source.get("map_barriers", {}).items()
+            if value.get("location_id") in selected
+        }
+        selected_connections = {
+            key: value for key, value in source.get("travel_connections", {}).items()
+            if value.get("source_anchor_id") in selected_anchors and value.get("target_anchor_id") in selected_anchors
+        }
+        selected_encounters = {
+            key: value for key, value in source.get("encounter_rules", {}).items()
+            if (value.get("location_id") in selected or value.get("connection_id") in selected_connections)
+            and all(candidate.get("location_id") in selected for candidate in value.get("candidates", []))
+        }
+        spatial_id_map = {
+            key: new_id() for key in sorted({*selected_anchors, *selected_barriers, *selected_connections, *selected_encounters})
+        }
+        all_ids = {**id_map, **spatial_id_map}
         target = self.world.projection(target_project_id)
         names = {str(value.get("name", "")).casefold() for value in target.get("entities", {}).values()}
         raw: list[dict[str, Any]] = []
@@ -79,13 +100,17 @@ class WorldCloneService:
             while name.casefold() in names:
                 name = f"{base} (Copy {suffix})"; suffix += 1
             names.add(name.casefold())
+            cloned_state = self._remap(item.get("state", {}), id_map)
+            if item.get("kind") == "location" and item.get("state", {}).get("parent_location_id") not in selected:
+                cloned_state["parent_location_id"] = target.get("root_location_id")
             raw.append({"tool": "createEntity", "arguments": {
                 "entity_id": id_map[source_id], "kind": item["kind"], "name": name,
                 "aliases": copy.deepcopy(item.get("aliases", [])), "tags": copy.deepcopy(item.get("tags", [])),
-                "state": self._remap(item.get("state", {}), id_map),
+                "state": cloned_state,
                 "stats": copy.deepcopy(item.get("stats", {})),
                 "active_effects": self._remap(self._rebase_effects(item.get("active_effects", []), source, target), id_map),
             }})
+        relationship_count = 0
         if include_relationships:
             for relation in source.get("relations", {}).values():
                 if relation.get("source_id") in selected and relation.get("target_id") in selected:
@@ -97,6 +122,17 @@ class WorldCloneService:
                         **self._remap(relation_data, id_map),
                         "source_id": id_map[relation["source_id"]], "target_id": id_map[relation["target_id"]],
                     }})
+                    relationship_count += 1
+        for anchor_id, anchor in selected_anchors.items():
+            raw.append({"tool": "upsertMapAnchor", "arguments": {"id": spatial_id_map[anchor_id], **self._remap({key: value for key, value in anchor.items() if key != "id"}, all_ids)}})
+        for barrier_id, barrier in selected_barriers.items():
+            raw.append({"tool": "upsertBarrier", "arguments": {"id": spatial_id_map[barrier_id], **self._remap({key: value for key, value in barrier.items() if key != "id"}, all_ids)}})
+        for connection_id, connection in selected_connections.items():
+            raw.append({"tool": "upsertTravelConnection", "arguments": {"id": spatial_id_map[connection_id], **self._remap({key: value for key, value in connection.items() if key != "id"}, all_ids)}})
+        for encounter_id, encounter in selected_encounters.items():
+            raw.append({"tool": "upsertEncounterRule", "arguments": {"id": spatial_id_map[encounter_id], **self._remap({key: value for key, value in encounter.items() if key != "id"}, all_ids)}})
+        if source.get("root_location_id") in selected and not target.get("root_location_id"):
+            raw.append({"tool": "setWorldRoot", "arguments": {"root_location_id": id_map[source["root_location_id"]], "adopt_top_level": False, "reparent_previous": False}})
         project = self.world.db.get_project(target_project_id) or {}
         mutations = self.world.normalize_mutations(target_project_id, project.get("active_node_id"), raw, provenance="clone")
         if project.get("active_node_id"):
@@ -119,5 +155,6 @@ class WorldCloneService:
                     (new_id(), target_project_id, row["ability_key"], row["name"], row["description"], row["target_type"], row["requirements_json"], row["costs_json"], row["effects_json"], now, now, row.get("minigame_profile_json") or "{}"),
                 ); cloned_abilities += 1
         return {"transaction_id": transaction["id"], "entity_id_map": id_map,
-                "entity_count": len(selected), "relationship_count": len(raw) - len(selected),
+                "entity_count": len(selected), "relationship_count": relationship_count,
+                "spatial_object_id_map": spatial_id_map, "spatial_object_count": len(spatial_id_map),
                 "stat_count": cloned_stats, "ability_count": cloned_abilities}

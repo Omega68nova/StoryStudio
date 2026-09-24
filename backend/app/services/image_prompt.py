@@ -53,9 +53,19 @@ def expand_image_prompt(
         state = entity.get("state", {})
         outfit_id = state.get("active_outfit_id")
         if outfit_id:
-            outfit = db.fetch_one("SELECT name,description,equipment_json FROM entity_outfits WHERE id=? AND entity_id=?", (outfit_id, entity["id"]))
+            outfit = db.fetch_one(
+                "SELECT name,description,imagegen_description,equipment_json "
+                "FROM entity_outfits WHERE id=? AND entity_id=?",
+                (outfit_id, entity["id"]),
+            )
             if outfit:
-                outfit_text = str(outfit.get("description") or "").strip()
+                outfit_imagegen_description = str(
+                    outfit.get("imagegen_description") or ""
+                ).strip()
+                outfit_text = (
+                    outfit_imagegen_description
+                    or str(outfit.get("description") or "").strip()
+                )
                 equipment = json.loads(outfit.get("equipment_json") or "[]")
                 details = f"Current outfit: {outfit['name']}"
                 if outfit_text:

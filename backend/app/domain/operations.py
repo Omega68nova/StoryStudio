@@ -166,6 +166,8 @@ class RequirementEvaluator:
             return self._compare(stats.get(str(node.stat_key), definition.default_value), str(node.comparison), node.value)
         if kind == "has_tag": return str(node.tag) in set(getattr(target, "tags", []))
         if kind == "has_item" and isinstance(target, Character): return any(str(x.item_id) == str(node.item_id) and x.quantity > 0 for x in target.state.inventory)
+        if kind == "has_ability" and isinstance(target, Character):
+            return str(node.ability_key or "") in set(target.state.abilities)
         if kind == "relationship":
             relation_name = str(node.relation or "").casefold()
             if primary and isinstance(primary.container, Relationship): return primary.container.relation.casefold() == relation_name

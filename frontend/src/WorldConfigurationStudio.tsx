@@ -3,6 +3,7 @@ import { Paper, Tab, Tabs } from "@mui/material";
 import { BulletHellStudio } from "./BulletHellStudio";
 import { CharacterStudio } from "./CharacterStudio";
 import { EnvironmentStudio } from "./EnvironmentStudio";
+import { LocationMapStudio } from "./LocationMapStudio";
 import { MinigamesStudio } from "./minigames/MinigamesStudio";
 import { MusicStudio } from "./MusicStudio";
 import { PlanningStudio } from "./PlanningStudio";
@@ -15,6 +16,7 @@ export type WorldConfigurationSection =
   | "world"
   | "characters"
   | "environment"
+  | "locations"
   | "rules"
   | "generation"
   | "minigames"
@@ -26,6 +28,7 @@ const sections: Array<{ id: WorldConfigurationSection; label: string }> = [
   { id: "world", label: "World" },
   { id: "characters", label: "Characters" },
   { id: "environment", label: "Environment" },
+  { id: "locations", label: "Location Map" },
   { id: "rules", label: "Rules" },
   { id: "generation", label: "Generation plan" },
   { id: "minigames", label: "Minigames" },
@@ -100,6 +103,7 @@ export function WorldConfigurationStudio({
             onFocusHandled={() => setEnvironmentLocationId(null)}
           />
         )}
+        {section === "locations" && <LocationMapStudio projectId={projectId} revision={revision} fail={fail} />}
         {section === "rules" && <RulesStudio projectId={projectId} revision={revision} fail={fail} />}
         {section === "generation" && <PlanningStudio projectId={projectId} revision={revision} fail={fail} />}
         {section === "minigames" && <MinigamesStudio projectId={projectId} revision={revision} fail={fail} />}

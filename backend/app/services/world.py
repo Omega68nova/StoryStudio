@@ -30,11 +30,18 @@ NARRATION_MODES = {"first_person", "third_limited", "third_omniscient"}
 READ_TOOLS = {
     "searchEntities", "getEntity", "getScene", "getNearbyLocations", "findRoute", "getKnownFacts", "getActivePlotBeats",
     "getStats", "getAbilities", "searchLocations", "getLocationMap", "getSceneEnvironment",
+    "getLocalMap", "getTravelOptions", "previewTravel", "getTravelStatus",
+    "getSpatialPresets",
 }
 WRITE_TOOLS = {
     "createEntity", "updateEntity", "moveCharacter", "setRelationship", "revealKnowledge", "advanceTime", "updatePlotBeat",
     "removeRelationship", "adjustStat", "useAbility", "selectTheme",
     "adjustInventory", "setSceneEnvironment", "proposeWeather", "playNoise",
+    "setWorldRoot", "upsertMapAnchor", "upsertBarrier", "upsertTravelConnection", "upsertEncounterRule",
+    "setMapDiscovery", "travelTo", "travelTowards", "exploreFor", "resumeTravel",
+    "createLocationFromPreset",
+    "editMapGeometry",
+    "removeMapObject",
 }
 MAJOR_PATCH_FIELDS = {"identity", "alive", "permanent_injuries", "core_personality", "player_decision", "world_laws", "destroyed"}
 
@@ -97,12 +104,20 @@ def make_lore_card(entity: dict[str, Any], projection: dict[str, Any]) -> dict[s
     if entity.get("active_effects"):
         pieces.append("active effects: " + _text(entity["active_effects"]))
     compact = ". ".join(pieces)[:2400]
-    visual_fields = ["appearance", "wardrobe", "equipment"]
-    visual_parts = [_text(state.get(field)) for field in visual_fields]
+    primary_visual = (
+        _text(state.get("imagegen_description")).strip()
+        or _text(state.get("appearance")).strip()
+    )
+    supporting_visual_fields = ["wardrobe_notes", "wardrobe", "equipment"]
+    visual_parts = [
+        primary_visual,
+        *[_text(state.get(field)) for field in supporting_visual_fields],
+    ]
     visual = f"{name}: " + "; ".join(part for part in visual_parts if part) if any(visual_parts) else ""
+    visual_tag_texts = [primary_visual, *[_text(state.get(field)) for field in supporting_visual_fields]]
     tags = list(dict.fromkeys([
         *entity.get("tags", []),
-        *[item.strip() for field in visual_fields for item in _text(state.get(field)).split(",") if item.strip()],
+        *[item.strip() for text in visual_tag_texts for item in text.split(",") if item.strip()],
     ]))[:80]
     search = " ".join([name, *entity.get("aliases", []), *entity.get("tags", []), compact])
     return {"compact_text": compact, "visual_description": visual[:1600], "image_tags": tags, "search_text": search[:8000]}
@@ -118,6 +133,28 @@ class WorldEngine:
         self.db = db
         self.data = data_provider or DataProvider(db)
         self.repo = self.data.world
+
+    def _spatial_projection(self, project_id: str, projection: dict[str, Any]) -> dict[str, Any]:
+        enriched = dict(projection)
+        settings = self.db.fetch_one("SELECT perception_stat_key FROM project_environment_settings WHERE project_id=?", (project_id,)) or {}
+        weather = self.db.fetch_one("SELECT visibility_multiplier FROM weather_definitions WHERE id=? AND project_id=?", (projection.get("current_weather_id"), project_id)) or {"visibility_multiplier": 1}
+        phases = self.db.fetch_all("SELECT id,duration_minutes,visibility_multiplier FROM time_phases WHERE project_id=? AND enabled=1 ORDER BY position", (project_id,))
+        phase_multiplier = 1.0
+        total = sum(int(item["duration_minutes"]) for item in phases)
+        if total:
+            offset = int(projection.get("elapsed_minutes", 0)) % total
+            for phase in phases:
+                if offset < int(phase["duration_minutes"]):
+                    phase_multiplier = float(phase.get("visibility_multiplier", 1))
+                    enriched["current_time_phase_id"] = phase["id"]
+                    break
+                offset -= int(phase["duration_minutes"])
+        enriched["spatial_visibility"] = {
+            "weather_multiplier": float(weather.get("visibility_multiplier", 1)),
+            "time_multiplier": phase_multiplier,
+            "perception_stat_key": settings.get("perception_stat_key"),
+        }
+        return enriched
 
     def projection(self, project_id: str, head_node_id: str | None = None, *, use_cache: bool = True) -> dict[str, Any]:
         if head_node_id is None:
@@ -142,6 +179,12 @@ class WorldEngine:
             "current_weather_id": None,
             "focused_character_id": None,
             "player_action": "standing",
+            "root_location_id": None,
+            "map_anchors": {},
+            "map_barriers": {},
+            "travel_connections": {},
+            "encounter_rules": {},
+            "travel_itineraries": {},
             "transactions": [],
         }
         for transaction in visible:
@@ -180,7 +223,16 @@ class WorldEngine:
             if "aliases" in payload:
                 entities[entity_id]["aliases"] = list(dict.fromkeys(payload["aliases"]))
         elif event_type == "character.moved" and entity_id in entities:
-            entities[entity_id].setdefault("state", {})["current_location_id"] = payload["destination_id"]
+            state = entities[entity_id].setdefault("state", {})
+            changed_location = state.get("current_location_id") != payload["destination_id"]
+            state["current_location_id"] = payload["destination_id"]
+            if changed_location and "x" not in payload:
+                state["current_x"] = None
+                state["current_y"] = None
+            if "x" in payload:
+                state["current_x"] = payload.get("x")
+            if "y" in payload:
+                state["current_y"] = payload.get("y")
             destination = entities.get(payload["destination_id"])
             if destination:
                 destination.setdefault("state", {})["discovered"] = True
@@ -225,6 +277,34 @@ class WorldEngine:
             if not found and payload["quantity"] > 0:
                 inventory.append({"item_id": payload["item_id"], "quantity": payload["quantity"]})
             entities[entity_id]["state"]["inventory"] = [entry for entry in inventory if int(entry.get("quantity", 0)) > 0]
+        elif event_type == "world.root_set":
+            previous = projection.get("root_location_id")
+            projection["root_location_id"] = payload["root_location_id"]
+            entities[payload["root_location_id"]].setdefault("state", {})["parent_location_id"] = None
+            for location_id in payload.get("reparent_location_ids", []):
+                if location_id in entities and location_id != payload["root_location_id"]:
+                    entities[location_id].setdefault("state", {})["parent_location_id"] = payload["root_location_id"]
+            if payload.get("reparent_previous") and previous and previous != payload["root_location_id"]:
+                entities[previous].setdefault("state", {})["parent_location_id"] = payload["root_location_id"]
+        elif event_type == "map.anchor_upserted":
+            projection["map_anchors"][payload["id"]] = copy.deepcopy(payload)
+        elif event_type == "map.barrier_upserted":
+            projection["map_barriers"][payload["id"]] = copy.deepcopy(payload)
+        elif event_type == "map.connection_upserted":
+            projection["travel_connections"][payload["id"]] = copy.deepcopy(payload)
+        elif event_type == "map.encounter_upserted":
+            projection["encounter_rules"][payload["id"]] = copy.deepcopy(payload)
+        elif event_type == "map.discovery_set":
+            collection = projection.get(payload.get("collection"), {})
+            if payload.get("id") in collection:
+                if payload.get("collection") == "entities":
+                    collection[payload["id"]].setdefault("state", {})["discovered"] = bool(payload.get("discovered"))
+                else:
+                    collection[payload["id"]]["discovered"] = bool(payload.get("discovered"))
+        elif event_type == "map.object_removed":
+            projection.get(payload.get("collection"), {}).pop(payload.get("id"), None)
+        elif event_type == "travel.itinerary_set":
+            projection["travel_itineraries"][payload["id"]] = copy.deepcopy(payload)
 
     @staticmethod
     def _expire_effects(projection: dict[str, Any]) -> None:
@@ -292,9 +372,52 @@ class WorldEngine:
                     location_state.setdefault("discovered", not location_state["random_encounter"])
                     if location_state["exposure"] not in {"indoor", "outdoor", "isolated"}:
                         raise WorldValidationError("Location exposure must be indoor, outdoor, or isolated")
+                    try:
+                        from app.domain.world import LocationState
+                        from app.services.spatial import validate_geometry
+                        if location_state.get("footprint"):
+                            location_state["footprint"].setdefault("location_id", location_state.get("parent_location_id") or entity_id)
+                        if location_state.get("local_bounds"):
+                            location_state["local_bounds"].setdefault("location_id", entity_id)
+                        LocationState.model_validate(location_state)
+                        for geometry_field in ("footprint", "local_bounds"):
+                            if location_state.get(geometry_field):
+                                validate_geometry(location_state[geometry_field])
+                    except ValueError as exc:
+                        raise WorldValidationError(f"Invalid location state: {exc}") from exc
                 names.add(name.casefold())
                 if kind == "lore_system" and provenance == "ai":
                     major, reason = True, "Creates a new world-rule system"
+            elif tool == "createLocationFromPreset":
+                from app.services.spatialPresets import SPATIAL_PRESETS
+                from app.domain.world import LocationState
+                preset_key = str(arguments.get("preset") or "")
+                preset = SPATIAL_PRESETS.get(preset_key)
+                if not preset or preset.get("object") != "location":
+                    raise WorldValidationError("Unknown location preset")
+                name = str(arguments.get("name") or "").strip()
+                if not name or name.casefold() in names:
+                    raise WorldValidationError("Location preset creation requires a unique non-empty name")
+                state = {**preset.get("state", {}), **(arguments.get("overrides") or {})}
+                state.setdefault("description", "")
+                state.setdefault("imagegen_description", "")
+                state.setdefault("image_tags", [])
+                state.setdefault("enabled", True)
+                state.setdefault("random_encounter", False)
+                state.setdefault("discovered", True)
+                settings = self.db.fetch_one("SELECT enabled,ai_create_locations FROM project_environment_settings WHERE project_id=?", (project_id,))
+                if provenance in {"ai", "storyteller_inline"} and settings and (not settings["enabled"] or not settings["ai_create_locations"]):
+                    raise WorldValidationError("AI location creation is disabled for this story")
+                try:
+                    LocationState.model_validate(state)
+                except ValueError as exc:
+                    raise WorldValidationError(f"Invalid location preset overrides: {exc}") from exc
+                arguments = {
+                    "entity_id": str(arguments.get("entity_id") or new_id()), "kind": "location", "name": name,
+                    "aliases": list(dict.fromkeys(arguments.get("aliases", []))), "tags": list(dict.fromkeys(arguments.get("tags", []))),
+                    "state": state, "preset": preset_key,
+                }
+                names.add(name.casefold())
             elif tool == "updateEntity":
                 entity = self._entity(projection, arguments.get("entity_id"))
                 patch = arguments.get("patch")
@@ -322,6 +445,25 @@ class WorldEngine:
                         raise WorldValidationError("Player-controlled characters cannot enable NPC autonomy")
                 if entity["kind"] == "lore_system" and {"rules", "limits", "costs"}.intersection(patch):
                     major, reason = True, "Changes established world-system rules"
+                if entity["kind"] == "location":
+                    try:
+                        from app.domain.world import LocationState
+                        from app.services.spatial import validate_geometry
+                        if patch.get("footprint"):
+                            patch["footprint"].setdefault("location_id", patch.get("parent_location_id", entity.get("state", {}).get("parent_location_id")) or entity["id"])
+                        if patch.get("local_bounds"):
+                            patch["local_bounds"].setdefault("location_id", entity["id"])
+                        merged_location = _deep_merge(entity.get("state", {}), patch)
+                        if merged_location.get("footprint"):
+                            merged_location["footprint"].setdefault("location_id", merged_location.get("parent_location_id") or entity["id"])
+                        if merged_location.get("local_bounds"):
+                            merged_location["local_bounds"].setdefault("location_id", entity["id"])
+                        LocationState.model_validate(merged_location)
+                        for geometry_field in ("footprint", "local_bounds"):
+                            if merged_location.get(geometry_field):
+                                validate_geometry(merged_location[geometry_field])
+                    except ValueError as exc:
+                        raise WorldValidationError(f"Invalid location state: {exc}") from exc
             elif tool == "moveCharacter":
                 character = self._entity(projection, arguments.get("character_id"), "character")
                 destination = self._entity(projection, arguments.get("destination_id"), "location")
@@ -330,7 +472,15 @@ class WorldEngine:
                 if source_id != destination["id"] and not self._location_enabled(projection, destination["id"]):
                     raise WorldValidationError(f"Location '{destination['name']}' is disabled")
                 if source_id and source_id != destination["id"] and not arguments.get("bypass_reason"):
-                    route = self._path(projection, source_id, destination["id"], arguments.get("mode"))
+                    route = None
+                    from app.services.spatial import SpatialService
+                    spatial = SpatialService(self._spatial_projection(project_id, projection))
+                    if spatial.root_id():
+                        route = spatial.preview(character["id"], destination["id"], str(arguments.get("mode") or "walk"))
+                        if not route.get("available"):
+                            route = None
+                    if route is None:
+                        route = self._path(projection, source_id, destination["id"], arguments.get("mode"))
                     if not route:
                         raise WorldValidationError(f"No traversable route connects {source_id} to {destination['id']}")
                     arguments.setdefault("elapsed_minutes", int(route.get("travel_minutes", 0)))
@@ -338,6 +488,135 @@ class WorldEngine:
                     abilities = _text(character.get("state", {}).get("abilities", [])).casefold()
                     if str(arguments["bypass_reason"]).casefold() not in abilities:
                         raise WorldValidationError("Movement bypass must name an ability possessed by the character")
+            elif tool == "setWorldRoot":
+                root = self._entity(projection, arguments.get("root_location_id"), "location")
+                top_level = [
+                    item["id"] for item in projection["entities"].values()
+                    if item.get("kind") == "location" and item["id"] != root["id"]
+                    and not item.get("state", {}).get("parent_location_id")
+                ]
+                arguments = {
+                    "root_location_id": root["id"],
+                    "reparent_previous": bool(arguments.get("reparent_previous", True)),
+                    "reparent_location_ids": top_level if arguments.get("adopt_top_level", projection.get("root_location_id") is None) else [],
+                }
+            elif tool == "upsertMapAnchor":
+                from app.domain.world import MapAnchor
+                try:
+                    arguments.setdefault("id", new_id())
+                    self._entity(projection, arguments.get("location_id"), "location")
+                    arguments = MapAnchor.model_validate(arguments).model_dump(mode="json")
+                except ValueError as exc:
+                    raise WorldValidationError(f"Invalid map anchor: {exc}") from exc
+            elif tool == "upsertBarrier":
+                from app.domain.world import Barrier
+                from app.services.spatial import validate_geometry
+                try:
+                    arguments.setdefault("id", new_id())
+                    self._entity(projection, arguments.get("location_id"), "location")
+                    if arguments.get("geometry"):
+                        arguments["geometry"].setdefault("location_id", arguments["location_id"])
+                        arguments["geometry"] = validate_geometry(arguments["geometry"])
+                    else:
+                        arguments["requires_map_review"] = True
+                    arguments = Barrier.model_validate(arguments).model_dump(mode="json")
+                except ValueError as exc:
+                    raise WorldValidationError(f"Invalid barrier: {exc}") from exc
+            elif tool == "editMapGeometry":
+                from app.services.spatial import validate_geometry
+                barrier_id = str(arguments.get("barrier_id") or "")
+                barrier = copy.deepcopy(projection.get("map_barriers", {}).get(barrier_id))
+                if not barrier or not barrier.get("geometry"):
+                    raise WorldValidationError("Barrier geometry is unavailable; create its initial geometry first")
+                points = list(barrier["geometry"].get("points") or [])
+                operation, index = str(arguments.get("operation") or ""), int(arguments.get("index", len(points)))
+                point = {"x": float(arguments.get("x", 0)), "y": float(arguments.get("y", 0))}
+                if operation == "add_point" and 0 <= index <= len(points): points.insert(index, point)
+                elif operation == "move_point" and 0 <= index < len(points): points[index] = point
+                elif operation == "remove_point" and 0 <= index < len(points): points.pop(index)
+                else: raise WorldValidationError("Geometry edit operation or point index is invalid")
+                barrier["geometry"]["points"] = points
+                barrier["geometry"] = validate_geometry(barrier["geometry"])
+                barrier["requires_map_review"] = False
+                arguments = barrier
+            elif tool == "upsertTravelConnection":
+                from app.services.spatial import SpatialService, SpatialValidationError
+                try:
+                    arguments.setdefault("id", new_id())
+                    arguments = SpatialService(projection).validate_connection(arguments)
+                except SpatialValidationError as exc:
+                    raise WorldValidationError(f"Invalid travel connection: {exc}") from exc
+            elif tool == "upsertEncounterRule":
+                from app.domain.world import EncounterRule
+                try:
+                    arguments.setdefault("id", new_id())
+                    arguments = EncounterRule.model_validate(arguments).model_dump(mode="json")
+                    if arguments.get("location_id"):
+                        self._entity(projection, arguments["location_id"], "location")
+                    if arguments.get("connection_id") not in {None, *projection.get("travel_connections", {})}:
+                        raise WorldValidationError("Encounter connection is unavailable")
+                    for candidate in arguments.get("candidates", []):
+                        self._entity(projection, candidate["location_id"], "location")
+                except ValueError as exc:
+                    raise WorldValidationError(f"Invalid encounter rule: {exc}") from exc
+            elif tool == "setMapDiscovery":
+                collections = {
+                    "anchor": "map_anchors", "barrier": "map_barriers", "connection": "travel_connections",
+                    "encounter": "encounter_rules", "location": "entities",
+                }
+                kind = str(arguments.get("kind") or "")
+                collection = collections.get(kind)
+                if not collection or arguments.get("id") not in projection.get(collection, {}):
+                    raise WorldValidationError("Map object is unavailable")
+                if kind == "location" and projection["entities"][str(arguments["id"])].get("kind") != "location":
+                    raise WorldValidationError("Map discovery target is not a location")
+                arguments = {"collection": collection, "id": str(arguments["id"]), "discovered": bool(arguments.get("discovered", True))}
+            elif tool == "removeMapObject":
+                collections = {"anchor": "map_anchors", "barrier": "map_barriers", "connection": "travel_connections", "encounter": "encounter_rules"}
+                kind = str(arguments.get("kind") or "")
+                collection, object_id = collections.get(kind), str(arguments.get("id") or "")
+                if not collection or object_id not in projection.get(collection, {}):
+                    raise WorldValidationError("Map object is unavailable")
+                if kind == "anchor" and any(object_id in {item.get("source_anchor_id"), item.get("target_anchor_id")} for item in projection.get("travel_connections", {}).values()):
+                    raise WorldValidationError("Remove connections using this anchor first")
+                arguments = {"collection": collection, "kind": kind, "id": object_id}
+            elif tool in {"travelTo", "travelTowards", "exploreFor", "resumeTravel"}:
+                from app.services.spatial import SpatialService, SpatialValidationError
+                character = self._entity(projection, arguments.get("character_id"), "character")
+                resolver = SpatialService(self._spatial_projection(project_id, projection))
+                try:
+                    if tool == "resumeTravel":
+                        existing = projection.get("travel_itineraries", {}).get(str(arguments.get("itinerary_id")))
+                        if not existing or existing.get("character_id") != character["id"]:
+                            raise SpatialValidationError("Travel itinerary is unavailable")
+                        if existing.get("status") == "completed":
+                            raise SpatialValidationError("Travel itinerary is already complete")
+                        interruption = existing.get("interruption") or {}
+                        if interruption.get("kind") == "lock":
+                            raise SpatialValidationError("Resolve the connection lock before resuming travel")
+                        resolved = resolver.itinerary(
+                            character["id"], existing["destination_location_id"], existing.get("mode", "walk"),
+                            skip_encounter_rule_id=interruption.get("rule_id") if interruption.get("kind") == "encounter" else None,
+                        )
+                    elif tool == "exploreFor":
+                        resolved = resolver.explore(character["id"], float(arguments.get("minutes", 0)), str(arguments.get("mode") or "walk"), arguments.get("optional_direction"))
+                    else:
+                        allotted = float(arguments.get("minutes", 0)) if tool == "travelTowards" else None
+                        if arguments.get("x") is not None and arguments.get("y") is not None:
+                            resolved = resolver.coordinate_itinerary(character["id"], float(arguments["x"]), float(arguments["y"]), str(arguments.get("mode") or "walk"), allotted)
+                        else:
+                            destination_id = str(arguments.get("location_id") or arguments.get("destination_id") or "")
+                            self._entity(projection, destination_id, "location")
+                            resolved = resolver.itinerary(character["id"], destination_id, str(arguments.get("mode") or "walk"), allotted)
+                except (SpatialValidationError, ValueError) as exc:
+                    raise WorldValidationError(str(exc)) from exc
+                arguments = {
+                    "character_id": character["id"], "destination_id": resolved["reached_location_id"],
+                    "elapsed_minutes": int(math.ceil(float(resolved["elapsed_minutes"]))),
+                    "itinerary": resolved["itinerary"], "discoveries": resolved.get("discoveries", []),
+                }
+                if "x" in resolved:
+                    arguments.update({"x": resolved["x"], "y": resolved["y"]})
             elif tool == "setRelationship":
                 self._entity(projection, arguments.get("source_id"))
                 self._entity(projection, arguments.get("target_id"))
@@ -658,12 +937,50 @@ class WorldEngine:
             if "active_effects" in args:
                 entity["active_effects"] = args["active_effects"]
             return [("entity.created", entity["id"], {"entity": entity})]
+        if tool == "createLocationFromPreset":
+            entity = {key: args[key] for key in ("entity_id", "kind", "name", "aliases", "tags", "state")}
+            entity["id"] = entity.pop("entity_id")
+            return [("entity.created", entity["id"], {"entity": entity, "preset": args.get("preset")})]
         if tool == "updateEntity":
             return [("entity.updated", args["entity_id"], {key: args[key] for key in ("patch", "name", "tags", "aliases") if key in args})]
         if tool == "moveCharacter":
             events = [("character.moved", args["character_id"], args)]
             if args.get("elapsed_minutes") or args.get("display_time"):
                 events.append(("time.advanced", None, {"minutes": args.get("elapsed_minutes", 0), "display_time": args.get("display_time")}))
+            return events
+        if tool == "setWorldRoot":
+            return [("world.root_set", args["root_location_id"], args)]
+        if tool == "upsertMapAnchor":
+            return [("map.anchor_upserted", None, args)]
+        if tool == "upsertBarrier":
+            return [("map.barrier_upserted", None, args)]
+        if tool == "editMapGeometry":
+            return [("map.barrier_upserted", None, args)]
+        if tool == "upsertTravelConnection":
+            return [("map.connection_upserted", None, args)]
+        if tool == "upsertEncounterRule":
+            return [("map.encounter_upserted", None, args)]
+        if tool == "setMapDiscovery":
+            return [("map.discovery_set", None, args)]
+        if tool == "removeMapObject":
+            return [("map.object_removed", None, args)]
+        if tool in {"travelTo", "travelTowards", "exploreFor", "resumeTravel"}:
+            events = [
+                ("travel.itinerary_set", None, args["itinerary"]),
+                ("character.moved", args["character_id"], {
+                    "destination_id": args["destination_id"],
+                    **({"x": args.get("x"), "y": args.get("y")} if "x" in args else {}),
+                }),
+            ]
+            events.extend(
+                ("map.discovery_set", None, {
+                    "collection": {"barrier": "map_barriers", "anchor": "map_anchors", "connection": "travel_connections", "encounter": "encounter_rules", "location": "entities"}[item["kind"]],
+                    "id": item["id"], "discovered": True,
+                })
+                for item in args.get("discoveries", [])
+            )
+            if args.get("elapsed_minutes"):
+                events.append(("time.advanced", None, {"minutes": args["elapsed_minutes"]}))
             return events
         if tool == "setRelationship":
             return [("relationship.set", None, args)]
@@ -918,9 +1235,16 @@ class WorldEngine:
             if outfit_id and not self.db.fetch_one("SELECT id FROM entity_outfits WHERE id = ? AND entity_id = ?", (outfit_id, entity["id"])):
                 raise WorldValidationError(f"{entity['name']} has an invalid active outfit")
         for location in (item for item in entities.values() if item["kind"] == "location"):
-            exposure = location.get("state", {}).get("exposure", "outdoor")
+            state = location.get("state", {})
+            exposure = state.get("exposure", "outdoor")
             if exposure not in {"indoor", "outdoor", "isolated"}:
                 raise WorldValidationError(f"{location['name']} has an invalid exposure")
+            if state.get("topology", "closed") not in {"open", "closed"}:
+                raise WorldValidationError(f"{location['name']} has an invalid topology")
+            if state.get("occupancy", "direct_allowed") not in {"direct_allowed", "child_required"}:
+                raise WorldValidationError(f"{location['name']} has an invalid occupancy policy")
+            if state.get("boundary_access", "free") not in {"free", "connection_required"}:
+                raise WorldValidationError(f"{location['name']} has an invalid boundary access policy")
             visited = {location["id"]}
             parent = location.get("state", {}).get("parent_location_id")
             while parent:
@@ -928,9 +1252,18 @@ class WorldEngine:
                     raise WorldValidationError(f"Location containment cycle involving {location['name']}")
                 visited.add(parent)
                 parent = entities[parent].get("state", {}).get("parent_location_id")
+        for character in (item for item in entities.values() if item["kind"] == "character"):
+            location = entities.get(character.get("state", {}).get("current_location_id"))
+            if location and location.get("state", {}).get("occupancy", "direct_allowed") == "child_required":
+                raise WorldValidationError(f"{character['name']} cannot directly occupy {location['name']}; a child location is required")
         for relation in projection["relations"].values():
             if relation.get("source_id") not in entities or relation.get("target_id") not in entities:
                 raise WorldValidationError("Relationship references an unavailable entity")
+        try:
+            from app.services.spatial import SpatialService
+            SpatialService(projection).validate_hierarchy()
+        except ValueError as exc:
+            raise WorldValidationError(str(exc)) from exc
 
     def entity_card(self, project_id: str, entity_id: str, head_node_id: str | None = None) -> dict[str, Any]:
         projection = self.projection(project_id, head_node_id)
@@ -1028,6 +1361,14 @@ class WorldEngine:
         projection = self.projection(project_id, head_node_id)
         self._entity(projection, source_id, "location")
         self._entity(projection, target_id, "location")
+        from app.services.spatial import SpatialService
+        spatial = SpatialService(self._spatial_projection(project_id, projection))
+        if spatial.root_id() and projection.get("travel_connections"):
+            synthetic_id = "__route_preview__"
+            working = copy.deepcopy(projection)
+            working["entities"][synthetic_id] = {"id": synthetic_id, "kind": "character", "name": "Route preview", "tags": [], "state": {"current_location_id": source_id, "abilities": [], "inventory": []}, "stats": {}}
+            result = SpatialService(self._spatial_projection(project_id, working)).preview(synthetic_id, target_id, mode or "walk")
+            return result if result.get("available") else None
         return self._path(projection, source_id, target_id, mode)
 
     def context_package(
@@ -1157,6 +1498,33 @@ class WorldEngine:
             return card
         if tool == "getScene":
             return self.context_package(project_id, head_node_id, "", pov_character_id, narration_mode, 1800)
+        if tool == "getSpatialPresets":
+            from app.services.spatialPresets import public_spatial_presets
+            return public_spatial_presets()
+        if tool in {"getLocalMap", "getTravelOptions", "previewTravel", "getTravelStatus"}:
+            from app.services.spatial import SpatialService
+            projection = self.projection(project_id, head_node_id)
+            spatial = SpatialService(self._spatial_projection(project_id, projection))
+            if tool == "getLocalMap":
+                return spatial.local_map(arguments.get("location_id"), administrative=narration_mode == "third_omniscient")
+            if tool == "getTravelStatus":
+                itinerary = projection.get("travel_itineraries", {}).get(str(arguments.get("itinerary_id") or ""))
+                if itinerary:
+                    return itinerary
+                character_id = str(arguments.get("character_id") or pov_character_id or "")
+                matches = [item for item in projection.get("travel_itineraries", {}).values() if item.get("character_id") == character_id]
+                return matches[-1] if matches else None
+            character_id = str(arguments.get("character_id") or pov_character_id or "")
+            if tool == "previewTravel":
+                return spatial.preview(character_id, str(arguments.get("location_id") or arguments.get("destination_id") or ""), str(arguments.get("mode") or "walk"))
+            options = []
+            for location in spatial.locations().values():
+                if not location.get("state", {}).get("discovered", True):
+                    continue
+                preview = spatial.preview(character_id, str(location["id"]), str(arguments.get("mode") or "walk"))
+                if preview.get("available") and preview.get("travel_minutes", 0) > 0:
+                    options.append({"id": location["id"], "name": location["name"], "minutes": preview["travel_minutes"], "risk": "configured" if location.get("state", {}).get("encounter_rate", 0) else "none"})
+            return sorted(options, key=lambda item: (item["minutes"], item["name"]))[:20]
         if tool == "getNearbyLocations":
             return self.nearby(project_id, str(arguments.get("origin_id")), head_node_id=head_node_id,
                                direction=arguments.get("direction"), limit=int(arguments.get("limit", 8)))

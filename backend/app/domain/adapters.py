@@ -9,9 +9,14 @@ from app.domain.world import (
     Ability,
     Character,
     EntityKind,
+    Fact,
+    Faction,
     GenericWorldEntity,
+    Item,
     Location,
+    LoreSystem,
     Outfit,
+    PlotBeat,
     Relationship,
     Stat,
     TypedWorldEntity,
@@ -63,6 +68,16 @@ def entity_from_projection(value: Mapping[str, Any]) -> TypedWorldEntity:
         return Character.model_validate(raw)
     if kind == EntityKind.LOCATION:
         return Location.model_validate(raw)
+    if kind == EntityKind.FACTION:
+        return Faction.model_validate(raw)
+    if kind == EntityKind.ITEM:
+        return Item.model_validate(raw)
+    if kind == EntityKind.LORE_SYSTEM:
+        return LoreSystem.model_validate(raw)
+    if kind == EntityKind.FACT:
+        return Fact.model_validate(raw)
+    if kind == EntityKind.PLOT_BEAT:
+        return PlotBeat.model_validate(raw)
     return GenericWorldEntity.model_validate(raw)
 
 
@@ -84,6 +99,9 @@ def relationship_to_projection(
 
 def outfit_from_record(value: Mapping[str, Any]) -> Outfit:
     raw = _record(value)
+    legacy_appearance = raw.pop("appearance", None)
+    if "imagegen_description" not in raw:
+        raw["imagegen_description"] = legacy_appearance or ""
     raw["equipment"] = _json_field(raw, "equipment_json", list)
     return Outfit.model_validate(raw)
 

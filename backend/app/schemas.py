@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, HttpUrl, field_validator, model_validator
 from app.domain.world import ActionEffect, RequirementExpression
 
 
@@ -475,7 +475,11 @@ class NpcSettingsUpdate(BaseModel):
 class OutfitCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     description: str = Field(default="", max_length=5000)
-    appearance: str = Field(default="", max_length=5000)
+    imagegen_description: str = Field(
+        default="",
+        max_length=5000,
+        validation_alias=AliasChoices("imagegen_description", "appearance"),
+    )
     equipment: list[str] = Field(default_factory=list, max_length=100)
 
 
@@ -521,6 +525,7 @@ class EnvironmentSettingsUpdate(BaseModel):
     auto_generate_backgrounds: bool = False
     background_workflow_id: str | None = None
     initial_weather_id: str
+    perception_stat_key: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_]{0,63}$")
 
 
 class WeatherDefinitionUpdate(BaseModel):
@@ -530,6 +535,7 @@ class WeatherDefinitionUpdate(BaseModel):
     tags: list[str] = Field(default_factory=list, max_length=40)
     image_tags: list[str] = Field(default_factory=list, max_length=40)
     enabled: bool = True
+    visibility_multiplier: float = Field(default=1, ge=0, le=10)
 
 
 class WeatherTransitionsUpdate(BaseModel):
@@ -543,6 +549,7 @@ class TimePhaseItem(BaseModel):
     description: str = Field(default="", max_length=2000)
     imagegen_description: str = Field(default="", max_length=4000)
     enabled: bool = True
+    visibility_multiplier: float = Field(default=1, ge=0, le=10)
 
 
 class TimePhasesUpdate(BaseModel):
@@ -612,9 +619,114 @@ class EnvironmentLocationUpdate(BaseModel):
     image_tags: list[str] = Field(default_factory=list, max_length=100)
     enabled: bool = True
     random_encounter: bool = False
+    hidden: bool = False
     discovered: bool = True
     x: float | None = None
     y: float | None = None
+    topology: Literal["open", "closed"] = "closed"
+    occupancy: Literal["direct_allowed", "child_required"] = "direct_allowed"
+    boundary_access: Literal["free", "connection_required"] = "free"
+    spatial_kind: Literal["spot", "area"] = "spot"
+    minutes_per_unit: float = Field(default=1, gt=0)
+    base_visibility_units: float | None = Field(default=None, ge=0)
+    encounter_rate: float = Field(default=0, ge=0, le=1)
+    footprint: dict[str, Any] | None = None
+    local_bounds: dict[str, Any] | None = None
+
+
+class WorldRootUpdate(BaseModel):
+    root_location_id: str
+    reparent_previous: bool = True
+    adopt_top_level: bool = True
+
+
+class WorldRootCreate(BaseModel):
+    name: str = Field(default="World", min_length=1, max_length=200)
+    topology: Literal["open", "closed"] = "closed"
+    occupancy: Literal["direct_allowed", "child_required"] = "child_required"
+    minutes_per_unit: float = Field(default=1, gt=0)
+    extend_scope: bool = True
+
+
+class MapAnchorUpdate(BaseModel):
+    id: str | None = None
+    location_id: str
+    name: str = Field(min_length=1, max_length=200)
+    kind: Literal["landmark", "entrance", "exit", "waypoint", "encounter"] = "waypoint"
+    x: float | None = None
+    y: float | None = None
+    hidden: bool = False
+    discovered: bool = True
+    enabled: bool = True
+    requires_map_review: bool = False
+
+
+class BarrierUpdate(BaseModel):
+    id: str | None = None
+    location_id: str
+    name: str = Field(min_length=1, max_length=200)
+    geometry: dict[str, Any] | None = None
+    blocked_modes: list[str] = Field(default_factory=lambda: ["walk"])
+    requirements: RequirementExpression | None = None
+    hidden: bool = False
+    discovered: bool = True
+    enabled: bool = True
+    requires_map_review: bool = False
+
+
+class TravelConnectionUpdate(BaseModel):
+    id: str | None = None
+    kind: Literal["route", "door", "portal"] = "route"
+    source_anchor_id: str
+    target_anchor_id: str
+    travel_minutes: int = Field(default=0, ge=0)
+    modes: list[str] = Field(default_factory=lambda: ["walk"])
+    bidirectional: bool = True
+    requirements: RequirementExpression | None = None
+    lock: dict[str, Any] | None = None
+    hidden: bool = False
+    discovered: bool = True
+    enabled: bool = True
+
+
+class EncounterRuleUpdate(BaseModel):
+    id: str | None = None
+    location_id: str | None = None
+    connection_id: str | None = None
+    probability: float = Field(default=0, ge=0, le=1)
+    candidates: list[dict[str, Any]] = Field(default_factory=list)
+    hidden: bool = False
+    discovered: bool = True
+    enabled: bool = True
+
+
+class TravelActionRequest(BaseModel):
+    character_id: str
+    location_id: str | None = None
+    anchor_id: str | None = None
+    x: float | None = None
+    y: float | None = None
+    minutes: float | None = Field(default=None, ge=0)
+    mode: str = Field(default="walk", min_length=1, max_length=64)
+    optional_direction: Literal["north", "south", "east", "west"] | None = None
+    itinerary_id: str | None = None
+
+
+class GeometryEditRequest(BaseModel):
+    operation: Literal["add_point", "move_point", "remove_point"]
+    index: int = Field(ge=0)
+    x: float | None = None
+    y: float | None = None
+
+    @model_validator(mode="after")
+    def require_point_for_add_or_move(self) -> "GeometryEditRequest":
+        if self.operation != "remove_point" and (self.x is None or self.y is None):
+            raise ValueError("add_point and move_point require x and y")
+        return self
+
+
+class MapDiscoveryUpdate(BaseModel):
+    discovered: bool
 
 
 class WeatherProposalDecision(BaseModel):

@@ -245,6 +245,7 @@ export function MusicPlayer({
           <Tooltip title="Open music player">
             <IconButton
               className="music-player-click"
+              aria-label="Open music player"
               onClick={() => setMinimized(false)}
             >
               <MusicNoteIcon color={playing ? "secondary" : "inherit"} />
@@ -263,7 +264,12 @@ export function MusicPlayer({
                 {track?.title ?? theme?.name ?? "Music"}
               </Typography>
               <Tooltip title="Minimize">
-                <IconButton size="small" onClick={() => setMinimized(true)}>
+                <IconButton
+                  className="music-player-click"
+                  aria-label="Minimize music player"
+                  size="small"
+                  onClick={() => setMinimized(true)}
+                >
                   <RemoveIcon />
                 </IconButton>
               </Tooltip>

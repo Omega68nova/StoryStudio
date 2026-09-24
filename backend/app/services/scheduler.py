@@ -213,26 +213,6 @@ class GenerationScheduler:
 
         await self.ai.shutdown()
 
-    async def warm_storyteller(self) -> None:
-        """Best-effort startup warm-up retained for main.py compatibility."""
-        try:
-            await self.ai.warm_text_model()
-            if self.current_job_id is None:
-                await self._set_state("idle")
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            message = f"Storyteller startup failed: {exc}"
-            if self.current_job_id is None:
-                await self._set_state("runtime_error", detail=message)
-            await self.events.publish(
-                "error",
-                {
-                    "source": "storyteller_startup",
-                    "message": message,
-                },
-            )
-
     # ------------------------------------------------------------------
     # Queue operations
     # ------------------------------------------------------------------

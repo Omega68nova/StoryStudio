@@ -81,8 +81,16 @@ class FakeComfy:
 class FakeSupervisor:
     def __init__(self, llama: FakeLlama, comfy: FakeComfy) -> None:
         self.llama, self.comfy = llama, comfy
+        self.llama_requests = 0
+        self.comfy_requests = 0
 
     async def ensure_started(self, settings): return self.llama, self.comfy
+    async def ensure_llama(self, settings, context_tokens=None):
+        self.llama_requests += 1
+        return self.llama
+    async def ensure_comfy(self, settings):
+        self.comfy_requests += 1
+        return self.comfy
     async def shutdown(self) -> None: pass
 
 
@@ -109,6 +117,38 @@ def test_nested_json_cut_after_inner_closing_brace_is_still_truncation() -> None
     raw = '{"outer":{"value":1}'
     error = _planning_json_error(raw)
     assert error and _looks_like_token_truncation(raw, error)
+
+
+@pytest.mark.asyncio
+async def test_scheduler_start_keeps_llama_lazy(tmp_path: Path) -> None:
+    db, _project = setup_db(tmp_path)
+    llama, comfy = FakeLlama(), FakeComfy()
+    supervisor = FakeSupervisor(llama, comfy)
+    scheduler = GenerationScheduler(db, EventHub(), supervisor)
+
+    await scheduler.start()
+
+    assert supervisor.llama_requests == 0
+    assert llama.loads == 0
+    assert scheduler.llama is None
+    await scheduler.stop()
+
+
+@pytest.mark.asyncio
+async def test_image_session_restores_llama_only_after_text_was_requested(tmp_path: Path) -> None:
+    db, _project = setup_db(tmp_path)
+    llama, comfy = FakeLlama(), FakeComfy()
+    supervisor = FakeSupervisor(llama, comfy)
+    scheduler = GenerationScheduler(db, EventHub(), supervisor)
+
+    await scheduler.ai.ensure_text_ready(reason="test text request")
+    async with scheduler.ai.image_session():
+        pass
+
+    assert supervisor.llama_requests == 2
+    assert llama.unloads == 1
+    assert llama.loads == 2
+    assert comfy.frees == 1
 
 
 @pytest.mark.asyncio
@@ -300,7 +340,7 @@ async def test_story_job_creates_reply_and_suggestion(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_image_failure_still_restores_storyteller(tmp_path: Path) -> None:
+async def test_image_failure_does_not_start_unused_storyteller(tmp_path: Path) -> None:
     db, project = setup_db(tmp_path)
     user = db.create_story_node(project["id"], None, "user", "Begin")
     assistant = db.create_story_node(project["id"], user["id"], "assistant", "Scene")
@@ -323,12 +363,12 @@ async def test_image_failure_still_restores_storyteller(tmp_path: Path) -> None:
     await asyncio.wait_for(scheduler.queue.join(), 2)
     await scheduler.stop()
     assert db.get_job(job["id"])["status"] == "failed"
-    assert llama.unloads == 1 and llama.loads == 1
+    assert llama.unloads == 0 and llama.loads == 0
     assert comfy.frees == 1
 
 
 @pytest.mark.asyncio
-async def test_entity_media_image_attaches_output_and_restores_storyteller(tmp_path: Path) -> None:
+async def test_entity_media_image_attaches_output_without_starting_storyteller(tmp_path: Path) -> None:
     db, project = setup_db(tmp_path); now = utc_now(); world = WorldEngine(db)
     created = world.normalize_mutations(project["id"], None, [{"tool": "createEntity", "arguments": {"kind": "location", "name": "Old Gate"}}], provenance="author")
     world.commit_root(project["id"], created, provenance="author", summary="location")
@@ -345,7 +385,7 @@ async def test_entity_media_image_attaches_output_and_restores_storyteller(tmp_p
     assert (db.data_dir / asset["file_path"]).read_bytes() == b"image"
     assert comfy.last_graph["6"]["inputs"]["text"] == "an old gate"
     assert comfy.last_graph["9"]["inputs"]["filename_prefix"] == f"StoryStudio_{job['id']}"
-    assert llama.unloads == 1 and llama.loads == 1 and comfy.frees == 1
+    assert llama.unloads == 0 and llama.loads == 0 and comfy.frees == 1
 
 
 @pytest.mark.asyncio

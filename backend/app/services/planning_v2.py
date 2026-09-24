@@ -41,8 +41,8 @@ STAGE_CONSUMES = {
 }
 
 STAGE_GENERATION_FOCI: dict[int, tuple[str, ...]] = {
-    2: ("locations", "weather", "factions", "routes"),
-    3: ("locations", "routes"),
+    2: ("locations", "weather", "factions", "anchors", "connections"),
+    3: ("locations", "anchors", "connections"),
     4: ("lore_systems", "stats", "abilities", "items"),
     5: ("characters", "factions", "facts"),
     6: ("character_updates", "outfits", "relationships", "routines", "facts", "plot_beats"),
@@ -72,8 +72,8 @@ def empty_draft(stage_number: int) -> dict[str, Any]:
     base: dict[str, Any] = {"summary": "", "notes": []}
     payloads: dict[int, dict[str, Any]] = {
         1: {"foundation": {"premise": "", "genres": [], "themes": [], "tone": "", "style": "", "world_description": "", "character_description": "", "narration_mode": "third_limited", "pov_strategy": "first_player"}},
-        2: {"locations": [], "routes": [], "factions": [], "weather": [], "weather_transitions": [], "initial_weather_key": ""},
-        3: {"locations": [], "routes": []},
+        2: {"root_location_key": "", "locations": [], "anchors": [], "connections": [], "factions": [], "weather": [], "weather_transitions": [], "initial_weather_key": ""},
+        3: {"locations": [], "anchors": [], "connections": []},
         4: {"lore_systems": [], "stats": [], "abilities": [], "items": []},
         5: {"characters": [], "factions": [], "facts": [], "default_pov_character_key": ""},
         6: {"character_updates": [], "outfits": [], "relationships": [], "routines": [], "facts": [], "plot_beats": []},
@@ -86,8 +86,8 @@ def empty_draft(stage_number: int) -> dict[str, Any]:
 def compact_schema(stage_number: int, focus: str | None = None) -> dict[str, Any]:
     examples = {
         1: {"foundation": {"premise": "", "genres": [], "themes": [], "tone": "", "style": "", "world_description": "", "character_description": "", "narration_mode": "third_limited", "pov_strategy": "first_player"}},
-        2: {"locations": [{"key": "", "name": "", "tags": [], "state": {"description": "", "imagegen_description": "", "parent_location_key": None, "exposure": "outdoor", "planning_tier": "major", "important": True}}], "routes": [{"key": "", "source_key": "", "target_key": "", "relation": "route", "travel_minutes": 0, "modes": ["walk"], "bidirectional": True}], "factions": [], "weather": [{"key": "", "name": "", "description": "", "imagegen_description": "", "tags": [], "image_tags": [], "enabled": True}], "weather_transitions": [{"source_key": "", "target_key": ""}], "initial_weather_key": ""},
-        3: {"locations": [{"key": "", "name": "", "tags": [], "state": {"description": "", "imagegen_description": "", "parent_location_key": "", "exposure": "indoor", "planning_tier": "minor", "important": False}}], "routes": []},
+        2: {"root_location_key": "world", "locations": [{"key": "world", "preset": "routed_map", "name": "", "tags": [], "state": {"description": "", "imagegen_description": "", "parent_location_key": None, "exposure": "outdoor", "topology": "closed", "occupancy": "child_required", "boundary_access": "free", "spatial_kind": "area", "planning_tier": "major", "important": True}}], "anchors": [{"key": "", "location_key": "", "name": "", "kind": "waypoint", "x": None, "y": None}], "connections": [{"key": "", "kind": "route", "source_anchor_key": "", "target_anchor_key": "", "travel_minutes": 0, "modes": ["walk"], "bidirectional": True}], "factions": [], "weather": [{"key": "", "name": "", "description": "", "imagegen_description": "", "tags": [], "image_tags": [], "enabled": True}], "weather_transitions": [{"source_key": "", "target_key": ""}], "initial_weather_key": ""},
+        3: {"locations": [{"key": "", "preset": "house", "name": "", "tags": [], "state": {"description": "", "imagegen_description": "", "parent_location_key": "", "exposure": "indoor", "topology": "closed", "occupancy": "child_required", "boundary_access": "connection_required", "spatial_kind": "area", "planning_tier": "minor", "important": False}}], "anchors": [], "connections": []},
         4: {
             "lore_systems": [{
                 "key": "magic_system", "name": "Magic System", "aliases": [], "tags": ["magic"],
@@ -299,6 +299,24 @@ def validate_stage(stage_number: int, draft: dict[str, Any], settings: dict[str,
     for relation in relations:
         if not relation.get("source_key") or not relation.get("target_key") or not str(relation.get("relation") or "").strip():
             raise WorldValidationError("Every planning relationship requires source, target, and relation")
+    location_keys = {str(item.get("key")) for item in draft.get("locations", []) if isinstance(item, dict)}
+    anchor_keys: set[str] = set()
+    for location in draft.get("locations", []):
+        if not isinstance(location, dict):
+            continue
+        state = location.get("state") or {}
+        if state.get("topology", "closed") not in {"open", "closed"} or state.get("occupancy", "direct_allowed") not in {"direct_allowed", "child_required"}:
+            raise WorldValidationError("Planning locations require valid topology and occupancy")
+    for anchor in draft.get("anchors", []):
+        key, location_key = str(anchor.get("key") or ""), str(anchor.get("location_key") or "")
+        if not key or key in anchor_keys or not location_key:
+            raise WorldValidationError("Planning anchors require unique keys and a location_key")
+        anchor_keys.add(key)
+    for connection in draft.get("connections", []):
+        if connection.get("kind", "route") not in {"route", "door", "portal"} or connection.get("source_anchor_key") not in anchor_keys or connection.get("target_anchor_key") not in anchor_keys:
+            raise WorldValidationError("Planning connections require a valid kind and two generated anchor keys")
+    if draft.get("root_location_key") and str(draft["root_location_key"]) not in location_keys:
+        raise WorldValidationError("Planning root_location_key must reference a generated location")
     #if settings:
         #caps = {2: ("locations", "major_locations"), 3: ("locations", "minor_locations"), 5: ("characters", "characters")}
         #if stage_number in caps:

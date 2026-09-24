@@ -52,6 +52,58 @@ class Exposure(StrEnum):
     ISOLATED = "isolated"
 
 
+class LocationTopology(StrEnum):
+    OPEN = "open"
+    CLOSED = "closed"
+
+
+class LocationOccupancy(StrEnum):
+    DIRECT_ALLOWED = "direct_allowed"
+    CHILD_REQUIRED = "child_required"
+
+
+class BoundaryAccess(StrEnum):
+    FREE = "free"
+    CONNECTION_REQUIRED = "connection_required"
+
+
+class SpatialKind(StrEnum):
+    SPOT = "spot"
+    AREA = "area"
+
+
+class GeometryKind(StrEnum):
+    POINT = "point"
+    POLYLINE = "polyline"
+    POLYGON = "polygon"
+
+
+class AnchorKind(StrEnum):
+    LANDMARK = "landmark"
+    ENTRANCE = "entrance"
+    EXIT = "exit"
+    WAYPOINT = "waypoint"
+    ENCOUNTER = "encounter"
+
+
+class ConnectionKind(StrEnum):
+    ROUTE = "route"
+    DOOR = "door"
+    PORTAL = "portal"
+
+
+class LockSuccessBehavior(StrEnum):
+    PERSISTENT = "persistent"
+    ONE_PASS = "one_pass"
+
+
+class ItineraryStatus(StrEnum):
+    ACTIVE = "active"
+    PAUSED = "paused"
+    COMPLETED = "completed"
+    CANCELLED = "cancelled"
+
+
 class StatScope(StrEnum):
     CHARACTER = "character"
     RELATIONSHIP = "relationship"
@@ -118,6 +170,7 @@ class RequirementKind(StrEnum):
     LOCATION = "location"
     TIME = "time"
     WEATHER = "weather"
+    HAS_ABILITY = "has_ability"
 
 
 class ComparisonOperator(StrEnum):
@@ -162,6 +215,7 @@ class CharacterState(DomainModel):
     description: str = ""
     pronouns: str = ""
     appearance: str = ""
+    imagegen_description: str = ""
     personality: str = ""
     goals: list[str] = Field(default_factory=list)
     character_secrets: list[str] = Field(default_factory=list)
@@ -171,6 +225,8 @@ class CharacterState(DomainModel):
     autonomy_enabled: bool = False
     intervention_frequency: str = "normal"
     current_location_id: DomainId | None = None
+    current_x: Number | None = None
+    current_y: Number | None = None
     wardrobe_notes: str = ""
     equipment: list[str] = Field(default_factory=list)
     inventory: list[InventoryEntry] = Field(default_factory=list)
@@ -246,6 +302,30 @@ class CharacterState(DomainModel):
         )
 
 
+class MapPoint(DomainModel):
+    x: Number
+    y: Number
+
+
+class MapGeometry(DomainModel):
+    id: DomainId | None = None
+    location_id: DomainId
+    kind: GeometryKind
+    points: list[MapPoint]
+    hidden: bool = False
+    discovered: bool = True
+    requires_map_review: bool = False
+
+    @model_validator(mode="after")
+    def validate_points(self) -> "MapGeometry":
+        minimum = {"point": 1, "polyline": 2, "polygon": 3}[str(self.kind)]
+        if len(self.points) < minimum:
+            raise ValueError(f"{self.kind} geometry needs at least {minimum} point(s)")
+        if self.kind == GeometryKind.POINT and len(self.points) != 1:
+            raise ValueError("point geometry needs exactly one point")
+        return self
+
+
 class LocationState(DomainModel):
     description: str = ""
     imagegen_description: str = ""
@@ -254,8 +334,18 @@ class LocationState(DomainModel):
     exposure: Exposure = Exposure.OUTDOOR
     x: Number | None = None
     y: Number | None = None
+    topology: LocationTopology = LocationTopology.CLOSED
+    occupancy: LocationOccupancy = LocationOccupancy.DIRECT_ALLOWED
+    boundary_access: BoundaryAccess = BoundaryAccess.FREE
+    spatial_kind: SpatialKind = SpatialKind.SPOT
+    minutes_per_unit: float = Field(default=1, gt=0)
+    base_visibility_units: float | None = Field(default=None, ge=0)
+    footprint: MapGeometry | None = None
+    local_bounds: MapGeometry | None = None
+    encounter_rate: float = Field(default=0, ge=0, le=1)
     enabled: bool = True
     random_encounter: bool = False
+    hidden: bool = False
     discovered: bool = True
     important: bool = False
     planning_tier: str = "minor"
@@ -270,6 +360,95 @@ class LocationState(DomainModel):
             id=self.parent_location_id,
             kind=DomainKind.LOCATION,
         )
+
+
+TextOrList: TypeAlias = str | list[str]
+
+
+class FactionState(DomainModel):
+    summary: str = ""
+    description: str = ""
+    imagegen_description: str = ""
+    culture: str = ""
+    goals: list[str] = Field(default_factory=list)
+    secrets: TextOrList = ""
+    status: str = ""
+    archived: bool = False
+    visibility: str = "public"
+
+
+class ItemState(DomainModel):
+    summary: str = ""
+    description: str = ""
+    imagegen_description: str = ""
+    appearance: str = ""
+    status: str = ""
+    abilities: list[str] = Field(default_factory=list)
+    current_location_id: DomainId | None = None
+    archived: bool = False
+    visibility: str = "public"
+
+    @property
+    def current_location(self) -> DomainReference | None:
+        if self.current_location_id is None:
+            return None
+        return DomainReference(
+            id=self.current_location_id,
+            kind=DomainKind.LOCATION,
+        )
+
+
+class LoreSystemState(DomainModel):
+    summary: str = ""
+    description: str = ""
+    imagegen_description: str = ""
+    rules: TextOrList = ""
+    limits: TextOrList = ""
+    costs: TextOrList = ""
+    secrets: TextOrList = ""
+    archived: bool = False
+    visibility: str = "public"
+
+
+class FactState(DomainModel):
+    summary: str = ""
+    description: str = ""
+    visibility: str = "public"
+    revealed: bool = False
+    known_character_ids: list[DomainId] = Field(default_factory=list)
+    known_faction_ids: list[DomainId] = Field(default_factory=list)
+    archived: bool = False
+
+    @property
+    def known_characters(self) -> list[DomainReference]:
+        return [
+            DomainReference(id=entity_id, kind=DomainKind.CHARACTER)
+            for entity_id in self.known_character_ids
+        ]
+
+    @property
+    def known_factions(self) -> list[DomainReference]:
+        return [
+            DomainReference(id=entity_id, kind=DomainKind.FACTION)
+            for entity_id in self.known_faction_ids
+        ]
+
+
+class PlotBeatStatus(StrEnum):
+    PLANNED = "planned"
+    AVAILABLE = "available"
+    ACTIVE = "active"
+    RESOLVED = "resolved"
+    ABANDONED = "abandoned"
+
+
+class PlotBeatState(DomainModel):
+    summary: str = ""
+    description: str = ""
+    status: PlotBeatStatus = PlotBeatStatus.PLANNED
+    goals: list[str] = Field(default_factory=list)
+    archived: bool = False
+    visibility: str = "public"
 
 
 class WorldEntity(DomainModel):
@@ -301,7 +480,41 @@ class Location(WorldEntity):
     state: LocationState = Field(default_factory=LocationState)
 
 
-TypedWorldEntity: TypeAlias = Character | Location | GenericWorldEntity
+class Faction(WorldEntity):
+    kind: Literal["faction"]
+    state: FactionState = Field(default_factory=FactionState)
+
+
+class Item(WorldEntity):
+    kind: Literal["item"]
+    state: ItemState = Field(default_factory=ItemState)
+
+
+class LoreSystem(WorldEntity):
+    kind: Literal["lore_system"]
+    state: LoreSystemState = Field(default_factory=LoreSystemState)
+
+
+class Fact(WorldEntity):
+    kind: Literal["fact"]
+    state: FactState = Field(default_factory=FactState)
+
+
+class PlotBeat(WorldEntity):
+    kind: Literal["plot_beat"]
+    state: PlotBeatState = Field(default_factory=PlotBeatState)
+
+
+TypedWorldEntity: TypeAlias = (
+    Character
+    | Location
+    | Faction
+    | Item
+    | LoreSystem
+    | Fact
+    | PlotBeat
+    | GenericWorldEntity
+)
 
 
 class Relationship(DomainModel):
@@ -457,6 +670,7 @@ class RequirementExpression(DomainModel):
     location_id: DomainId | None = None
     time_phase_id: DomainId | None = None
     weather_id: DomainId | None = None
+    ability_key: str | None = None
 
     @model_validator(mode="after")
     def validate_tree_shape(self) -> RequirementExpression:
@@ -480,7 +694,112 @@ class RequirementExpression(DomainModel):
             raise ValueError("time requirement needs time_phase_id")
         if self.kind == RequirementKind.WEATHER and not self.weather_id:
             raise ValueError("weather requirement needs weather_id")
+        if self.kind == RequirementKind.HAS_ABILITY and not self.ability_key:
+            raise ValueError("has_ability requirement needs ability_key")
         return self
+
+
+class MapAnchor(DomainModel):
+    id: DomainId
+    location_id: DomainId
+    name: str = Field(min_length=1)
+    kind: AnchorKind = AnchorKind.WAYPOINT
+    x: Number | None = None
+    y: Number | None = None
+    hidden: bool = False
+    discovered: bool = True
+    enabled: bool = True
+    requires_map_review: bool = False
+
+    @model_validator(mode="after")
+    def validate_position(self) -> "MapAnchor":
+        if (self.x is None) != (self.y is None):
+            raise ValueError("map anchor x and y must both be set or both be null")
+        if self.x is None:
+            self.requires_map_review = True
+        return self
+
+
+class ConnectionLock(DomainModel):
+    locked: bool = True
+    minigame_key: str | None = None
+    difficulty: int = Field(default=1, ge=0)
+    success_behavior: LockSuccessBehavior = LockSuccessBehavior.PERSISTENT
+
+
+class EncounterCandidate(DomainModel):
+    location_id: DomainId
+    weight: float = Field(default=1, gt=0)
+
+
+class EncounterRule(DomainModel):
+    id: DomainId
+    location_id: DomainId | None = None
+    connection_id: DomainId | None = None
+    probability: float = Field(default=0, ge=0, le=1)
+    candidates: list[EncounterCandidate] = Field(default_factory=list)
+    hidden: bool = False
+    discovered: bool = True
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_owner(self) -> "EncounterRule":
+        if bool(self.location_id) == bool(self.connection_id):
+            raise ValueError("encounter rule needs exactly one location or connection owner")
+        return self
+
+
+class Barrier(DomainModel):
+    id: DomainId
+    location_id: DomainId
+    name: str = Field(min_length=1)
+    geometry: MapGeometry | None = None
+    blocked_modes: list[str] = Field(default_factory=lambda: ["walk"])
+    requirements: RequirementExpression | None = None
+    hidden: bool = False
+    discovered: bool = True
+    enabled: bool = True
+    requires_map_review: bool = False
+
+
+class TravelConnection(DomainModel):
+    id: DomainId
+    kind: ConnectionKind = ConnectionKind.ROUTE
+    source_anchor_id: DomainId
+    target_anchor_id: DomainId
+    travel_minutes: int = Field(default=0, ge=0)
+    modes: list[str] = Field(default_factory=lambda: ["walk"])
+    bidirectional: bool = True
+    requirements: RequirementExpression | None = None
+    lock: ConnectionLock | None = None
+    hidden: bool = False
+    discovered: bool = True
+    enabled: bool = True
+
+
+class TravelSegment(DomainModel):
+    kind: Literal["geometric", "connection"]
+    source_location_id: DomainId
+    target_location_id: DomainId
+    minutes: float = Field(ge=0)
+    connection_id: DomainId | None = None
+    points: list[MapPoint] = Field(default_factory=list)
+
+
+class TravelItinerary(DomainModel):
+    id: DomainId
+    character_id: DomainId
+    destination_location_id: DomainId | None = None
+    destination_anchor_id: DomainId | None = None
+    destination_x: Number | None = None
+    destination_y: Number | None = None
+    mode: str = "walk"
+    segments: list[TravelSegment] = Field(default_factory=list)
+    current_segment: int = Field(default=0, ge=0)
+    remaining_minutes: float = Field(default=0, ge=0)
+    status: ItineraryStatus = ItineraryStatus.ACTIVE
+    interruption: dict[str, Any] | None = None
+    traversal_seed: str = ""
 
 
 class ActionEffect(DomainModel):

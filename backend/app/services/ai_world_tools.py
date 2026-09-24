@@ -22,6 +22,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "searchLocations": "Search the complete ordinary location catalog in bounded pages.",
     "getLocationMap": "Read one compact hierarchical map layer.",
     "getSceneEnvironment": "Read the current compact scene environment.",
+    "getLocalMap": "Read the discovered local map as semantic locations, exits, locks, risks, and blocked reasons; raw geometry is omitted.",
+    "getTravelOptions": "List currently reachable discovered destinations and estimated travel time.",
+    "previewTravel": "Preview travel time, segments, requirements, risk, and compact blocked reasons.",
+    "getTravelStatus": "Read a character's active or named travel itinerary.",
+    "getSpatialPresets": "List compact reviewed location, barrier, door, and portal creation presets.",
     "createEntity": "Stage creation of a canonical typed world entity.",
     "updateEntity": "Stage a merge patch to an existing entity.",
     "moveCharacter": "Stage movement to a location over a valid route.",
@@ -35,6 +40,19 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "setSceneEnvironment": "Set the focused player, short lowercase -ing action, and optionally valid next weather.",
     "proposeWeather": "Propose a reusable weather definition for administrator review.",
     "playNoise": "Play one enabled one-shot noise from the project catalog.",
+    "setWorldRoot": "Select a location as the branch world root and optionally place the previous root beneath it.",
+    "upsertMapAnchor": "Create or edit a named landmark, entrance, exit, waypoint, or encounter point using flat coordinates.",
+    "upsertBarrier": "Create or edit a reviewed map barrier with modes and typed requirements.",
+    "upsertTravelConnection": "Create or edit a route, door, or portal between named anchors.",
+    "upsertEncounterRule": "Configure deterministic weighted encounters for a location or connection.",
+    "setMapDiscovery": "Reveal or hide one map object without changing its mechanical behavior.",
+    "travelTo": "Travel a character to a named location using engine-resolved paths.",
+    "travelTowards": "Travel toward a named destination for a bounded number of minutes.",
+    "exploreFor": "Explore deterministically for a number of minutes and optional cardinal direction.",
+    "resumeTravel": "Explicitly resume a paused itinerary.",
+    "createLocationFromPreset": "Create a location from a reviewed preset using a name and flat overrides.",
+    "editMapGeometry": "Add, move, or remove one reviewed barrier point without replacing raw geometry JSON.",
+    "removeMapObject": "Remove one anchor, barrier, connection, or encounter rule after dependency validation.",
 }
 
 PLANNER_WRITE_TOOLS = {
@@ -51,6 +69,19 @@ PLANNER_WRITE_TOOLS = {
     "setSceneEnvironment",
     "proposeWeather",
     "playNoise",
+    "setWorldRoot",
+    "upsertMapAnchor",
+    "upsertBarrier",
+    "upsertTravelConnection",
+    "upsertEncounterRule",
+    "setMapDiscovery",
+    "travelTo",
+    "travelTowards",
+    "exploreFor",
+    "resumeTravel",
+    "createLocationFromPreset",
+    "editMapGeometry",
+    "removeMapObject",
 }
 
 
@@ -80,6 +111,16 @@ class AIAliasResolver:
             self.by_id[relation_id] = key
             for value in (relation_id, key):
                 candidates.setdefault(value.casefold(), set()).add(relation_id)
+        for collection in ("map_anchors", "map_barriers", "travel_connections", "encounter_rules", "travel_itineraries"):
+            for item in projection.get(collection, {}).values():
+                item_id = str(item["id"])
+                label = str(item.get("name") or item.get("kind") or collection.rstrip("s"))
+                base = re.sub(r"[^a-z0-9]+", "_", label.casefold()).strip("_") or "map_object"
+                key = base if base not in self.by_id.values() else f"{base}_{item_id.replace('-', '')[:6]}"
+                self.by_id[item_id] = key
+                for value in (item_id, key, item.get("name")):
+                    if value:
+                        candidates.setdefault(str(value).strip().casefold(), set()).add(item_id)
         self.lookup = {key: next(iter(ids)) for key, ids in candidates.items() if len(ids) == 1}
 
     def canonicalize(self, value: Any, key: str = "") -> Any:

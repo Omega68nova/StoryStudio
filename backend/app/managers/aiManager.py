@@ -211,35 +211,40 @@ class AIGeneratorManager:
         restore_text: bool = True,
         restore_runtime_mode: RuntimeMode | None = None,
     ) -> AsyncIterator[ComfyClient]:
-        """Give ComfyUI exclusive GPU ownership, then restore llama.cpp.
+        """Give ComfyUI exclusive GPU ownership, then restore active text.
 
         The ownership lock is held for the entire image operation. That mirrors
         the scheduler's current single-GPU assumption and prevents a second
         generation path from reloading llama.cpp halfway through a workflow.
+        An image-first session does not start llama.cpp merely to unload it.
         """
         async with self._runtime_lock:
+            restore_loaded_text = restore_text and self.gpu_owner == "text"
             comfy = await self._ensure_comfy_runtime_unlocked()
-            llama = await self._ensure_llama_runtime_unlocked(
-                restore_runtime_mode or self.llama_runtime_mode
-            )
+            llama: LlamaClient | None = None
+            if restore_loaded_text:
+                llama = await self._ensure_llama_runtime_unlocked(
+                    restore_runtime_mode or self.llama_runtime_mode
+                )
 
             await self._state("switching_to_image", reason)
             self.transition_reason = reason
 
-            status = (
-                await llama.model_status()
-                if hasattr(llama, "model_status")
-                else None
-            )
-            if status != "unloaded":
-                await llama.unload()
-                self.unload_count += 1
+            if llama is not None:
+                status = (
+                    await llama.model_status()
+                    if hasattr(llama, "model_status")
+                    else None
+                )
+                if status != "unloaded":
+                    await llama.unload()
+                    self.unload_count += 1
 
             self.gpu_owner = "image"
             try:
                 yield comfy
             finally:
-                if restore_text:
+                if restore_loaded_text and llama is not None:
                     await self._state(
                         "restoring_storyteller",
                         "image generation finished; restoring text model",
@@ -258,12 +263,6 @@ class AIGeneratorManager:
                     # release ComfyUI's loaded models so ownership is explicit.
                     await comfy.free()
                     self.gpu_owner = None
-
-    async def warm_text_model(self) -> None:
-        """Best-effort warm-up hook; caller decides how failures are reported."""
-        await self.ensure_text_ready(
-            "normal", reason="application startup warm-up"
-        )
 
     async def interrupt_image(self) -> None:
         if self.comfy is not None:

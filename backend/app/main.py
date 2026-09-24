@@ -86,7 +86,10 @@ from app.schemas import (
     AmbientPreferenceUpdate, AmbientVariantCreate, AmbientAssignmentCreate, AmbientSoundSetsUpdate, WeatherProposalDecision,
     NoisePreferenceUpdate, NoiseVariantUpdate,
     SceneEnvironmentUpdate,
-    LocationBackgroundCreate, EnvironmentLocationUpdate,
+    LocationBackgroundCreate, EnvironmentLocationUpdate, WorldRootUpdate, WorldRootCreate,
+    MapAnchorUpdate, BarrierUpdate, TravelConnectionUpdate, EncounterRuleUpdate,
+    TravelActionRequest,
+    GeometryEditRequest, MapDiscoveryUpdate,
 )
 from app.services.events import EventHub
 from app.services.runtimes import ComfyClient, LlamaClient, ProcessSupervisor
@@ -130,16 +133,9 @@ BUILD_VERSION = "0.17.0-environment"
 async def lifespan(_: FastAPI):
     db.initialize()
     await scheduler.start()
-    warmup = asyncio.create_task(scheduler.warm_storyteller(), name="storyteller-startup-warmup")
     try:
         yield
     finally:
-        if not warmup.done():
-            warmup.cancel()
-            try:
-                await warmup
-            except asyncio.CancelledError:
-                pass
         await scheduler.stop()
 
 
@@ -1266,6 +1262,205 @@ async def get_environment_map(project_id: str, parent_id: str | None = None) -> 
     return environment.map_layer(project_id, scheduler.world.projection(project_id), parent_id, admin=current_user().admin)
 
 
+def _commit_spatial_mutation(project_id: str, tool: str, arguments: dict[str, Any], summary: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    project = require_project(project_id)
+    mutations = scheduler.world.normalize_mutations(
+        project_id, project.get("active_node_id"),
+        [{"tool": tool, "arguments": arguments}], provenance="author",
+    )
+    transaction = (
+        scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="author", summary=summary)
+        if project.get("active_node_id") else
+        scheduler.world.commit_root(project_id, mutations, provenance="author", summary=summary)
+    )
+    return transaction, mutations[0].arguments
+
+
+def _commit_spatial_mutations(project_id: str, raw: list[dict[str, Any]], summary: str) -> tuple[dict[str, Any], list[Any]]:
+    project = require_project(project_id)
+    mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), raw, provenance="author")
+    transaction = (
+        scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="author", summary=summary)
+        if project.get("active_node_id") else
+        scheduler.world.commit_root(project_id, mutations, provenance="author", summary=summary)
+    )
+    return transaction, mutations
+
+
+@app.get("/api/projects/{project_id}/spatial/map")
+async def get_spatial_map(project_id: str, location_id: str | None = None) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial import SpatialService
+    return SpatialService(scheduler.world.projection(project_id)).local_map(location_id, administrative=current_user().admin, include_geometry=current_user().admin)
+
+
+@app.put("/api/projects/{project_id}/spatial/root")
+async def set_spatial_root(project_id: str, request: WorldRootUpdate) -> dict[str, Any]:
+    try:
+        transaction, arguments = _commit_spatial_mutation(project_id, "setWorldRoot", request.model_dump(), "World root changed")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.post("/api/projects/{project_id}/spatial/root", status_code=201)
+async def create_spatial_root(project_id: str, request: WorldRootCreate) -> dict[str, Any]:
+    root_id = new_id()
+    raw = [
+        {"tool": "createEntity", "arguments": {"entity_id": root_id, "kind": "location", "name": request.name, "state": {
+            "topology": request.topology, "occupancy": request.occupancy, "boundary_access": "free", "spatial_kind": "area",
+            "minutes_per_unit": request.minutes_per_unit, "enabled": True, "discovered": True, "exposure": "outdoor",
+        }}},
+        {"tool": "setWorldRoot", "arguments": {"root_location_id": root_id, "reparent_previous": request.extend_scope, "adopt_top_level": request.extend_scope}},
+    ]
+    try:
+        transaction, _ = _commit_spatial_mutations(project_id, raw, "World scope extended" if request.extend_scope else "World root created")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return scheduler.world.entity_card(project_id, root_id)
+
+
+@app.post("/api/projects/{project_id}/spatial/migrate")
+async def migrate_legacy_spatial_map(project_id: str) -> dict[str, Any]:
+    projection = scheduler.world.projection(project_id)
+    if projection.get("root_location_id"):
+        return {"changed": False, "root_location_id": projection["root_location_id"]}
+    top_level = [item for item in projection["entities"].values() if item.get("kind") == "location" and not item.get("state", {}).get("archived") and not item.get("state", {}).get("parent_location_id")]
+    if not top_level:
+        return {"changed": False, "root_location_id": None, "spatial_enabled": False}
+    root_id = top_level[0]["id"] if len(top_level) == 1 else new_id()
+    raw = []
+    if len(top_level) > 1:
+        raw.append({"tool": "createEntity", "arguments": {"entity_id": root_id, "kind": "location", "name": "World", "state": {"topology": "closed", "occupancy": "child_required", "boundary_access": "free", "spatial_kind": "area", "enabled": True, "discovered": True, "exposure": "outdoor"}}})
+    for location in projection["entities"].values():
+        state = location.get("state", {})
+        if location.get("kind") != "location" or state.get("footprint") or state.get("x") is None or state.get("y") is None:
+            continue
+        coordinate_space = state.get("parent_location_id") or (root_id if location["id"] != root_id else location["id"])
+        raw.append({"tool": "updateEntity", "arguments": {"entity_id": location["id"], "patch": {"footprint": {"location_id": coordinate_space, "kind": "point", "points": [{"x": state["x"], "y": state["y"]}]}}}})
+    raw.append({"tool": "setWorldRoot", "arguments": {"root_location_id": root_id, "adopt_top_level": True, "reparent_previous": True}})
+    for relation in projection.get("relations", {}).values():
+        if relation.get("relation") != "route":
+            continue
+        source = projection["entities"].get(relation.get("source_id"), {})
+        target = projection["entities"].get(relation.get("target_id"), {})
+        if source.get("kind") != "location" or target.get("kind") != "location":
+            continue
+        source_anchor, target_anchor = new_id(), new_id()
+        raw.extend([
+            {"tool": "upsertMapAnchor", "arguments": {"id": source_anchor, "location_id": source["id"], "name": f"{source['name']} route", "kind": "waypoint", "x": source.get("state", {}).get("x"), "y": source.get("state", {}).get("y"), "discovered": relation.get("discovered", True)}},
+            {"tool": "upsertMapAnchor", "arguments": {"id": target_anchor, "location_id": target["id"], "name": f"{target['name']} route", "kind": "waypoint", "x": target.get("state", {}).get("x"), "y": target.get("state", {}).get("y"), "discovered": relation.get("discovered", True)}},
+            {"tool": "upsertTravelConnection", "arguments": {"id": relation["id"], "kind": "route", "source_anchor_id": source_anchor, "target_anchor_id": target_anchor, "travel_minutes": max(0, int(relation.get("travel_minutes", 0))), "modes": relation.get("modes", ["walk"]), "bidirectional": relation.get("bidirectional", True), "enabled": not relation.get("blocked", False), "discovered": relation.get("discovered", True), "legacy_migration": True}},
+        ])
+    encounter_groups: dict[str, list[dict[str, Any]]] = {}
+    for location in projection["entities"].values():
+        state = location.get("state", {})
+        if location.get("kind") == "location" and state.get("random_encounter") and state.get("parent_location_id"):
+            encounter_groups.setdefault(str(state["parent_location_id"]), []).append({"location_id": location["id"], "weight": float(state.get("encounter_weight", 1))})
+    raw.extend({"tool": "upsertEncounterRule", "arguments": {"location_id": parent_id, "probability": 0, "candidates": candidates, "discovered": True}} for parent_id, candidates in encounter_groups.items())
+    try:
+        transaction, _ = _commit_spatial_mutations(project_id, raw, "Migrated legacy location map")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return {"changed": True, "root_location_id": root_id, "transaction_id": transaction["id"]}
+
+
+@app.put("/api/projects/{project_id}/spatial/anchors")
+async def upsert_map_anchor(project_id: str, request: MapAnchorUpdate) -> dict[str, Any]:
+    try:
+        transaction, arguments = _commit_spatial_mutation(project_id, "upsertMapAnchor", request.model_dump(exclude_none=True), "Map anchor changed")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.put("/api/projects/{project_id}/spatial/barriers")
+async def upsert_map_barrier(project_id: str, request: BarrierUpdate) -> dict[str, Any]:
+    try:
+        transaction, arguments = _commit_spatial_mutation(project_id, "upsertBarrier", request.model_dump(mode="json", exclude_none=True), "Map barrier changed")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.put("/api/projects/{project_id}/spatial/connections")
+async def upsert_travel_connection(project_id: str, request: TravelConnectionUpdate) -> dict[str, Any]:
+    try:
+        transaction, arguments = _commit_spatial_mutation(project_id, "upsertTravelConnection", request.model_dump(mode="json", exclude_none=True), "Travel connection changed")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.put("/api/projects/{project_id}/spatial/encounters")
+async def upsert_encounter_rule(project_id: str, request: EncounterRuleUpdate) -> dict[str, Any]:
+    try:
+        transaction, arguments = _commit_spatial_mutation(project_id, "upsertEncounterRule", request.model_dump(mode="json", exclude_none=True), "Encounter rule changed")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.patch("/api/projects/{project_id}/spatial/barriers/{barrier_id}/geometry")
+async def edit_barrier_geometry(project_id: str, barrier_id: str, request: GeometryEditRequest) -> dict[str, Any]:
+    try:
+        transaction, arguments = _commit_spatial_mutation(project_id, "editMapGeometry", {"barrier_id": barrier_id, **request.model_dump(exclude_none=True)}, "Barrier geometry changed")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.put("/api/projects/{project_id}/spatial/{kind}/{object_id}/discovery")
+async def set_spatial_discovery(project_id: str, kind: str, object_id: str, request: MapDiscoveryUpdate) -> dict[str, Any]:
+    try:
+        transaction, arguments = _commit_spatial_mutation(project_id, "setMapDiscovery", {"kind": kind, "id": object_id, "discovered": request.discovered}, "Map discovery changed")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.delete("/api/projects/{project_id}/spatial/{kind}/{object_id}", status_code=204)
+async def remove_spatial_object(project_id: str, kind: str, object_id: str) -> None:
+    try:
+        transaction, _ = _commit_spatial_mutation(project_id, "removeMapObject", {"kind": kind, "id": object_id}, "Map object removed")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+
+
+@app.get("/api/projects/{project_id}/spatial/travel/preview")
+async def preview_spatial_travel(project_id: str, character_id: str, location_id: str, mode: str = "walk") -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial import SpatialService, SpatialValidationError
+    try:
+        return SpatialService(scheduler.world.projection(project_id)).preview(character_id, location_id, mode)
+    except SpatialValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/spatial/travel/{action}")
+async def perform_spatial_travel(project_id: str, action: str, request: TravelActionRequest) -> dict[str, Any]:
+    tools = {"to": "travelTo", "towards": "travelTowards", "explore": "exploreFor", "resume": "resumeTravel"}
+    if action not in tools:
+        raise HTTPException(404, "Unknown travel action")
+    try:
+        transaction, arguments = _commit_spatial_mutation(project_id, tools[action], request.model_dump(exclude_none=True), f"Travel {action}")
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    await events.publish("environment", {"project_id": project_id, "action": "location_changed"})
+    return arguments["itinerary"]
+
+
 @app.get("/api/projects/{project_id}/environment/settings")
 async def get_environment_settings(project_id: str) -> dict[str, Any]:
     require_project(project_id)
@@ -1282,8 +1477,8 @@ async def update_environment_settings(project_id: str, request: EnvironmentSetti
     if request.background_workflow_id and not db.fetch_one("SELECT id FROM workflow_presets WHERE id=?", (request.background_workflow_id,)):
         raise HTTPException(422, "Background workflow not found")
     db.execute(
-        "UPDATE project_environment_settings SET enabled=?,ai_create_locations=?,ai_propose_weather=?,auto_generate_backgrounds=?,background_workflow_id=?,initial_weather_id=?,revision=revision+1,updated_at=? WHERE project_id=?",
-        (int(request.enabled), int(request.ai_create_locations), int(request.ai_propose_weather), int(request.auto_generate_backgrounds), request.background_workflow_id, request.initial_weather_id, utc_now(), project_id),
+        "UPDATE project_environment_settings SET enabled=?,ai_create_locations=?,ai_propose_weather=?,auto_generate_backgrounds=?,background_workflow_id=?,initial_weather_id=?,perception_stat_key=?,revision=revision+1,updated_at=? WHERE project_id=?",
+        (int(request.enabled), int(request.ai_create_locations), int(request.ai_propose_weather), int(request.auto_generate_backgrounds), request.background_workflow_id, request.initial_weather_id, request.perception_stat_key, utc_now(), project_id),
     )
     await events.publish("environment", {"project_id": project_id, "action": "settings_changed"})
     return environment.settings(project_id)
@@ -1293,7 +1488,7 @@ async def update_environment_settings(project_id: str, request: EnvironmentSetti
 async def create_weather(project_id: str, request: WeatherDefinitionUpdate) -> dict[str, Any]:
     require_project(project_id); now, weather_id = utc_now(), new_id()
     try:
-        db.execute("INSERT INTO weather_definitions(id,project_id,name,description,appearance,tags_json,image_tags_json,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)", (weather_id, project_id, request.name.strip(), request.description, request.appearance, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), now, now))
+        db.execute("INSERT INTO weather_definitions(id,project_id,name,description,imagegen_description,tags_json,image_tags_json,enabled,visibility_multiplier,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)", (weather_id, project_id, request.name.strip(), request.description, request.imagegen_description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), request.visibility_multiplier, now, now))
     except Exception as exc:
         raise HTTPException(409, "A weather definition with that name already exists") from exc
     await events.publish("environment", {"project_id": project_id, "action": "weather_changed"})
@@ -1308,7 +1503,7 @@ async def update_weather(project_id: str, weather_id: str, request: WeatherDefin
     settings = db.fetch_one("SELECT initial_weather_id FROM project_environment_settings WHERE project_id=?", (project_id,)) or {}
     if not request.enabled and settings.get("initial_weather_id") == weather_id:
         raise HTTPException(422, "The initial weather cannot be disabled")
-    db.execute("UPDATE weather_definitions SET name=?,description=?,appearance=?,tags_json=?,image_tags_json=?,enabled=?,updated_at=? WHERE id=?", (request.name.strip(), request.description, request.appearance, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), utc_now(), weather_id))
+    db.execute("UPDATE weather_definitions SET name=?,description=?,imagegen_description=?,tags_json=?,image_tags_json=?,enabled=?,visibility_multiplier=?,updated_at=? WHERE id=?", (request.name.strip(), request.description, request.imagegen_description, json.dumps(request.tags), json.dumps(request.image_tags), int(request.enabled), request.visibility_multiplier, utc_now(), weather_id))
     if not request.enabled:
         project = require_project(project_id)
         projection = scheduler.world.projection(project_id)
@@ -1360,9 +1555,9 @@ async def update_time_phases(project_id: str, request: TimePhasesUpdate) -> dict
         for position, item in enumerate(request.phases):
             phase_id = item.id or new_id()
             if phase_id in existing:
-                connection.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,appearance=?,position=?,enabled=? WHERE id=? AND project_id=?", (item.name.strip(), item.duration_minutes, item.description, item.appearance, position, int(item.enabled), phase_id, project_id))
+                connection.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,position=?,enabled=?,visibility_multiplier=? WHERE id=? AND project_id=?", (item.name.strip(), item.duration_minutes, item.description, item.imagegen_description, position, int(item.enabled), item.visibility_multiplier, phase_id, project_id))
             else:
-                connection.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,appearance,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, item.name.strip(), item.duration_minutes, item.description, item.appearance, position, int(item.enabled)))
+                connection.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled,visibility_multiplier) VALUES(?,?,?,?,?,?,?,?,?)", (phase_id, project_id, item.name.strip(), item.duration_minutes, item.description, item.imagegen_description, position, int(item.enabled), item.visibility_multiplier))
         for removed_id in existing - requested_ids:
             connection.execute("DELETE FROM time_phases WHERE id=? AND project_id=?", (removed_id, project_id))
         connection.execute("UPDATE project_environment_settings SET revision=revision+1,updated_at=? WHERE project_id=?", (utc_now(), project_id))
@@ -1374,7 +1569,7 @@ async def update_time_phases(project_id: str, request: TimePhasesUpdate) -> dict
 async def create_time_phase(project_id: str, request: TimePhaseItem) -> dict[str, Any]:
     require_project(project_id); phase_id = new_id()
     position = int((db.fetch_one("SELECT COALESCE(MAX(position),-1)+1 position FROM time_phases WHERE project_id=?", (project_id,)) or {"position": 0})["position"])
-    db.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,appearance,position,enabled) VALUES(?,?,?,?,?,?,?,?)", (phase_id, project_id, request.name.strip(), request.duration_minutes, request.description, request.appearance, position, int(request.enabled)))
+    db.execute("INSERT INTO time_phases(id,project_id,name,duration_minutes,description,imagegen_description,position,enabled,visibility_multiplier) VALUES(?,?,?,?,?,?,?,?,?)", (phase_id, project_id, request.name.strip(), request.duration_minutes, request.description, request.imagegen_description, position, int(request.enabled), request.visibility_multiplier))
     await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
     return next(item for item in environment.settings(project_id)["time_phases"] if item["id"] == phase_id)
 
@@ -1384,7 +1579,7 @@ async def update_time_phase(project_id: str, phase_id: str, request: TimePhaseIt
     require_project(project_id)
     if not db.fetch_one("SELECT id FROM time_phases WHERE id=? AND project_id=?", (phase_id, project_id)): raise HTTPException(404, "Time phase not found")
     if not request.enabled and (db.fetch_one("SELECT COUNT(*) n FROM time_phases WHERE project_id=? AND enabled=1 AND id<>?", (project_id, phase_id)) or {"n": 0})["n"] == 0: raise HTTPException(422, "At least one time phase must be enabled")
-    db.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,appearance=?,enabled=? WHERE id=? AND project_id=?", (request.name.strip(), request.duration_minutes, request.description, request.appearance, int(request.enabled), phase_id, project_id))
+    db.execute("UPDATE time_phases SET name=?,duration_minutes=?,description=?,imagegen_description=?,enabled=?,visibility_multiplier=? WHERE id=? AND project_id=?", (request.name.strip(), request.duration_minutes, request.description, request.imagegen_description, int(request.enabled), request.visibility_multiplier, phase_id, project_id))
     await events.publish("environment", {"project_id": project_id, "action": "time_changed"})
     return next(item for item in environment.settings(project_id)["time_phases"] if item["id"] == phase_id)
 
@@ -1412,10 +1607,17 @@ async def reorder_time_phases(project_id: str, request: TimePhaseOrderUpdate) ->
 def _location_state(request: EnvironmentLocationUpdate) -> dict[str, Any]:
     return {
         "parent_location_id": request.parent_location_id, "exposure": request.exposure,
-        "description": request.description, "appearance": request.appearance,
+        "description": request.description, "imagegen_description": request.imagegen_description,
         "image_tags": request.image_tags, "enabled": request.enabled,
         "random_encounter": request.random_encounter, "discovered": request.discovered,
+        "hidden": request.hidden,
         "x": request.x, "y": request.y,
+        "topology": request.topology, "occupancy": request.occupancy,
+        "boundary_access": request.boundary_access, "spatial_kind": request.spatial_kind,
+        "minutes_per_unit": request.minutes_per_unit,
+        "base_visibility_units": request.base_visibility_units,
+        "encounter_rate": request.encounter_rate,
+        "footprint": request.footprint, "local_bounds": request.local_bounds,
     }
 
 
@@ -1829,7 +2031,7 @@ async def create_outfit(entity_id: str, request: OutfitCreate) -> dict[str, Any]
     try:
         db.execute(
             "INSERT INTO entity_outfits("
-            "id,entity_id,name,description,appearance,equipment_json,"
+            "id,entity_id,name,description,imagegen_description,equipment_json,"
             "created_at,updated_at"
             ") VALUES (?,?,?,?,?,?,?,?)",
             (
@@ -1837,7 +2039,7 @@ async def create_outfit(entity_id: str, request: OutfitCreate) -> dict[str, Any]
                 entity_id,
                 request.name.strip(),
                 request.description,
-                request.appearance,
+                request.imagegen_description,
                 json.dumps(request.equipment),
                 now,
                 now,
@@ -1865,11 +2067,11 @@ async def update_outfit(outfit_id: str, request: OutfitCreate) -> dict[str, Any]
     try:
         db.execute(
             "UPDATE entity_outfits SET name=?,description=?,"
-            "appearance=?,equipment_json=?,updated_at=? WHERE id=?",
+            "imagegen_description=?,equipment_json=?,updated_at=? WHERE id=?",
             (
                 request.name.strip(),
                 request.description,
-                request.appearance,
+                request.imagegen_description,
                 json.dumps(request.equipment),
                 utc_now(),
                 outfit_id,

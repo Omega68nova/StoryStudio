@@ -186,17 +186,13 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
     const outfit = outfitId
       ? outfits.find(item => item.id === outfitId)
       : null;
-    const appearance = String(
-      draft?.state.imagegen_description
-      || draft?.state.appearance
-      || draft?.state.description
-      || "",
-    ).trim();
-    const outfitVisual = String(
-      outfit?.imagegen_description
-      || outfit?.description
-      || "",
-    ).trim();
+    const imagegenDescription = String(draft?.state.imagegen_description ?? "").trim();
+    const appearance = imagegenDescription
+      || String(draft?.state.appearance ?? "").trim()
+      || String(draft?.state.description ?? "").trim();
+    const outfitImagegenDescription = String(outfit?.imagegen_description ?? "").trim();
+    const outfitVisual = outfitImagegenDescription
+      || String(outfit?.description ?? "").trim();
     const parts = [
       draft?.name ? `Character: ${draft.name}` : "",
       appearance,

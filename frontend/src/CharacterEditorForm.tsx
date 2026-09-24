@@ -290,30 +290,37 @@ export function CharacterEditorForm({
       <section className="character-editor-tab-body">
         {tab === 0 && <div className="character-fields">
           <TextField
+            className="character-field-full"
             multiline
             minRows={4}
             label="Personality"
             value={String(state.personality ?? "")}
             onChange={event => setState({ personality: event.target.value })}
           />
-          <CreatableBoxedMultiselect
-            label="Goals"
-            options={array(state.goals)}
-            value={array(state.goals)}
-            onChange={(_event, next) => setState({ goals: next })}
-          />
-          <CreatableBoxedMultiselect
-            label="Character secrets (known while acting)"
-            options={array(state.character_secrets)}
-            value={array(state.character_secrets)}
-            onChange={(_event, next) => setState({ character_secrets: next })}
-          />
-          <CreatableBoxedMultiselect
-            label="Secrets from character (narrator only)"
-            options={array(state.secrets_to_character)}
-            value={array(state.secrets_to_character)}
-            onChange={(_event, next) => setState({ secrets_to_character: next })}
-          />
+          <div className="character-field-full">
+            <CreatableBoxedMultiselect
+              label="Goals"
+              options={array(state.goals)}
+              value={array(state.goals)}
+              onChange={(_event, next) => setState({ goals: next })}
+            />
+          </div>
+          <div className="character-field-full">
+            <CreatableBoxedMultiselect
+              label="Character secrets (known while acting)"
+              options={array(state.character_secrets)}
+              value={array(state.character_secrets)}
+              onChange={(_event, next) => setState({ character_secrets: next })}
+            />
+          </div>
+          <div className="character-field-full">
+            <CreatableBoxedMultiselect
+              label="Secrets from character (narrator only)"
+              options={array(state.secrets_to_character)}
+              value={array(state.secrets_to_character)}
+              onChange={(_event, next) => setState({ secrets_to_character: next })}
+            />
+          </div>
         </div>}
 
         {tab === 1 && <div className="character-fields">
@@ -776,17 +783,19 @@ function CharacterStatRail({
     );
     const missingDefinitions = Object.keys(values)
       .filter(key => !definitionsByKey[key])
-      .map(key => ({
+      .map<StatDefinition>(key => ({
         id: key,
         stat_key: key,
         label: key,
+        description: "",
         scope: "character" as const,
         default_value: 0,
         minimum: 0,
         maximum: 100,
-        integer_only: 0,
+        display_style: "compact",
+        integer_only: false,
         visibility: "public",
-      } as StatDefinition));
+      }));
 
     return [...known, ...missingDefinitions].sort((a, b) => {
       const ranged = Number(isRanged(b)) - Number(isRanged(a));
@@ -889,18 +898,52 @@ function CharacterStatRail({
           ?? "#5a9b63";
         const minDefinition = minKey ? definitionsByKey[minKey] : undefined;
         const maxDefinition = maxKey ? definitionsByKey[maxKey] : undefined;
-        const tooltip = [
-          `${definition.label}: ${value}`,
-          `Minimum: ${minKey ? `${minDefinition?.label ?? minKey} = ` : ""}${minimum}`,
-          `Maximum: ${maxKey ? `${maxDefinition?.label ?? maxKey} = ` : ""}${maximum}`,
-        ].join("\n");
 
         return <Tooltip
           key={definition.stat_key}
-          title={<span style={{ whiteSpace: "pre-line" }}>{tooltip}</span>}
+          title={<div className="character-stat-tooltip-chips">
+            {chip(
+              `${definition.stat_key}:value`,
+              "Value",
+              value,
+              next => onSetStat(definition.stat_key, next),
+              `${definition.label} value: ${value}`,
+            )}
+            {chip(
+              `${definition.stat_key}:minimum`,
+              minDefinition?.label ?? "Min",
+              minimum,
+              minKey
+                ? next => onSetStat(minKey, next)
+                : next => onUpdateDefinition(definition, { minimum: next }),
+              minKey
+                ? `Minimum comes from stat ${minDefinition?.label ?? minKey}`
+                : `Raw minimum for ${definition.label}`,
+            )}
+            {chip(
+              `${definition.stat_key}:maximum`,
+              maxDefinition?.label ?? "Max",
+              maximum,
+              maxKey
+                ? next => onSetStat(maxKey, next)
+                : next => onUpdateDefinition(definition, { maximum: next }),
+              maxKey
+                ? `Maximum comes from stat ${maxDefinition?.label ?? maxKey}`
+                : `Raw maximum for ${definition.label}`,
+            )}
+          </div>}
           arrow
+          enterDelay={150}
+          leaveDelay={150}
+          placement="top"
+          classes={{ tooltip: "character-stat-detail-tooltip" }}
         >
-          <div className="character-stat-group">
+          <div
+            className="character-stat-group"
+            role="button"
+            tabIndex={0}
+            aria-label={`${definition.label}: ${value}; minimum ${minimum}; maximum ${maximum}`}
+          >
             <div className="character-stat-group-header">
               <b>{definition.label}</b>
               <span>{value} / {maximum}</span>
@@ -914,37 +957,6 @@ function CharacterStatRail({
                 }}
               />
             </span>
-            <div className="character-stat-group-chips">
-              {chip(
-                `${definition.stat_key}:value`,
-                "Value",
-                value,
-                next => onSetStat(definition.stat_key, next),
-                `${definition.label} value: ${value}`,
-              )}
-              {chip(
-                `${definition.stat_key}:minimum`,
-                minDefinition?.label ?? "Min",
-                minimum,
-                minKey
-                  ? next => onSetStat(minKey, next)
-                  : next => onUpdateDefinition(definition, { minimum: next }),
-                minKey
-                  ? `Minimum comes from stat ${minDefinition?.label ?? minKey}`
-                  : `Raw minimum for ${definition.label}`,
-              )}
-              {chip(
-                `${definition.stat_key}:maximum`,
-                maxDefinition?.label ?? "Max",
-                maximum,
-                maxKey
-                  ? next => onSetStat(maxKey, next)
-                  : next => onUpdateDefinition(definition, { maximum: next }),
-                maxKey
-                  ? `Maximum comes from stat ${maxDefinition?.label ?? maxKey}`
-                  : `Raw maximum for ${definition.label}`,
-              )}
-            </div>
           </div>
         </Tooltip>;
       })}

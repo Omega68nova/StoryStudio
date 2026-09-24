@@ -1401,7 +1401,7 @@ Phase 6 — UI/world configuration cleanup
     IN PROGRESS — Slice 2 complete
 
 Phase 7 — Canonical storage refactor
-    FUTURE — required before final RAG storage integration
+    IN PROGRESS — typed entity contract slice complete
 
 Phase 8 — Branch-aware context retrieval (RAG)
     FUTURE — depends on Phase 7 canonical records
@@ -1435,3 +1435,32 @@ The current built-in/Cognee memory provider is an early retrieval scaffold.
 It may continue to operate during the refactor, but Phase 8 must rebuild its
 inputs around Phase 7 repository records rather than cementing current tables
 or JSON payloads into the retrieval architecture.
+
+## Phase 7 spatial-map slice status
+
+The branch-aware spatial-map foundation is implemented. It formalizes a world
+root, independent open/closed topology and direct/child-required occupancy,
+typed anchors, barriers, routes, doors, portals, encounter rules, locks, and
+resumable travel itineraries. Spatial mutations remain `WorldEngine` events
+and are additionally recorded as append-only repository revisions with
+normalized geometry vertices.
+
+Legacy route relationships and environment map APIs remain adapters.
+`POST /spatial/migrate` promotes existing maps to canonical roots, anchors,
+connections, and zero-probability encounter rules. Planning stages 2 and 3 now
+generate location presets, anchors, and typed connections; legacy `routes`
+remain an import-only compatibility shape.
+
+The Location Map configuration tab owns root adoption/creation, nested layer
+navigation, pan/zoom/touch interaction, location and anchor placement, barrier
+drawing, typed connection creation, object inspection, and structural
+warnings. Future editor refinements should remain in that focused module
+instead of returning map responsibilities to `App.tsx`.
+
+Phase 7's typed entity contract slice replaces generic projection parsing for
+factions, items, lore systems, facts, and plot beats with explicit permissive
+domain states. Their projection adapters remain lossless, preserve extension
+fields and sparse historical shapes, and expose canonical references without
+changing persistence or HTTP payloads. Item gameplay semantics, relationship
+definitions, media slots, storage normalization, and planner adoption remain
+separate later slices.
