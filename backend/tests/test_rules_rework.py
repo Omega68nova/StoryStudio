@@ -693,3 +693,57 @@ def test_formula_complexity_is_bounded() -> None:
         node = {"kind": "negate", "children": [node]}
     with pytest.raises(ValidationError, match="complexity"):
         effect("too_deep", node)
+
+
+
+def test_legacy_entity_ability_references_are_rewritten_to_keys(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    project = db.create_project("Legacy ability refs")
+    project_id = project["id"]
+    now = utc_now()
+    node_id = "ability-ref-node"
+    db.execute(
+        "INSERT INTO story_nodes(id,project_id,parent_id,role,content,status,created_at,narration_mode,action_kind) "
+        "VALUES(?,?,NULL,'assistant','x','complete',?,'third_limited','story')",
+        (node_id, project_id, now),
+    )
+    transaction_id = "ability-ref-tx"
+    db.execute(
+        "INSERT INTO world_transactions(id,project_id,story_node_id,parent_node_id,branch_sequence,elapsed_minutes,provenance,status,summary,created_at) "
+        "VALUES(?,?,?,NULL,1,0,'author','committed','legacy refs',?)",
+        (transaction_id, project_id, node_id, now),
+    )
+    entity_id = "ability-ref-character"
+    db.execute(
+        "INSERT INTO world_entities(id,project_id,kind,canonical_name,aliases_json,tags_json,created_at) VALUES(?,?, 'character','Hero','[]','[]',?)",
+        (entity_id, project_id, now),
+    )
+    db.execute(
+        "INSERT INTO world_events(id,transaction_id,entity_id,event_type,ordinal,payload_json,created_at) VALUES(?,?,?,?,?,?,?)",
+        (
+            "ability-ref-create", transaction_id, entity_id, "entity.created", 0,
+            '{"entity":{"id":"ability-ref-character","kind":"character","name":"Hero","aliases":[],"tags":[],"state":{"abilities":["legacy-ability-id","Slash"]}}}',
+            now,
+        ),
+    )
+
+    with db._lock, db.connect() as connection:
+        connection.execute(
+            "CREATE TABLE ability_definitions_legacy_v2("
+            "id TEXT PRIMARY KEY,project_id TEXT,ability_key TEXT,name TEXT,description TEXT,target_type TEXT,"
+            "requirements_json TEXT,costs_json TEXT,effects_json TEXT,minigame_profile_json TEXT,created_at TEXT,updated_at TEXT)"
+        )
+        connection.execute(
+            "INSERT INTO ability_definitions_legacy_v2 VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "legacy-ability-id", project_id, "slash", "Slash", "", "self",
+                '{}', '{}', '[]', '{}', now, now,
+            ),
+        )
+        db._migrate_canonical_rules(connection)
+
+    event = db.fetch_one("SELECT payload_json FROM world_events WHERE id='ability-ref-create'")
+    assert event is not None
+    payload = __import__("json").loads(event["payload_json"])
+    assert payload["entity"]["state"]["abilities"] == ["slash"]
