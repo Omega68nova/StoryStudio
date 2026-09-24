@@ -29,6 +29,7 @@ CREATE TABLE spatial_locations (
     minutes_per_unit REAL NOT NULL DEFAULT 1 CHECK(minutes_per_unit >= 0),
     base_visibility_units REAL,
     encounter_rate REAL NOT NULL DEFAULT 0 CHECK(encounter_rate >= 0),
+    requires_map_review INTEGER NOT NULL DEFAULT 0 CHECK(requires_map_review IN (0,1)),
     footprint_kind TEXT CHECK(footprint_kind IN ('point','polyline','polygon')),
     local_bounds_kind TEXT CHECK(local_bounds_kind IN ('point','polyline','polygon')),
     updated_at TEXT NOT NULL
