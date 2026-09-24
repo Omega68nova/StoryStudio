@@ -31,7 +31,9 @@ CREATE TABLE spatial_locations (
     encounter_rate REAL NOT NULL DEFAULT 0 CHECK(encounter_rate >= 0),
     requires_map_review INTEGER NOT NULL DEFAULT 0 CHECK(requires_map_review IN (0,1)),
     footprint_kind TEXT CHECK(footprint_kind IN ('point','polyline','polygon')),
+    footprint_space_id TEXT REFERENCES world_entities(id) ON DELETE SET NULL,
     local_bounds_kind TEXT CHECK(local_bounds_kind IN ('point','polyline','polygon')),
+    local_bounds_space_id TEXT REFERENCES world_entities(id) ON DELETE SET NULL,
     updated_at TEXT NOT NULL
 );
 CREATE INDEX idx_spatial_locations_project_parent
