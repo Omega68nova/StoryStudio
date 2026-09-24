@@ -93,13 +93,13 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
     patch: Partial<Pick<StatDefinition, "minimum" | "maximum">>,
   ) {
     try {
-      await api(`/projects/${projectId}/stats/${definition.id}`, {
+      await api(`/projects/${projectId}/stats/${definition.stat_key}`, {
         method: "PUT",
         body: JSON.stringify({
           stat_key: definition.stat_key,
           label: definition.label,
           description: definition.description ?? "",
-          scope: definition.scope,
+          compatible_owner_kinds: definition.compatible_owner_kinds,
           default_value: definition.default_value,
           minimum: patch.minimum ?? definition.minimum,
           maximum: patch.maximum ?? definition.maximum,
@@ -117,6 +117,10 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
     } catch (cause) {
       setError(String(cause));
     }
+  }
+  async function removeActiveEffect(id: string) {
+    try { await api(`/projects/${projectId}/effects/active/${id}`, { method: "DELETE" }); await load(); }
+    catch (cause) { setError(String(cause)); }
   }
   async function saveOutfit() { if (!outfitDraft || !outfitDraft.name.trim()) return; try { await api(outfitDraft.id ? `/outfits/${outfitDraft.id}` : `/entities/${outfitDraft.entity_id}/outfits`, { method: outfitDraft.id ? "PUT" : "POST", body: JSON.stringify({ name: outfitDraft.name, description: outfitDraft.description, imagegen_description: outfitDraft.imagegen_description, equipment: outfitDraft.equipment }) }); setOutfits(await api(`/entities/${outfitDraft.entity_id}/outfits`)); setOutfitDraft(null); } catch (cause) { setError(String(cause)); } }
   async function deleteOutfit(outfit: Outfit) { if (!window.confirm(`Delete outfit ${outfit.name}?`)) return; try { await api(`/outfits/${outfit.id}`, { method: "DELETE" }); setOutfits(await api(`/entities/${outfit.entity_id}/outfits`)); } catch (cause) { setError(String(cause)); } }
@@ -332,6 +336,8 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       media={media}
       stats={rules.stats}
       abilities={rules.abilities}
+      activeEffects={Object.values(world?.active_effects ?? {}).filter(item => item.target_id === draft.id)}
+      removeActiveEffect={removeActiveEffect}
       outfitDraft={outfitDraft}
       setOutfitDraft={setOutfitDraft}
       saveOutfit={saveOutfit}
