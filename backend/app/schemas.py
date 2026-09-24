@@ -651,6 +651,7 @@ class WorldRootCreate(BaseModel):
 class MapAnchorUpdate(BaseModel):
     id: str | None = None
     location_id: str
+    coordinate_space_id: str | None = None
     name: str = Field(min_length=1, max_length=200)
     kind: Literal["landmark", "entrance", "exit", "waypoint", "encounter"] = "waypoint"
     x: float | None = None
