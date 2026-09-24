@@ -99,13 +99,43 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
   async function remove(kind: "stats" | "effects" | "abilities", key: string) { try { await api(`/projects/${projectId}/${kind}/${key}`, { method: "DELETE" }); await load(); } catch (cause) { fail(String(cause)); } }
   const compatibleBounds = useMemo(() => stat ? rules.stats.filter(item => item.stat_key !== stat.stat_key && item.compatible_owner_kinds.some(kind => stat.compatible_owner_kinds.includes(kind))) : [], [rules.stats, stat]);
 
+  const formulaUsesStat = (node: FormulaNode, key: string): boolean =>
+    (node.kind === "stat" && node.stat_key === key)
+    || ("children" in node && node.children.some(child => formulaUsesStat(child, key)));
+  const requirementUses = (node: RequirementExpression | undefined, field: "stat_key" | "ability_key", key: string): boolean => {
+    if (!node) return false;
+    if (node[field] === key) return true;
+    return (node.children ?? []).some(child => requirementUses(child, field, key))
+      || Boolean(node.child && requirementUses(node.child, field, key));
+  };
+  const statBlocker = (key: string): string | undefined => {
+    const bound = rules.stats.find(item => item.stat_key !== key && (item.minimum_stat_key === key || item.maximum_stat_key === key));
+    if (bound) return `Used as a bound by ${bound.label}`;
+    const targeted = rules.effects.find(item => item.target_stat_key === key);
+    if (targeted) return `Targeted by effect ${targeted.name}`;
+    const formula = rules.effects.find(item => formulaUsesStat(item.formula, key));
+    if (formula) return `Used by formula in ${formula.name}`;
+    const ability = rules.abilities.find(item => item.costs.some(cost => cost.stat_key === key) || item.passive_triggers.some(trigger => trigger.stat_key === key) || requirementUses(item.requirements, "stat_key", key));
+    return ability ? `Used by ability ${ability.name}` : undefined;
+  };
+  const effectBlocker = (key: string): string | undefined => {
+    const ability = rules.abilities.find(item => item.actions.some(action => action.effect_key === key));
+    return ability ? `Used by ability ${ability.name}` : undefined;
+  };
+  const abilityBlocker = (key: string): string | undefined => {
+    const dependent = rules.abilities.find(item => item.ability_key !== key && requirementUses(item.requirements, "ability_key", key));
+    if (dependent) return `Required by ability ${dependent.name}`;
+    const owner = Object.values(world?.entities ?? {}).find(item => Array.isArray(item.state.abilities) && item.state.abilities.map(String).includes(key));
+    return owner ? `Assigned to ${owner.name}` : undefined;
+  };
+
   return <div className="page">
     <header className="page-header"><p className="eyebrow">CANONICAL RULES</p><h1>Stats, effects, and abilities</h1><p>Reusable effects calculate against actor, source, and target stats; abilities compose those effects with typed actions.</p></header>
     {rules.migration_warnings.filter(item => !item.acknowledged).map(item => <Alert key={item.id} severity="warning" action={<Button onClick={async () => { await api(`/projects/${projectId}/rules/migration-warnings/${item.id}/acknowledge`, { method: "POST" }); await load(); }}>Acknowledge</Button>}>{item.message}</Alert>)}
     <div className="rules-grid">
-      <RuleList title="Stats" add={() => { setEditingKey(null); setStat({ ...blankStat }); }} rows={rules.stats.map(item => ({ key: item.stat_key, title: item.label, subtitle: `${item.stat_key} · ${item.compatible_owner_kinds.join(", ")}`, edit: () => { setEditingKey(item.stat_key); setStat({ ...item }); }, remove: () => void remove("stats", item.stat_key) }))} />
-      <RuleList title="Effects" add={() => { setEditingKey(null); setEffect({ ...blankEffect, target_stat_key: rules.stats[0]?.stat_key ?? "" }); }} rows={rules.effects.map(item => ({ key: item.effect_key, title: item.name, subtitle: `${item.operation} ${item.target_stat_key} · ${item.clock}`, edit: () => { setEditingKey(item.effect_key); setEffect(structuredClone(item)); }, remove: () => void remove("effects", item.effect_key) }))} />
-      <RuleList title="Abilities" add={() => { setEditingKey(null); setAbility(structuredClone(blankAbility)); }} rows={rules.abilities.map(item => ({ key: item.ability_key, title: item.name, subtitle: `${item.ability_kind} · ${item.target_type} · ${item.actions.length} action(s)`, edit: () => { setEditingKey(item.ability_key); setAbility(structuredClone(item)); }, remove: () => void remove("abilities", item.ability_key) }))} />
+      <RuleList title="Stats" add={() => { setEditingKey(null); setStat({ ...blankStat }); }} rows={rules.stats.map(item => ({ key: item.stat_key, title: item.label, subtitle: `${item.stat_key} · ${item.compatible_owner_kinds.join(", ")}`, blockedReason: statBlocker(item.stat_key), edit: () => { setEditingKey(item.stat_key); setStat({ ...item }); }, remove: () => void remove("stats", item.stat_key) }))} />
+      <RuleList title="Effects" add={() => { setEditingKey(null); setEffect({ ...blankEffect, target_stat_key: rules.stats[0]?.stat_key ?? "" }); }} rows={rules.effects.map(item => ({ key: item.effect_key, title: item.name, subtitle: `${item.operation} ${item.target_stat_key} · ${item.clock}`, blockedReason: effectBlocker(item.effect_key), edit: () => { setEditingKey(item.effect_key); setEffect(structuredClone(item)); }, remove: () => void remove("effects", item.effect_key) }))} />
+      <RuleList title="Abilities" add={() => { setEditingKey(null); setAbility(structuredClone(blankAbility)); }} rows={rules.abilities.map(item => ({ key: item.ability_key, title: item.name, subtitle: `${item.ability_kind} · ${item.target_type} · ${item.actions.length} action(s)`, blockedReason: abilityBlocker(item.ability_key), edit: () => { setEditingKey(item.ability_key); setAbility(structuredClone(item)); }, remove: () => void remove("abilities", item.ability_key) }))} />
     </div>
 
     <Dialog open={Boolean(stat)} onClose={() => setStat(null)} maxWidth="md" fullWidth><DialogTitle>{editingKey ? "Edit" : "Add"} stat</DialogTitle><DialogContent className="music-dialog">{stat && <>
@@ -130,7 +160,7 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
   </div>;
 }
 
-function RuleList({ title, add, rows }: { title: string; add: () => void; rows: Array<{ key: string; title: string; subtitle: string; edit: () => void; remove: () => void }> }) { return <section className="panel"><Stack direction="row" justifyContent="space-between"><h2>{title}</h2><Button onClick={add}>Add</Button></Stack>{rows.map(row => <article className="rule-row" key={row.key}><div><strong>{row.title}</strong><small>{row.subtitle}</small></div><div><Button onClick={row.edit}>Edit</Button><Button color="error" onClick={row.remove}>Delete</Button></div></article>)}</section>; }
+function RuleList({ title, add, rows }: { title: string; add: () => void; rows: Array<{ key: string; title: string; subtitle: string; blockedReason?: string; edit: () => void; remove: () => void }> }) { return <section className="panel"><Stack direction="row" justifyContent="space-between"><h2>{title}</h2><Button onClick={add}>Add</Button></Stack>{rows.map(row => <article className="rule-row" key={row.key}><div><strong>{row.title}</strong><small>{row.subtitle}</small>{row.blockedReason && <small>Cannot delete: {row.blockedReason}</small>}</div><div><Button onClick={row.edit}>Edit</Button><Button color="error" disabled={Boolean(row.blockedReason)} title={row.blockedReason} onClick={row.remove}>Delete</Button></div></article>)}</section>; }
 
 function RequirementEditor({
   node,
