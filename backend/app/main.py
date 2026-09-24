@@ -114,7 +114,7 @@ from app.services.generationPlanApiService import GenerationPlanApiService
 from app.services.batchGenerationApiService import BatchGenerationApiService
 from app.services.batchGeneration import GenerationPlanError
 from app.domain.adapters import outfit_from_record
-from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat
+from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat, validate_stat_dependency_graph
 
 
 db = Database()
@@ -2576,24 +2576,12 @@ def _validate_stat_bound_references(
     request: StatDefinitionCreate,
 ) -> None:
     definitions = {item.stat_key: item for item in data.rules.stats(project_id)}
-    for field in ("minimum_stat_key", "maximum_stat_key"):
-        key = getattr(request, field)
-        if not key:
-            continue
-        referenced = definitions.get(key)
-        if not referenced: raise HTTPException(422, f"{field} references an unknown stat: {key}")
-        if not set(request.compatible_owner_kinds).intersection(map(str, referenced.compatible_owner_kinds)):
-            raise HTTPException(422, f"{field} has no compatible owner kind in common with {request.stat_key}")
-    graph = {key: [candidate for candidate in (item.minimum_stat_key, item.maximum_stat_key) if candidate] for key, item in definitions.items()}
-    graph[request.stat_key] = [candidate for candidate in (request.minimum_stat_key, request.maximum_stat_key) if candidate]
-    visiting: set[str] = set(); visited: set[str] = set()
-    def visit(key: str) -> None:
-        if key in visiting: raise HTTPException(422, "Stat bound dependencies contain a cycle")
-        if key in visited: return
-        visiting.add(key)
-        for child in graph.get(key, []): visit(child)
-        visiting.remove(key); visited.add(key)
-    for key in graph: visit(key)
+    try:
+        candidate = Stat.model_validate({"project_id": project_id, **request.model_dump()})
+        definitions[candidate.stat_key] = candidate
+        validate_stat_dependency_graph(list(definitions.values()))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/stats", status_code=201)
