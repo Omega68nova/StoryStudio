@@ -20,6 +20,9 @@ from app.database import Database, decode_json_fields, new_id, utc_now
 from app.schemas import (
     BibleUpdate,
     AbilityDefinitionCreate,
+    EffectDefinitionCreate,
+    ApplyEffectRequest,
+    AbilityUseRequest,
     ImageGenerateRequest,
     SceneImageRequest,
     ImageSuggestionUpdate,
@@ -110,7 +113,8 @@ from app.services.routeDataService import RouteDataService
 from app.services.generationPlanApiService import GenerationPlanApiService
 from app.services.batchGenerationApiService import BatchGenerationApiService
 from app.services.batchGeneration import GenerationPlanError
-from app.domain.adapters import outfit_from_record, stat_from_record
+from app.domain.adapters import outfit_from_record
+from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat
 
 
 db = Database()
@@ -566,9 +570,7 @@ async def create_project(request: ProjectCreate) -> dict[str, Any]:
         "romance": [("favorability", "Favorability", "relationship", 0, -100, 100)],
     }
     for key, label, scope, default, minimum, maximum in presets.get(request.stats_preset, []):
-        now = utc_now()
-        db.execute("INSERT INTO stat_definitions(id, project_id, stat_key, label, scope, default_value, minimum, maximum, integer_only, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'public', ?, ?)",
-                   (new_id(), project["id"], key, label, scope, default, minimum, maximum, now, now))
+        data.rules.save_stat(Stat(project_id=project["id"], stat_key=key, label=label, compatible_owner_kinds=[scope], default_value=default, minimum=minimum, maximum=maximum))
     return db.get_project(project["id"]) or project
 
 
@@ -2561,91 +2563,49 @@ async def update_project_music(project_id: str, request: ProjectMusicUpdate) -> 
 @app.get("/api/projects/{project_id}/rules")
 async def get_rules(project_id: str) -> dict[str, Any]:
     require_project(project_id)
-    stat_rows = db.fetch_all(
-        "SELECT * FROM stat_definitions WHERE project_id = ? ORDER BY label",
-        (project_id,),
-    )
-    stats = [
-        stat_from_record(row).model_dump(mode="json")
-        for row in stat_rows
-    ]
-    abilities = db.fetch_all("SELECT * FROM ability_definitions WHERE project_id = ? ORDER BY name", (project_id,))
-    for ability in abilities:
-        for field in ("requirements_json", "costs_json", "effects_json", "minigame_profile_json"): ability[field.removesuffix("_json")] = json.loads(ability.pop(field))
-    return {"stats": stats, "abilities": abilities}
+    return {
+        "stats": [item.model_dump(mode="json") for item in data.rules.stats(project_id)],
+        "effects": [item.model_dump(mode="json") for item in data.rules.effects(project_id)],
+        "abilities": [item.model_dump(mode="json") for item in data.rules.abilities(project_id)],
+        "migration_warnings": data.rules.warnings(project_id),
+    }
 
 
 def _validate_stat_bound_references(
     project_id: str,
     request: StatDefinitionCreate,
     *,
-    current_id: str | None = None,
 ) -> None:
+    definitions = {item.stat_key: item for item in data.rules.stats(project_id)}
     for field in ("minimum_stat_key", "maximum_stat_key"):
         key = getattr(request, field)
         if not key:
             continue
-        row = db.fetch_one(
-            "SELECT id,scope FROM stat_definitions "
-            "WHERE project_id=? AND stat_key=?",
-            (project_id, key),
-        )
-        if not row:
-            raise HTTPException(
-                422,
-                f"{field} references an unknown stat: {key}",
-            )
-        if row["scope"] != request.scope:
-            raise HTTPException(
-                422,
-                f"{field} must reference a {request.scope} stat",
-            )
-        if current_id and row["id"] == current_id:
-            raise HTTPException(422, f"{field} cannot reference itself")
+        referenced = definitions.get(key)
+        if not referenced: raise HTTPException(422, f"{field} references an unknown stat: {key}")
+        if not set(request.compatible_owner_kinds).intersection(map(str, referenced.compatible_owner_kinds)):
+            raise HTTPException(422, f"{field} has no compatible owner kind in common with {request.stat_key}")
+    graph = {key: [candidate for candidate in (item.minimum_stat_key, item.maximum_stat_key) if candidate] for key, item in definitions.items()}
+    graph[request.stat_key] = [candidate for candidate in (request.minimum_stat_key, request.maximum_stat_key) if candidate]
+    visiting: set[str] = set(); visited: set[str] = set()
+    def visit(key: str) -> None:
+        if key in visiting: raise HTTPException(422, "Stat bound dependencies contain a cycle")
+        if key in visited: return
+        visiting.add(key)
+        for child in graph.get(key, []): visit(child)
+        visiting.remove(key); visited.add(key)
+    for key in graph: visit(key)
 
 
 @app.post("/api/projects/{project_id}/stats", status_code=201)
 async def create_stat(project_id: str, request: StatDefinitionCreate) -> dict[str, Any]:
     require_project(project_id)
     _validate_stat_bound_references(project_id, request)
-    now, stat_id = utc_now(), new_id()
     try:
-        db.execute(
-            "INSERT INTO stat_definitions("
-            "id,project_id,stat_key,label,description,scope,default_value,"
-            "minimum,maximum,minimum_stat_key,maximum_stat_key,color,"
-            "minimum_color,maximum_color,display_style,integer_only,"
-            "visibility,created_at,updated_at"
-            ") VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (
-                stat_id,
-                project_id,
-                request.stat_key,
-                request.label,
-                request.description,
-                request.scope,
-                request.default_value,
-                request.minimum,
-                request.maximum,
-                request.minimum_stat_key,
-                request.maximum_stat_key,
-                request.color,
-                request.minimum_color,
-                request.maximum_color,
-                request.display_style,
-                request.integer_only,
-                request.visibility,
-                now,
-                now,
-            ),
-        )
+        result = data.rules.save_stat(Stat.model_validate({"project_id": project_id, **request.model_dump()}))
     except Exception as exc:
         raise HTTPException(422, str(exc)) from exc
-    row = db.fetch_one(
-        "SELECT * FROM stat_definitions WHERE id=?",
-        (stat_id,),
-    ) or {}
-    return stat_from_record(row).model_dump(mode="json")
+    return result.model_dump(mode="json")
 
 
 @app.post("/api/projects/{project_id}/stats/adjust")
@@ -2660,119 +2620,141 @@ async def manually_adjust_stat(project_id: str, request: StatAdjustmentRequest) 
     return {"transaction": transaction, "world": await get_world(project_id)}
 
 
-@app.put("/api/projects/{project_id}/stats/{stat_id}")
-async def update_stat(project_id: str, stat_id: str, request: StatDefinitionCreate) -> dict[str, Any]:
-    if not db.fetch_one(
-        "SELECT id FROM stat_definitions WHERE id=? AND project_id=?",
-        (stat_id, project_id),
-    ):
+@app.put("/api/projects/{project_id}/stats/{stat_key}")
+async def update_stat(project_id: str, stat_key: str, request: StatDefinitionCreate) -> dict[str, Any]:
+    if not data.rules.stat(project_id, stat_key):
         raise HTTPException(404, "Stat definition not found")
-    _validate_stat_bound_references(
-        project_id,
-        request,
-        current_id=stat_id,
-    )
+    if request.stat_key != stat_key: raise HTTPException(422, "stat_key is immutable")
+    _validate_stat_bound_references(project_id, request)
     try:
-        db.execute(
-            "UPDATE stat_definitions SET stat_key=?,label=?,description=?,"
-            "scope=?,default_value=?,minimum=?,maximum=?,minimum_stat_key=?,"
-            "maximum_stat_key=?,color=?,minimum_color=?,maximum_color=?,"
-            "display_style=?,integer_only=?,visibility=?,updated_at=? WHERE id=?",
-            (
-                request.stat_key,
-                request.label,
-                request.description,
-                request.scope,
-                request.default_value,
-                request.minimum,
-                request.maximum,
-                request.minimum_stat_key,
-                request.maximum_stat_key,
-                request.color,
-                request.minimum_color,
-                request.maximum_color,
-                request.display_style,
-                request.integer_only,
-                request.visibility,
-                utc_now(),
-                stat_id,
-            ),
-        )
+        result = data.rules.save_stat(Stat.model_validate({"project_id": project_id, **request.model_dump()}), previous_key=stat_key)
     except Exception as exc:
         raise HTTPException(422, str(exc)) from exc
-    row = db.fetch_one(
-        "SELECT * FROM stat_definitions WHERE id=?",
-        (stat_id,),
-    ) or {}
-    return stat_from_record(row).model_dump(mode="json")
+    return result.model_dump(mode="json")
+
+
+@app.post("/api/projects/{project_id}/effects", status_code=201)
+async def create_effect(project_id: str, request: EffectDefinitionCreate) -> dict[str, Any]:
+    require_project(project_id)
+    if not data.rules.stat(project_id, request.target_stat_key): raise HTTPException(422, "Unknown target stat")
+    _validate_formula_stats(project_id, request.formula)
+    try: result = data.rules.save_effect(EffectDefinition.model_validate({"project_id": project_id, **request.model_dump()}))
+    except Exception as exc: raise HTTPException(422, str(exc)) from exc
+    return result.model_dump(mode="json")
+
+
+@app.put("/api/projects/{project_id}/effects/{effect_key}")
+async def update_effect(project_id: str, effect_key: str, request: EffectDefinitionCreate) -> dict[str, Any]:
+    if not data.rules.effect(project_id, effect_key): raise HTTPException(404, "Effect definition not found")
+    if request.effect_key != effect_key: raise HTTPException(422, "effect_key is immutable")
+    if not data.rules.stat(project_id, request.target_stat_key): raise HTTPException(422, "Unknown target stat")
+    _validate_formula_stats(project_id, request.formula)
+    try: result = data.rules.save_effect(EffectDefinition.model_validate({"project_id": project_id, **request.model_dump()}), previous_key=effect_key)
+    except Exception as exc: raise HTTPException(422, str(exc)) from exc
+    return result.model_dump(mode="json")
+
+
+def _validate_formula_stats(project_id: str, node: Any) -> None:
+    if str(node.kind) == "stat" and not data.rules.stat(project_id, str(node.stat_key)):
+        raise HTTPException(422, f"Formula references unknown stat: {node.stat_key}")
+    for child in node.children: _validate_formula_stats(project_id, child)
 
 
 @app.post("/api/projects/{project_id}/abilities", status_code=201)
 async def create_ability(project_id: str, request: AbilityDefinitionCreate) -> dict[str, Any]:
-    require_project(project_id); now = utc_now(); ability_id = new_id()
+    require_project(project_id)
     known_bullet_skills = {row["id"] for row in scheduler.minigames.bullethell.catalog()["skills"]}
-    if not set(request.minigame_profile.get("bullethell_skill_ids", [])) <= known_bullet_skills:
+    if not set(request.bullethell_skill_ids) <= known_bullet_skills:
         raise HTTPException(422, "Ability references an unavailable bullet-hell skill")
-    attack_profile = request.minigame_profile.get("timed_attack")
-    if attack_profile:
+    if request.timed_attack_line_count is not None:
         config = next(row for row in scheduler.minigames.configs(project_id) if row["game_key"] == "timed_attack")
-        if not (config["min_attack_lines"] <= attack_profile["line_count"] <= config["max_attack_lines"] and config["min_attack_damage"] <= attack_profile["damage_per_line"] <= config["max_attack_damage"]):
+        if not (config["min_attack_lines"] <= request.timed_attack_line_count <= config["max_attack_lines"] and config["min_attack_damage"] <= request.timed_attack_damage_per_line <= config["max_attack_damage"]):
             raise HTTPException(422, "Timed-attack ability profile is outside the project minigame ranges")
-    for key in [*request.costs, *[str(effect.get("stat_key", "")) for effect in request.effects]]:
-        if not db.fetch_one("SELECT id FROM stat_definitions WHERE project_id = ? AND stat_key = ?", (project_id, key)): raise HTTPException(422, f"Unknown stat in ability: {key}")
-    try: db.execute("INSERT INTO ability_definitions(id, project_id, ability_key, name, description, target_type, requirements_json, costs_json, effects_json, minigame_profile_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (ability_id, project_id, request.ability_key, request.name, request.description, request.target_type, json.dumps(request.requirements), json.dumps(request.costs), json.dumps(request.effects), json.dumps(request.minigame_profile), now, now))
+    for cost in request.costs:
+        if cost.stat_key and not data.rules.stat(project_id, cost.stat_key): raise HTTPException(422, f"Unknown stat in ability: {cost.stat_key}")
+    for action in request.actions:
+        if action.effect_key and not data.rules.effect(project_id, action.effect_key): raise HTTPException(422, f"Unknown effect in ability: {action.effect_key}")
+    try: result = data.rules.save_ability(Ability.model_validate({"project_id": project_id, **request.model_dump(), "requirements": RequirementExpression.model_validate(request.requirements)}))
     except Exception as exc: raise HTTPException(422, str(exc)) from exc
-    return {"id": ability_id, **request.model_dump()}
+    return result.model_dump(mode="json")
 
 
-@app.put("/api/projects/{project_id}/abilities/{ability_id}")
-async def update_ability(project_id: str, ability_id: str, request: AbilityDefinitionCreate) -> dict[str, Any]:
-    if not db.fetch_one("SELECT id FROM ability_definitions WHERE id = ? AND project_id = ?", (ability_id, project_id)): raise HTTPException(404, "Ability definition not found")
-    known_bullet_skills = {row["id"] for row in scheduler.minigames.bullethell.catalog()["skills"]}
-    if not set(request.minigame_profile.get("bullethell_skill_ids", [])) <= known_bullet_skills:
-        raise HTTPException(422, "Ability references an unavailable bullet-hell skill")
-    attack_profile = request.minigame_profile.get("timed_attack")
-    if attack_profile:
-        config = next(row for row in scheduler.minigames.configs(project_id) if row["game_key"] == "timed_attack")
-        if not (config["min_attack_lines"] <= attack_profile["line_count"] <= config["max_attack_lines"] and config["min_attack_damage"] <= attack_profile["damage_per_line"] <= config["max_attack_damage"]):
-            raise HTTPException(422, "Timed-attack ability profile is outside the project minigame ranges")
-    for key in [*request.costs, *[str(effect.get("stat_key", "")) for effect in request.effects]]:
-        if not db.fetch_one("SELECT id FROM stat_definitions WHERE project_id = ? AND stat_key = ?", (project_id, key)): raise HTTPException(422, f"Unknown stat in ability: {key}")
-    try: db.execute("UPDATE ability_definitions SET ability_key=?, name=?, description=?, target_type=?, requirements_json=?, costs_json=?, effects_json=?, minigame_profile_json=?, updated_at=? WHERE id=?", (request.ability_key, request.name, request.description, request.target_type, json.dumps(request.requirements), json.dumps(request.costs), json.dumps(request.effects), json.dumps(request.minigame_profile), utc_now(), ability_id))
-    except Exception as exc: raise HTTPException(422, str(exc)) from exc
-    return {"id": ability_id, **request.model_dump()}
+@app.put("/api/projects/{project_id}/abilities/{ability_key}")
+async def update_ability(project_id: str, ability_key: str, request: AbilityDefinitionCreate) -> dict[str, Any]:
+    if not data.rules.ability(project_id, ability_key): raise HTTPException(404, "Ability definition not found")
+    if request.ability_key != ability_key: raise HTTPException(422, "ability_key is immutable")
+    return await create_ability(project_id, request)
 
 
-@app.delete("/api/projects/{project_id}/stats/{stat_id}", status_code=204)
-async def delete_stat(project_id: str, stat_id: str) -> None:
+@app.post("/api/projects/{project_id}/abilities/use")
+async def use_ability(project_id: str, request: AbilityUseRequest) -> dict[str, Any]:
+    project = require_project(project_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), [{"tool": "useAbility", "arguments": request.model_dump(exclude_none=True)}], provenance="player")
+        transaction = scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="player", summary=f"Used {request.ability_key}") if project.get("active_node_id") else scheduler.world.commit_root(project_id, mutations, provenance="player", summary=f"Used {request.ability_key}")
+    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
+    return {"transaction": transaction}
+
+
+@app.delete("/api/projects/{project_id}/stats/{stat_key}", status_code=204)
+async def delete_stat(project_id: str, stat_key: str) -> None:
     require_idle_project(project_id)
-    definition = db.fetch_one("SELECT * FROM stat_definitions WHERE id = ? AND project_id = ?", (stat_id, project_id))
+    definition = data.rules.stat(project_id, stat_key)
     if not definition: raise HTTPException(404, "Stat definition not found")
     referenced_bound = db.fetch_one(
-        "SELECT id,label FROM stat_definitions WHERE project_id=? "
-        "AND id<>? AND (minimum_stat_key=? OR maximum_stat_key=?) LIMIT 1",
-        (
-            project_id,
-            stat_id,
-            definition["stat_key"],
-            definition["stat_key"],
-        ),
+        "SELECT stat_key,label FROM stat_definitions WHERE project_id=? AND stat_key<>? AND (minimum_stat_key=? OR maximum_stat_key=?) LIMIT 1",
+        (project_id, stat_key, stat_key, stat_key),
     )
-    if referenced_bound:
-        raise HTTPException(
-            409,
-            f"Stat is used as a bound by {referenced_bound['label']}",
-        )
-    abilities = db.fetch_all("SELECT costs_json, effects_json FROM ability_definitions WHERE project_id = ?", (project_id,))
-    if any(definition["stat_key"] in json.loads(row["costs_json"]) or any(effect.get("stat_key") == definition["stat_key"] for effect in json.loads(row["effects_json"])) for row in abilities):
-        raise HTTPException(409, "Stat is referenced by an ability")
-    db.execute("DELETE FROM stat_definitions WHERE id = ?", (stat_id,))
+    if referenced_bound: raise HTTPException(409, f"Stat is used as a bound by {referenced_bound['label']}")
+    if db.fetch_one("SELECT 1 FROM effect_definitions WHERE project_id=? AND target_stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is targeted by an effect")
+    if db.fetch_one("SELECT 1 FROM effect_formula_nodes WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an effect formula")
+    if db.fetch_one("SELECT 1 FROM ability_costs WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an ability cost")
+    if db.fetch_one("SELECT 1 FROM ability_requirement_nodes WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an ability requirement")
+    if db.fetch_one("SELECT 1 FROM ability_passive_triggers WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by a passive trigger")
+    db.execute("DELETE FROM stat_definitions WHERE project_id=? AND stat_key=?", (project_id, stat_key))
 
 
-@app.delete("/api/projects/{project_id}/abilities/{ability_id}", status_code=204)
-async def delete_ability(project_id: str, ability_id: str) -> None:
+@app.delete("/api/projects/{project_id}/effects/{effect_key}", status_code=204)
+async def delete_effect(project_id: str, effect_key: str) -> None:
     require_idle_project(project_id)
-    db.execute("DELETE FROM ability_definitions WHERE id = ? AND project_id = ?", (ability_id, project_id))
+    if db.fetch_one("SELECT 1 FROM ability_actions WHERE project_id=? AND effect_key=?", (project_id, effect_key)): raise HTTPException(409, "Effect is referenced by an ability")
+    if any(item.get("effect_key") == effect_key for item in scheduler.world.projection(project_id).get("active_effects", {}).values()): raise HTTPException(409, "Effect has active instances")
+    db.execute("DELETE FROM effect_definitions WHERE project_id=? AND effect_key=?", (project_id, effect_key))
+
+
+@app.post("/api/projects/{project_id}/effects/apply")
+async def apply_effect(project_id: str, request: ApplyEffectRequest) -> dict[str, Any]:
+    project = require_project(project_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), [{"tool": "applyEffect", "arguments": request.model_dump(exclude_none=True)}], provenance="author")
+        transaction = scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="author", summary=f"Applied {request.effect_key}") if project.get("active_node_id") else scheduler.world.commit_root(project_id, mutations, provenance="author", summary=f"Applied {request.effect_key}")
+    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
+    return {"transaction": transaction}
+
+
+@app.delete("/api/projects/{project_id}/effects/active/{instance_id}")
+async def remove_active_effect(project_id: str, instance_id: str) -> dict[str, Any]:
+    project = require_project(project_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), [{"tool": "removeEffect", "arguments": {"active_instance_id": instance_id}}], provenance="author")
+        transaction = scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="author", summary="Removed active effect") if project.get("active_node_id") else scheduler.world.commit_root(project_id, mutations, provenance="author", summary="Removed active effect")
+    except WorldValidationError as exc: raise HTTPException(422, str(exc)) from exc
+    return {"transaction": transaction}
+
+
+@app.delete("/api/projects/{project_id}/abilities/{ability_key}", status_code=204)
+async def delete_ability(project_id: str, ability_key: str) -> None:
+    require_idle_project(project_id)
+    if db.fetch_one("SELECT 1 FROM ability_requirement_nodes WHERE project_id=? AND required_ability_key=?", (project_id, ability_key)): raise HTTPException(409, "Ability is referenced by another ability requirement")
+    if db.fetch_one("SELECT 1 FROM world_events WHERE project_id=? AND payload_json LIKE ? LIMIT 1", (project_id, f'%"{ability_key}"%')): raise HTTPException(409, "Ability is referenced by world state or history")
+    db.execute("DELETE FROM ability_definitions WHERE ability_key = ? AND project_id = ?", (ability_key, project_id))
+
+
+@app.post("/api/projects/{project_id}/rules/migration-warnings/{warning_id}/acknowledge")
+async def acknowledge_rule_warning(project_id: str, warning_id: str) -> dict[str, bool]:
+    require_project(project_id)
+    db.execute("UPDATE rule_migration_warnings SET acknowledged=1 WHERE id=? AND project_id=?", (warning_id, project_id))
+    return {"acknowledged": True}
 
 
 @app.get("/api/projects/{project_id}/map/nearby")
