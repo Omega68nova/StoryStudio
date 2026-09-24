@@ -168,7 +168,7 @@ def test_formula_potion_and_safety_errors() -> None:
         "actor": {"stats": {}}, "source": {"stats": {"quality": 2.5}}, "target": {"stats": {}},
     })
     assert magnitude == 25
-    with pytest.raises(DomainOperationError, match="Division by zero"):
+    with pytest.raises(DomainOperationError, match="divides by zero"):
         FormulaEvaluator().evaluate(FormulaNode.model_validate({
             "kind": "divide",
             "children": [{"kind": "constant", "value": 1}, {"kind": "constant", "value": 0}],
@@ -181,7 +181,7 @@ def test_formula_potion_and_safety_errors() -> None:
 
 @pytest.mark.parametrize("duration,tick", [(0, 1), (-1, 0), (4, 5)])
 def test_effect_timing_rejects_invalid_combinations(duration: int, tick: int) -> None:
-    with pytest.raises(ValidationError, match="timing"):
+    with pytest.raises(ValidationError, match="duration/tick"):
         effect("bad", {"kind": "constant", "value": 1}, duration=duration, tick=tick)
 
 
