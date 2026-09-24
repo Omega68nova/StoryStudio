@@ -120,10 +120,18 @@ class RulesRuntime:
         if str(ability.ability_kind) != "active": raise RulesRuntimeError("Passive abilities cannot be used directly")
         source_raw, source_item_id = actor_raw, arguments.get("source_item_id")
         if source_item_id:
-            if "item" not in map(str, ability.compatible_owner_kinds): raise RulesRuntimeError("This ability cannot be supplied by an item")
+            if "item" not in map(str, ability.compatible_owner_kinds):
+                raise RulesRuntimeError("This ability cannot be supplied by an item")
             source_raw = self.entity(projection, source_item_id, "item")
-            inventory = {str(entry.get("item_id")): int(entry.get("quantity", 0)) for entry in actor_raw.get("state", {}).get("inventory", [])}
-            if inventory.get(str(source_item_id), 0) <= 0 and str(source_item_id) not in set(map(str, actor_raw.get("state", {}).get("equipment", []))): raise RulesRuntimeError("The source item must be held or equipped")
+            source_abilities = set(map(str, source_raw.get("state", {}).get("abilities", [])))
+            if ability.ability_key not in source_abilities and ability.name not in source_abilities:
+                raise RulesRuntimeError("The source item does not provide this ability")
+            inventory = {
+                str(entry.get("item_id")): int(entry.get("quantity", 0))
+                for entry in actor_raw.get("state", {}).get("inventory", [])
+            }
+            if inventory.get(str(source_item_id), 0) <= 0 and str(source_item_id) not in set(map(str, actor_raw.get("state", {}).get("equipment", []))):
+                raise RulesRuntimeError("The source item must be held or equipped")
         elif "character" not in map(str, ability.compatible_owner_kinds): raise RulesRuntimeError("This ability requires a source item")
         elif ability.ability_key not in actor.state.abilities and ability.name not in actor.state.abilities: raise RulesRuntimeError(f"{actor.name} does not know {ability.name}")
         lookup = lambda key, owner="character": self.stat(project_id, key, owner)
