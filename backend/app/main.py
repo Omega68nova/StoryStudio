@@ -89,7 +89,7 @@ from app.schemas import (
     LocationBackgroundCreate, EnvironmentLocationUpdate, WorldRootUpdate, WorldRootCreate,
     MapAnchorUpdate, BarrierUpdate, TravelConnectionUpdate, EncounterRuleUpdate,
     TravelActionRequest,
-    GeometryEditRequest, MapDiscoveryUpdate,
+    GeometryEditRequest, MapGeometryUpdate, MapDiscoveryUpdate,
 )
 from app.services.events import EventHub
 from app.services.runtimes import ComfyClient, LlamaClient, ProcessSupervisor
@@ -1436,6 +1436,84 @@ async def upsert_encounter_rule(project_id: str, request: EncounterRuleUpdate) -
         transaction, arguments = _commit_spatial_mutation(project_id, "upsertEncounterRule", request.model_dump(mode="json", exclude_none=True), "Encounter rule changed")
     except WorldValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.put("/api/projects/{project_id}/spatial/locations/{location_id}/geometry")
+async def replace_location_geometry(project_id: str, location_id: str, request: MapGeometryUpdate) -> dict[str, Any]:
+    require_project(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    location = projection.get("entities", {}).get(location_id)
+    if not location or location.get("kind") != "location":
+        raise HTTPException(404, "Location not found")
+    if request.kind == "polyline":
+        raise HTTPException(422, "Open polylines are barriers/walls, not location footprints")
+    from app.services.spatial import validate_geometry, SpatialValidationError
+    coordinate_space = location.get("state", {}).get("parent_location_id") or location_id
+    try:
+        geometry = validate_geometry({
+            "location_id": coordinate_space,
+            "kind": request.kind,
+            "points": request.points,
+        })
+    except SpatialValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    points = geometry["points"]
+    x = sum(float(point["x"]) for point in points) / len(points)
+    y = sum(float(point["y"]) for point in points) / len(points)
+    transaction, arguments = _commit_spatial_mutation(
+        project_id,
+        "updateEntity",
+        {
+            "entity_id": location_id,
+            "patch": {
+                "footprint": geometry,
+                "x": x,
+                "y": y,
+                "spatial_kind": "area" if request.kind == "polygon" else "spot",
+            },
+        },
+        "Location geometry changed",
+    )
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    return arguments
+
+
+@app.patch("/api/projects/{project_id}/spatial/locations/{location_id}/geometry")
+async def edit_location_geometry(project_id: str, location_id: str, request: GeometryEditRequest) -> dict[str, Any]:
+    require_project(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    location = projection.get("entities", {}).get(location_id)
+    if not location or location.get("kind") != "location":
+        raise HTTPException(404, "Location not found")
+    raw = location.get("state", {}).get("footprint")
+    if not isinstance(raw, dict) or raw.get("kind") not in {"point", "polygon"}:
+        raise HTTPException(422, "Location footprint is unavailable; create its geometry first")
+    points = [dict(point) for point in raw.get("points") or []]
+    operation, index = request.operation, request.index
+    point = {"x": float(request.x or 0), "y": float(request.y or 0)}
+    if operation == "add_point" and 0 <= index <= len(points):
+        points.insert(index, point)
+    elif operation == "move_point" and 0 <= index < len(points):
+        points[index] = point
+    elif operation == "remove_point" and 0 <= index < len(points):
+        points.pop(index)
+    else:
+        raise HTTPException(422, "Geometry edit operation or point index is invalid")
+    from app.services.spatial import validate_geometry, SpatialValidationError
+    try:
+        geometry = validate_geometry({**raw, "points": points})
+    except SpatialValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    x = sum(float(item["x"]) for item in points) / len(points)
+    y = sum(float(item["y"]) for item in points) / len(points)
+    transaction, arguments = _commit_spatial_mutation(
+        project_id,
+        "updateEntity",
+        {"entity_id": location_id, "patch": {"footprint": geometry, "x": x, "y": y}},
+        "Location geometry changed",
+    )
     await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
     return arguments
 
