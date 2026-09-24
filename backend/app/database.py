@@ -338,15 +338,18 @@ class Database:
         if not leaves: return
         root_value = leaves[0] if len(leaves) == 1 else {"kind": "and", "children": leaves}
 
-        def write(node: dict[str, Any], parent_id: str | None, position: int) -> None:
+        def write(node: dict[str, Any], parent_id: str | None, position: int, edge_kind: str = "child") -> None:
             node_id = new_id()
             connection.execute(
-                "INSERT INTO ability_requirement_nodes(id,project_id,ability_key,parent_id,position,node_kind,target,stat_key,comparison,value_json,item_id,tag,relation,location_id,time_phase_id,weather_id,required_ability_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (node_id, project_id, ability_key, parent_id, position, node.get("kind"), node.get("target", "actor"), node.get("stat_key"), node.get("comparison", "gte"), json.dumps(node.get("value")) if node.get("value") is not None else None, node.get("item_id"), node.get("tag"), node.get("relation"), node.get("location_id"), node.get("time_phase_id"), node.get("weather_id"), node.get("ability_key")),
+                "INSERT INTO ability_requirement_nodes(id,project_id,ability_key,parent_id,position,edge_kind,node_kind,target,stat_key,comparison,value_json,item_id,tag,relation,location_id,time_phase_id,weather_id,required_ability_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (node_id, project_id, ability_key, parent_id, position, edge_kind, node.get("kind"), node.get("target", "actor"), node.get("stat_key"), node.get("comparison", "gte"), json.dumps(node.get("value")) if node.get("value") is not None else None, node.get("item_id"), node.get("tag"), node.get("relation"), node.get("location_id"), node.get("time_phase_id"), node.get("weather_id"), node.get("ability_key")),
             )
-            children = node.get("children") or ([node.get("child")] if node.get("child") else [])
-            for index, child in enumerate(children):
-                if isinstance(child, dict): write(child, node_id, index)
+            for index, child in enumerate(node.get("children") or []):
+                if isinstance(child, dict):
+                    write(child, node_id, index, "child")
+            child = node.get("child")
+            if isinstance(child, dict):
+                write(child, node_id, 0, "not_child")
         write(root_value, None, 0)
 
 
