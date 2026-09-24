@@ -702,6 +702,7 @@ class RequirementExpression(DomainModel):
 class MapAnchor(DomainModel):
     id: DomainId
     location_id: DomainId
+    coordinate_space_id: DomainId | None = None
     name: str = Field(min_length=1)
     kind: AnchorKind = AnchorKind.WAYPOINT
     x: Number | None = None
