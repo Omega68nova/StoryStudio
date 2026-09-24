@@ -55,6 +55,8 @@ type Props = {
   media: MediaAsset[];
   stats: StatDefinition[];
   abilities: AbilityDefinition[];
+  activeEffects: Array<{ id: string; effect_key: string; source_id?: string | null; clock: string; next_tick: number; expires_at?: number | null; stacks: number }>;
+  removeActiveEffect: (id: string) => Promise<void>;
   outfitDraft: OutfitDraft | null;
   setOutfitDraft: (value: OutfitDraft | null) => void;
   saveOutfit: () => Promise<void>;
@@ -90,6 +92,8 @@ export function CharacterEditorForm({
   media,
   stats,
   abilities,
+  activeEffects,
+  removeActiveEffect,
   outfitDraft,
   setOutfitDraft,
   saveOutfit,
@@ -230,6 +234,7 @@ export function CharacterEditorForm({
         onSetStat={setStat}
         onUpdateDefinition={updateStatDefinition}
       />
+      {activeEffects.length > 0 && <section className="panel"><h3>Active effects</h3>{activeEffects.map(effect => <div className="rule-row" key={effect.id}><div><strong>{effect.effect_key}</strong><small>{effect.stacks} stack(s) · next {effect.clock} tick at {effect.next_tick}{effect.expires_at == null ? " · indefinite" : ` · expires at ${effect.expires_at}`}</small></div><Button size="small" color="error" onClick={() => void removeActiveEffect(effect.id)}>Remove</Button></div>)}</section>}
     </aside>
 
     <main className="character-editor-main">
@@ -779,16 +784,15 @@ function CharacterStatRail({
 
   const ordered = useMemo(() => {
     const known = definitions.filter(
-      item => item.scope === "character" && item.stat_key in values,
+      item => item.compatible_owner_kinds.includes("character") && item.stat_key in values,
     );
     const missingDefinitions = Object.keys(values)
       .filter(key => !definitionsByKey[key])
       .map<StatDefinition>(key => ({
-        id: key,
         stat_key: key,
         label: key,
         description: "",
-        scope: "character" as const,
+        compatible_owner_kinds: ["character"],
         default_value: 0,
         minimum: 0,
         maximum: 100,
