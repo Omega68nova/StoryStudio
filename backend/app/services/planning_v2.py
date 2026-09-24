@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from app.database import Database, new_id, utc_now
-from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat
+from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat, validate_stat_dependency_graph
 from app.data.dataProvider import DataProvider
 from app.services.world import WorldValidationError
 
@@ -576,12 +576,22 @@ def apply_weather(db: Database, project_id: str, owner_id: str, stage_number: in
 
 def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int, draft: dict[str, Any]) -> None:
     rules = DataProvider(db).rules
+    pending_stats: list[tuple[str, Stat, dict[str, Any]]] = []
+    merged_stats = {item.stat_key: item for item in rules.stats(project_id)}
     for stat in draft.get("stats", []):
         key = str(stat.get("key") or stat.get("stat_key") or "").strip()
-        if not key: raise WorldValidationError("Invalid stat definition")
+        if not key:
+            raise WorldValidationError("Invalid stat definition")
         model = Stat.model_validate({"project_id": project_id, **stat, "stat_key": key, "label": stat.get("label") or key})
+        pending_stats.append((key, model, stat))
+        merged_stats[key] = model
+    try:
+        validate_stat_dependency_graph(list(merged_stats.values()))
+    except ValueError as exc:
+        raise WorldValidationError(str(exc)) from exc
+    for key, model, raw in pending_stats:
         rules.save_stat(model, previous_key=key if rules.stat(project_id, key) else None)
-        record_resource(db, owner_id, stage_number, key, "stat", key, stat)
+        record_resource(db, owner_id, stage_number, key, "stat", key, raw)
     known_stats = {item.stat_key for item in rules.stats(project_id)}
     for effect in draft.get("effects", []):
         key = str(effect.get("key") or effect.get("effect_key") or "").strip()
