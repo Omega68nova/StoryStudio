@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import sqlite3
 
 import pytest
 from pydantic import ValidationError
 
+from app.database import Database, utc_now
 from app.domain.operations import DomainOperationError, FormulaEvaluator
 from app.domain.world import EffectDefinition, FormulaNode, Stat
 from app.services.rules import RulesRuntime, RulesRuntimeError
@@ -333,3 +335,49 @@ def test_due_effects_caps_large_time_jumps() -> None:
     apply_event(world, "effect.instance_applied", applied, None)
     with pytest.raises(RulesRuntimeError, match="1,000"):
         rt.due_effects(PROJECT, world, "world_actions", 1001)
+
+
+
+def test_fresh_database_has_normalized_rules_schema(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    versions = {row["version"] for row in db.fetch_all("SELECT version FROM schema_migrations")}
+    assert "041_spatial_canonical_storage" in versions
+    assert "042_canonical_rules" in versions
+
+    tables = {row["name"] for row in db.fetch_all("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {
+        "stat_definitions",
+        "stat_definition_owner_kinds",
+        "effect_definitions",
+        "effect_formula_nodes",
+        "ability_definitions",
+        "ability_owner_kinds",
+        "ability_requirement_nodes",
+        "ability_costs",
+        "ability_actions",
+        "ability_passive_triggers",
+        "ability_bullethell_skills",
+        "rule_migration_warnings",
+    } <= tables
+    ability_columns = {row["name"] for row in db.fetch_all("PRAGMA table_info(ability_definitions)")}
+    assert "requirements_json" not in ability_columns
+    assert "costs_json" not in ability_columns
+    assert "effects_json" not in ability_columns
+
+
+def test_canonical_rule_keys_are_database_immutable(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    project = db.create_project("Rules")
+    now = utc_now()
+    db.execute(
+        "INSERT INTO stat_definitions(project_id,stat_key,label,description,default_value,minimum,maximum,display_style,integer_only,visibility,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (project["id"], "hp", "HP", "", 10, 0, 10, "bar", 1, "public", now, now),
+    )
+    with pytest.raises(sqlite3.IntegrityError, match="immutable"):
+        db.execute(
+            "UPDATE stat_definitions SET stat_key='health' WHERE project_id=? AND stat_key='hp'",
+            (project["id"],),
+        )
