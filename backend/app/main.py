@@ -2580,6 +2580,28 @@ def _validate_stat_bound_references(
         candidate = Stat.model_validate({"project_id": project_id, **request.model_dump()})
         definitions[candidate.stat_key] = candidate
         validate_stat_dependency_graph(list(definitions.values()))
+
+        # Changing owner compatibility must not invalidate already-persisted
+        # ability costs, passive triggers, effect targets, or formula participants.
+        if "character" not in set(map(str, candidate.compatible_owner_kinds)):
+            for ability in data.rules.abilities(project_id):
+                if any(str(cost.stat_key or "") == candidate.stat_key for cost in ability.costs):
+                    raise ValueError(f"Stat {candidate.stat_key} is used by character ability cost {ability.ability_key}")
+                if any(str(trigger.stat_key or "") == candidate.stat_key for trigger in ability.passive_triggers):
+                    raise ValueError(f"Stat {candidate.stat_key} is used by character passive trigger {ability.ability_key}")
+        for ability in data.rules.abilities(project_id):
+            for action in ability.actions:
+                if not action.effect_key:
+                    continue
+                effect = data.rules.effect(project_id, str(action.effect_key))
+                if not effect:
+                    continue
+                _validate_ability_effect_compatibility(
+                    ability,
+                    effect,
+                    action,
+                    lambda key: definitions.get(key),
+                )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
@@ -2680,6 +2702,63 @@ def _validate_requirement_references(project_id: str, node: RequirementExpressio
         _validate_requirement_references(project_id, node.child, ability_key=ability_key)
 
 
+def _ability_action_target_kinds(ability_target_type: str, selector: str) -> set[str]:
+    if selector in {"actor", "party", "allies", "enemies", "nearby_enemies", "faction_members", "all", "random", "relationship_target"}:
+        return {"character"}
+    if selector == "location":
+        return {"location"}
+    if selector != "target":
+        return set()
+    if ability_target_type == "relationship":
+        return {"relationship"}
+    if ability_target_type == "location":
+        return {"location"}
+    return {"character"}
+
+
+def _formula_stat_references(node: Any) -> list[tuple[str, str]]:
+    references: list[tuple[str, str]] = []
+    if str(node.kind) == "stat" and node.stat_key:
+        references.append((str(node.participant), str(node.stat_key)))
+    for child in node.children:
+        references.extend(_formula_stat_references(child))
+    return references
+
+
+def _validate_ability_effect_compatibility(
+    ability: Any,
+    effect: EffectDefinition,
+    action: Any,
+    stat_lookup: Any,
+) -> None:
+    target_kinds = _ability_action_target_kinds(str(ability.target_type), str(action.target))
+    target_stat = stat_lookup(effect.target_stat_key)
+    if not target_stat:
+        raise ValueError(f"Effect {effect.effect_key} references unknown target stat {effect.target_stat_key}")
+    supported_target_kinds = set(map(str, target_stat.compatible_owner_kinds))
+    if target_kinds and not target_kinds <= supported_target_kinds:
+        missing = ", ".join(sorted(target_kinds - supported_target_kinds))
+        raise ValueError(f"Effect {effect.effect_key} target stat {effect.target_stat_key} is incompatible with {missing}")
+
+    for participant, stat_key in _formula_stat_references(effect.formula):
+        definition = stat_lookup(stat_key)
+        if not definition:
+            raise ValueError(f"Effect {effect.effect_key} formula references unknown stat {stat_key}")
+        supported = set(map(str, definition.compatible_owner_kinds))
+        required = (
+            {"character"}
+            if participant == "actor"
+            else set(map(str, ability.compatible_owner_kinds))
+            if participant == "source"
+            else target_kinds
+        )
+        if required and not required <= supported:
+            missing = ", ".join(sorted(required - supported))
+            raise ValueError(
+                f"Effect {effect.effect_key} formula stat {stat_key} is incompatible with {participant} owner kind(s): {missing}"
+            )
+
+
 def _validate_effect_action_timing(effect: EffectDefinition, action: Any) -> None:
     duration = effect.duration if action.duration_override is None else action.duration_override
     tick = effect.tick_interval if action.tick_override is None else action.tick_override
@@ -2733,6 +2812,15 @@ def _validate_ability_references(project_id: str, request: AbilityDefinitionCrea
             if not definition:
                 raise HTTPException(422, f"Unknown effect in ability: {action.effect_key}")
             _validate_effect_action_timing(definition, action)
+            try:
+                _validate_ability_effect_compatibility(
+                    request,
+                    definition,
+                    action,
+                    lambda key: data.rules.stat(project_id, key),
+                )
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
         if action.destination_id:
             destination = entities.get(str(action.destination_id))
             if not destination or destination.get("kind") != "location":
