@@ -572,3 +572,80 @@ def test_legacy_active_effect_events_are_removed_but_stat_history_remains(tmp_pa
     )
     assert warning is not None
     assert '"instance_count": 1' in warning["details_json"]
+
+
+
+def test_passive_stat_trigger_cascade_and_recursive_loop_rejection() -> None:
+    hp = stat("hp")
+    pulse = effect("pulse", {"kind": "constant", "value": 1}, operation="subtract")
+    passive = Ability.model_validate({
+        "project_id": PROJECT,
+        "ability_key": "retaliate",
+        "name": "Retaliate",
+        "ability_kind": "passive",
+        "compatible_owner_kinds": ["character"],
+        "target_type": "self",
+        "passive_triggers": [{"kind": "stat_changed", "stat_key": "hp"}],
+        "actions": [{"kind": "apply_effect", "target": "actor", "effect_key": "pulse"}],
+    })
+    rt = runtime([hp], [pulse], [passive])
+    world = projection()
+    world["entities"]["actor"]["state"]["abilities"] = ["retaliate"]
+    world["entities"]["actor"]["stats"]["hp"] = 100
+
+    initial = ("stat.changed", "actor", {
+        "entity_id": "actor",
+        "stat_key": "hp",
+        "previous_value": 100,
+        "value": 99,
+        "operation": "subtract",
+    })
+    with pytest.raises(RulesRuntimeError, match="Recursive passive loop"):
+        rt.passive_cascade(PROJECT, world, [initial])
+
+
+def test_item_passive_does_not_run_unless_equipped() -> None:
+    hp = stat("hp")
+    regen = effect("regen_passive", {"kind": "constant", "value": 1}, operation="add")
+    passive = Ability.model_validate({
+        "project_id": PROJECT,
+        "ability_key": "ring_regen",
+        "name": "Ring regen",
+        "ability_kind": "passive",
+        "compatible_owner_kinds": ["item"],
+        "target_type": "self",
+        "passive_triggers": [{"kind": "owner_action"}],
+        "actions": [{"kind": "apply_effect", "target": "actor", "effect_key": "regen_passive"}],
+    })
+    rt = runtime([hp], [regen], [passive])
+    world = projection(target_hp=50)
+    world["entities"]["actor"]["stats"]["hp"] = 50
+    world["entities"]["ring"] = {"id": "ring", "kind": "item", "name": "Ring", "state": {"abilities": ["ring_regen"]}, "stats": {}}
+    world["entities"]["actor"]["state"]["inventory"] = [{"item_id": "ring", "quantity": 1}]
+
+    event = ("story.action_committed", "actor", {"actor_id": "actor"})
+    assert rt.passive_cascade(PROJECT, world, [event]) == []
+
+    world["entities"]["actor"]["state"]["equipment"] = ["ring"]
+    emitted = rt.passive_cascade(PROJECT, world, [event])
+    changed = [item for item in emitted if item["event_type"] == "stat.changed"]
+    assert len(changed) == 1
+    assert changed[0]["entity_id"] == "actor"
+    assert changed[0]["value"] == 51
+
+
+def test_active_item_ability_requires_source_item_to_provide_ability() -> None:
+    ability = Ability.model_validate({
+        "project_id": PROJECT,
+        "ability_key": "wand_spell",
+        "name": "Wand spell",
+        "target_type": "self",
+        "compatible_owner_kinds": ["item"],
+        "actions": [],
+    })
+    rt = runtime([], abilities=[ability])
+    world = projection()
+    world["entities"]["wand"] = {"id": "wand", "kind": "item", "name": "Wand", "state": {"abilities": []}, "stats": {}}
+    world["entities"]["actor"]["state"]["inventory"] = [{"item_id": "wand", "quantity": 1}]
+    with pytest.raises(RulesRuntimeError, match="does not provide"):
+        rt.normalize_ability(PROJECT, world, {"actor_id": "actor", "ability_key": "wand_spell", "source_item_id": "wand"}, "player")
