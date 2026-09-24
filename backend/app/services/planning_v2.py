@@ -335,6 +335,25 @@ def validate_stage(stage_number: int, draft: dict[str, Any], settings: dict[str,
         if not isinstance(foundation, dict) or foundation.get("narration_mode", "third_limited") not in {"first_person", "third_limited", "third_omniscient"} or foundation.get("pov_strategy", "first_player") not in {"first_player", "selected_character", "none"}:
             raise WorldValidationError("Foundation requires valid narration and POV settings")
     if stage_number == 4:
+        planned_stats: list[Stat] = []
+        for raw_stat in draft.get("stats", []):
+            try:
+                planned_stats.append(Stat.model_validate({
+                    "project_id": "planning",
+                    **raw_stat,
+                    "stat_key": raw_stat.get("stat_key") or raw_stat.get("key"),
+                    "label": raw_stat.get("label") or raw_stat.get("stat_key") or raw_stat.get("key"),
+                }))
+            except (TypeError, ValueError) as exc:
+                raise WorldValidationError(f"Stat '{raw_stat.get('label') or raw_stat.get('key')}' is invalid: {exc}") from exc
+        if planned_stats:
+            try:
+                validate_stat_dependency_graph(planned_stats)
+            except ValueError as exc:
+                # Cross-draft references are checked again at publication against
+                # existing project stats; local cycles are still rejected here.
+                if "unavailable bound stat" not in str(exc):
+                    raise WorldValidationError(str(exc)) from exc
         for lore_system in draft.get("lore_systems", []):
             lore_name = str(lore_system.get("name") or lore_system.get("key") or "Unnamed lore system")
             description = str((lore_system.get("state") or {}).get("description") or "").strip()
@@ -385,7 +404,7 @@ def generated_stage_has_content(stage_number: int, draft: dict[str, Any], focus:
     required_fields = {
         2: ("locations",),
         3: ("locations",),
-        4: ("lore_systems", "stats", "abilities", "items"),
+        4: ("lore_systems", "stats", "effects", "abilities", "items"),
         5: ("characters",),
         6: ("character_updates", "outfits", "relationships", "routines", "facts", "plot_beats"),
     }
@@ -405,8 +424,20 @@ def validate_catalog_references(db: Database, project_id: str, stage_number: int
         defined.update(row["stat_key"] for row in db.fetch_all("SELECT stat_key FROM stat_definitions WHERE project_id=?", (project_id,)))
         effect_keys = {str(item.get("effect_key") or item.get("key") or "") for item in draft.get("effects", [])}
         effect_keys.update(row["effect_key"] for row in db.fetch_all("SELECT effect_key FROM effect_definitions WHERE project_id=?", (project_id,)))
+        def formula_stat_keys(node: Any) -> set[str]:
+            if not isinstance(node, dict):
+                return set()
+            found = {str(node.get("stat_key"))} if node.get("kind") == "stat" and node.get("stat_key") else set()
+            for child in node.get("children") or []:
+                found.update(formula_stat_keys(child))
+            return found
         for effect in draft.get("effects", []):
-            if str(effect.get("target_stat_key") or "") not in defined: raise WorldValidationError(f"Effect '{effect.get('name') or effect.get('key')}' targets an unavailable stat")
+            effect_name = effect.get("name") or effect.get("key")
+            if str(effect.get("target_stat_key") or "") not in defined:
+                raise WorldValidationError(f"Effect '{effect_name}' targets an unavailable stat")
+            missing_formula = sorted(formula_stat_keys(effect.get("formula")) - defined)
+            if missing_formula:
+                raise WorldValidationError(f"Effect '{effect_name}' formula references unavailable stat(s): {', '.join(missing_formula)}")
         for ability in draft.get("abilities", []):
             ability_name = str(ability.get("name") or ability.get("ability_key") or ability.get("key") or "Unnamed ability")
             referenced = {str(item.get("stat_key")) for item in ability.get("costs", []) if isinstance(item, dict) and item.get("stat_key")}
