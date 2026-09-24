@@ -8,7 +8,7 @@ from pydantic import ValidationError
 
 from app.database import Database, utc_now
 from app.domain.operations import DomainOperationError, FormulaEvaluator
-from app.domain.world import Ability, EffectDefinition, FormulaNode, Stat
+from app.domain.world import Ability, EffectDefinition, FormulaNode, Stat, validate_stat_dependency_graph
 from app.services.rules import RulesRuntime, RulesRuntimeError
 
 
@@ -649,3 +649,47 @@ def test_active_item_ability_requires_source_item_to_provide_ability() -> None:
     world["entities"]["actor"]["state"]["inventory"] = [{"item_id": "wand", "quantity": 1}]
     with pytest.raises(RulesRuntimeError, match="does not provide"):
         rt.normalize_ability(PROJECT, world, {"actor_id": "actor", "ability_key": "wand_spell", "source_item_id": "wand"}, "player")
+
+
+
+def test_stat_dependency_graph_rejects_indirect_cycles() -> None:
+    first = stat("first", maximum_stat_key="second")
+    second = stat("second", maximum_stat_key="third")
+    third = stat("third", maximum_stat_key="first")
+    with pytest.raises(ValueError, match="cycle"):
+        validate_stat_dependency_graph([first, second, third])
+
+
+def test_stat_dependency_graph_requires_owner_compatibility() -> None:
+    character_limit = stat("character_limit", owners=["character"])
+    item_value = stat("item_value", maximum_stat_key="character_limit", owners=["item"])
+    with pytest.raises(ValueError, match="compatible owner kind"):
+        validate_stat_dependency_graph([character_limit, item_value])
+
+
+def test_stat_operations_round_and_clamp_after_every_change() -> None:
+    integer_hp = stat("hp", default=5, minimum=0, maximum=10, integer_only=True)
+    rt = runtime([integer_hp])
+    world = projection(target_hp=5)
+    added = rt.adjust_stat(PROJECT, world, {
+        "entity_id": "target",
+        "stat_key": "hp",
+        "operation": "add",
+        "amount": 1.6,
+    })
+    assert added["value"] == 7
+    multiplied = rt.adjust_stat(PROJECT, world, {
+        "entity_id": "target",
+        "stat_key": "hp",
+        "operation": "multiply",
+        "amount": 5,
+    })
+    assert multiplied["value"] == 10
+
+
+def test_formula_complexity_is_bounded() -> None:
+    node: dict = {"kind": "constant", "value": 1}
+    for _ in range(13):
+        node = {"kind": "negate", "children": [node]}
+    with pytest.raises(ValidationError, match="complexity"):
+        effect("too_deep", node)
