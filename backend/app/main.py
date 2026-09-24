@@ -103,6 +103,7 @@ from app.services.worldClone import WorldCloneService
 from app.services.lifecycle import DataLifecycle, LifecycleConflict, TERMINAL_JOB_STATUSES
 from app.services.auth import AuthError, AuthService, AuthUser, COOKIE_NAME, SESSION_DAYS
 from app.services.environment import EnvironmentService
+from app.services.spatial_repository import SpatialRepository
 from app.managers.soundManager import SoundManager
 from app.data.dataProvider import DataProvider
 from app.services.routeDataService import RouteDataService
@@ -119,6 +120,7 @@ scheduler = GenerationScheduler(db, events, supervisor)
 lifecycle = DataLifecycle(db)
 auth = AuthService(db)
 environment = EnvironmentService(db)
+spatial_repository = SpatialRepository(db)
 data = DataProvider(db)
 sound = SoundManager(db, events=events, data_provider=data)
 route_data = RouteDataService(data)
@@ -133,6 +135,12 @@ BUILD_VERSION = "0.17.0-environment"
 async def lifespan(_: FastAPI):
     db.initialize()
     await scheduler.start()
+    # Materialize the active branch for existing projects after schema migration.
+    # This is idempotent and lets old event-backed maps become relational without
+    # destructive conversion of their branch history.
+    for project in db.fetch_all("SELECT id FROM projects"):
+        projection = scheduler.world.projection(project["id"], use_cache=False)
+        spatial_repository.synchronize(project["id"], projection)
     try:
         yield
     finally:
@@ -1290,8 +1298,30 @@ def _commit_spatial_mutations(project_id: str, raw: list[dict[str, Any]], summar
 @app.get("/api/projects/{project_id}/spatial/map")
 async def get_spatial_map(project_id: str, location_id: str | None = None) -> dict[str, Any]:
     require_project(project_id)
-    from app.services.spatial import SpatialService
-    return SpatialService(scheduler.world.projection(project_id)).local_map(location_id, administrative=current_user().admin, include_geometry=current_user().admin)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    spatial_repository.synchronize(project_id, projection)
+    return spatial_repository.local_map(
+        project_id,
+        location_id,
+        administrative=current_user().admin,
+        include_geometry=current_user().admin,
+    )
+
+
+@app.get("/api/projects/{project_id}/spatial/storage")
+async def get_spatial_storage_status(project_id: str) -> dict[str, Any]:
+    require_project(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    state = spatial_repository.synchronize(project_id, projection)
+    return {"state": state, "counts": spatial_repository.counts(project_id)}
+
+
+@app.post("/api/projects/{project_id}/spatial/storage/migrate")
+async def migrate_spatial_storage(project_id: str) -> dict[str, Any]:
+    require_project(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    state = spatial_repository.synchronize(project_id, projection, force=True)
+    return {"state": state, "counts": spatial_repository.counts(project_id)}
 
 
 @app.put("/api/projects/{project_id}/spatial/root")
