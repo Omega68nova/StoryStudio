@@ -163,3 +163,68 @@ def test_spatial_repository_hides_geometry_from_non_admin_map_reads(tmp_path):
     public = repository.local_map(project_id, "root", administrative=False, include_geometry=False)
     assert "x" not in public["locations"][0]
     assert "footprint" not in public["locations"][0]
+
+
+
+def test_cross_layer_portal_is_visible_from_its_source_coordinate_space(tmp_path):
+    db, project_id = _setup(tmp_path)
+    repository = SpatialRepository(db)
+    root = _location("root", "World", None, 50, 50, area=True)
+    a = _location("a", "A", "root", 20, 20, area=True)
+    b = _location("b", "B", "root", 80, 80, area=True)
+    projection = {
+        "project_id": project_id,
+        "head_node_id": None,
+        "root_location_id": "root",
+        "entities": {"root": root, "a": a, "b": b},
+        "relations": {},
+        "map_anchors": {
+            "portal-source": {
+                "id": "portal-source",
+                "location_id": "a",
+                "coordinate_space_id": "root",
+                "name": "Portal in A",
+                "kind": "waypoint",
+                "x": 30,
+                "y": 30,
+                "discovered": True,
+                "enabled": True,
+            },
+            "portal-target": {
+                "id": "portal-target",
+                "location_id": "b",
+                "coordinate_space_id": "b",
+                "name": "Portal destination",
+                "kind": "waypoint",
+                "x": 50,
+                "y": 50,
+                "discovered": True,
+                "enabled": True,
+            },
+        },
+        "map_barriers": {},
+        "travel_connections": {
+            "portal": {
+                "id": "portal",
+                "kind": "portal",
+                "source_anchor_id": "portal-source",
+                "target_anchor_id": "portal-target",
+                "travel_minutes": 0,
+                "modes": ["walk"],
+                "bidirectional": True,
+                "discovered": True,
+                "enabled": True,
+            },
+        },
+        "encounter_rules": {},
+        "travel_itineraries": {},
+        "transactions": [],
+    }
+
+    repository.synchronize(project_id, projection, force=True)
+    local = repository.local_map(project_id, "root", administrative=True, include_geometry=True)
+    assert {item["id"] for item in local["anchors"]} == {"portal-source"}
+    assert [item["id"] for item in local["connections"]] == ["portal"]
+    assert local["connections"][0]["source_location_id"] == "a"
+    assert local["connections"][0]["target_location_id"] == "b"
+    assert local["connections"][0]["target_coordinate_space_id"] == "b"
