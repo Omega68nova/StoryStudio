@@ -104,6 +104,16 @@ class Database:
             applied = {
                 row[0] for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
             }
+            # The unfinished canonical-rules branch originally used migration 041.
+            # In the merged history, spatial storage owns 041 and canonical rules
+            # move to 042. Databases that already ran the unfinished branch must
+            # not execute the canonical schema rewrite a second time.
+            if "041_canonical_rules" in applied and "042_canonical_rules" not in applied:
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    ("042_canonical_rules", utc_now()),
+                )
+                applied.add("042_canonical_rules")
             for path in sorted(migration_dir.glob("*.sql")):
                 if path.stem in applied:
                     continue
@@ -138,7 +148,7 @@ class Database:
             # GenerationPlan owns generation/review recovery.
 
     def _migrate_canonical_rules(self, connection: sqlite3.Connection) -> None:
-        """Complete migration 041's data-dependent conversion once, atomically."""
+        """Complete the canonical-rules data conversion once, atomically."""
         legacy_stats = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stat_definitions_legacy_v2'"
         ).fetchone()
