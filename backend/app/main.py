@@ -1664,6 +1664,7 @@ async def create_environment_location(project_id: str, request: EnvironmentLocat
             transaction = scheduler.world.commit_root(project_id, mutations, provenance="author", summary=f"Created {request.name}")
     except WorldValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
+    spatial_repository.synchronize(project_id, scheduler.world.projection(project_id, use_cache=False), force=True)
     await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
     await events.publish("environment", {"project_id": project_id, "action": "location_changed"})
     return scheduler.world.entity_card(project_id, mutations[0].arguments["entity_id"])
@@ -1682,6 +1683,7 @@ async def update_environment_location(project_id: str, location_id: str, request
             transaction = scheduler.world.commit_root(project_id, mutations, provenance="author", summary=f"Updated {request.name}")
     except WorldValidationError as exc:
         raise HTTPException(422, str(exc)) from exc
+    spatial_repository.synchronize(project_id, scheduler.world.projection(project_id, use_cache=False), force=True)
     await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
     await events.publish("environment", {"project_id": project_id, "action": "location_changed"})
     return scheduler.world.entity_card(project_id, location_id)
