@@ -55,7 +55,8 @@ type Props = {
   media: MediaAsset[];
   stats: StatDefinition[];
   abilities: AbilityDefinition[];
-  activeEffects: Array<{ id: string; effect_key: string; source_id?: string | null; clock: string; next_tick: number; expires_at?: number | null; stacks: number }>;
+  activeEffects: Array<{ id: string; effect_key: string; source_id?: string | null; clock: "story_minutes" | "target_actions" | "world_actions"; next_tick: number; expires_at?: number | null; stacks: number }>;
+  effectProgress: Record<"story_minutes" | "target_actions" | "world_actions", number>;
   removeActiveEffect: (id: string) => Promise<void>;
   outfitDraft: OutfitDraft | null;
   setOutfitDraft: (value: OutfitDraft | null) => void;
@@ -93,6 +94,7 @@ export function CharacterEditorForm({
   stats,
   abilities,
   activeEffects,
+  effectProgress,
   removeActiveEffect,
   outfitDraft,
   setOutfitDraft,
@@ -234,7 +236,13 @@ export function CharacterEditorForm({
         onSetStat={setStat}
         onUpdateDefinition={updateStatDefinition}
       />
-      {activeEffects.length > 0 && <section className="panel"><h3>Active effects</h3>{activeEffects.map(effect => <div className="rule-row" key={effect.id}><div><strong>{effect.effect_key}</strong><small>{effect.stacks} stack(s) · next {effect.clock} tick at {effect.next_tick}{effect.expires_at == null ? " · indefinite" : ` · expires at ${effect.expires_at}`}</small></div><Button size="small" color="error" onClick={() => void removeActiveEffect(effect.id)}>Remove</Button></div>)}</section>}
+      {activeEffects.length > 0 && <section className="panel"><h3>Active effects</h3>{activeEffects.map(effect => {
+        const current = effectProgress[effect.clock] ?? 0;
+        const remaining = effect.expires_at == null ? null : Math.max(0, effect.expires_at - current);
+        const nextIn = Math.max(0, effect.next_tick - current);
+        const source = entities.find(item => item.id === effect.source_id);
+        return <div className="rule-row" key={effect.id}><div><strong>{effect.effect_key}</strong><small>{effect.stacks} stack(s){source ? ` · source: ${source.name}` : ""} · next tick in {nextIn} {effect.clock.replace("_", " ")}{remaining == null ? " · indefinite" : ` · ${remaining} remaining`}</small></div><Button size="small" color="error" onClick={() => void removeActiveEffect(effect.id)}>Remove</Button></div>;
+      })}</section>}
     </aside>
 
     <main className="character-editor-main">
