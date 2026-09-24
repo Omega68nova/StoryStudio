@@ -160,7 +160,9 @@ export type WorldProjection = {
   elapsed_minutes: number;
   display_time: string | null;
   current_theme_id?: string | null;
-  active_effects?: Record<string, { id: string; effect_key: string; target_id: string; source_id?: string | null; clock: string; duration: number; next_tick: number; expires_at?: number | null; stacks: number }>;
+  active_effects?: Record<string, { id: string; effect_key: string; target_id: string; actor_id?: string | null; source_id?: string | null; clock: "story_minutes" | "target_actions" | "world_actions"; duration: number; tick_interval?: number; started_at?: number; next_tick: number; expires_at?: number | null; stacks: number; evaluation_mode?: "snapshot" | "live" }>;
+  world_action_count?: number;
+  target_action_counts?: Record<string, number>;
   transactions: Array<Record<string, unknown>>;
 };
 
