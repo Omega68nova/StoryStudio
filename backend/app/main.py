@@ -1281,6 +1281,7 @@ def _commit_spatial_mutation(project_id: str, tool: str, arguments: dict[str, An
         if project.get("active_node_id") else
         scheduler.world.commit_root(project_id, mutations, provenance="author", summary=summary)
     )
+    spatial_repository.synchronize(project_id, scheduler.world.projection(project_id, use_cache=False), force=True)
     return transaction, mutations[0].arguments
 
 
@@ -1292,6 +1293,7 @@ def _commit_spatial_mutations(project_id: str, raw: list[dict[str, Any]], summar
         if project.get("active_node_id") else
         scheduler.world.commit_root(project_id, mutations, provenance="author", summary=summary)
     )
+    spatial_repository.synchronize(project_id, scheduler.world.projection(project_id, use_cache=False), force=True)
     return transaction, mutations
 
 
