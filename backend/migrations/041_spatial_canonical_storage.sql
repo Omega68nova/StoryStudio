@@ -6,6 +6,7 @@ CREATE TABLE spatial_project_state (
     project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
     root_location_id TEXT REFERENCES world_entities(id) ON DELETE SET NULL,
     source_head_node_id TEXT REFERENCES story_nodes(id) ON DELETE SET NULL,
+    source_transaction_id TEXT REFERENCES world_transactions(id) ON DELETE SET NULL,
     revision INTEGER NOT NULL DEFAULT 1,
     updated_at TEXT NOT NULL
 );
