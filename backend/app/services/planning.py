@@ -291,7 +291,7 @@ class PlanningService:
         items += [
             {
                 "id": planning_keys.get(row["id"], row["id"]),
-                "canonical_id": row["id"],
+                "canonical_id": row["stat_key"],
                 "kind": "weather",
                 "name": row["name"],
                 "aliases": [],
@@ -309,26 +309,30 @@ class PlanningService:
                 "kind": "stat",
                 "name": row["label"],
                 "aliases": [row["stat_key"]],
-                "tags": [row["scope"]],
+                "tags": [],
             }
             for row in self.db.fetch_all(
-                "SELECT id,stat_key,label,scope FROM stat_definitions WHERE project_id=?",
+                "SELECT stat_key,label FROM stat_definitions WHERE project_id=?",
                 (project_id,),
             )
         ]
         items += [
             {
                 "id": row["ability_key"],
-                "canonical_id": row["id"],
+                "canonical_id": row["ability_key"],
                 "kind": "ability",
                 "name": row["name"],
                 "aliases": [row["ability_key"]],
                 "tags": [row["target_type"]],
             }
             for row in self.db.fetch_all(
-                "SELECT id,ability_key,name,target_type FROM ability_definitions WHERE project_id=?",
+                "SELECT ability_key,name,target_type FROM ability_definitions WHERE project_id=?",
                 (project_id,),
             )
+        ]
+        items += [
+            {"id": row["effect_key"], "canonical_id": row["effect_key"], "kind": "effect", "name": row["name"], "aliases": [row["effect_key"]], "tags": [row["target_stat_key"]]}
+            for row in self.db.fetch_all("SELECT effect_key,name,target_stat_key FROM effect_definitions WHERE project_id=?", (project_id,))
         ]
         if include_catalogs:
             items += [
