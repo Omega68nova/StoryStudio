@@ -159,6 +159,16 @@ class Database:
             return
 
         now = utc_now()
+        legacy_ability_refs: dict[str, dict[str, str]] = {}
+        if legacy_abilities:
+            for row in connection.execute(
+                "SELECT id,project_id,ability_key,name FROM ability_definitions_legacy_v2"
+            ).fetchall():
+                project_refs = legacy_ability_refs.setdefault(str(row["project_id"]), {})
+                key = str(row["ability_key"])
+                project_refs[key] = key
+                project_refs[str(row["id"])] = key
+                project_refs[str(row["name"])] = key
         if legacy_stats:
             rows = connection.execute("SELECT * FROM stat_definitions_legacy_v2").fetchall()
             for row in rows:
@@ -230,6 +240,60 @@ class Database:
             for row in rows:
                 self._migrate_legacy_ability(connection, dict(row), now)
 
+        # Canonical persistent ability references are keys, never legacy row IDs
+        # or display names. Rewrite the two event payload shapes that can store
+        # entity state before the legacy definitions are dropped.
+        if legacy_ability_refs:
+            connection.execute("DROP TRIGGER IF EXISTS world_events_no_update")
+            unresolved: dict[str, set[str]] = {}
+            event_rows = connection.execute(
+                "SELECT e.id,e.payload_json,t.project_id "
+                "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id"
+            ).fetchall()
+            for event in event_rows:
+                try:
+                    payload = json.loads(event["payload_json"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                project_id = str(event["project_id"])
+                refs = legacy_ability_refs.get(project_id, {})
+                changed = False
+                for container in (
+                    (payload.get("entity") or {}).get("state") if isinstance(payload.get("entity"), dict) else None,
+                    payload.get("patch") if isinstance(payload.get("patch"), dict) else None,
+                ):
+                    if not isinstance(container, dict) or not isinstance(container.get("abilities"), list):
+                        continue
+                    normalized: list[str] = []
+                    for value in container["abilities"]:
+                        raw = str(value)
+                        key = refs.get(raw)
+                        if key is None:
+                            unresolved.setdefault(project_id, set()).add(raw)
+                            key = raw
+                        if key not in normalized:
+                            normalized.append(key)
+                    if normalized != container["abilities"]:
+                        container["abilities"] = normalized
+                        changed = True
+                if changed:
+                    connection.execute(
+                        "UPDATE world_events SET payload_json=? WHERE id=?",
+                        (json.dumps(payload, separators=(",", ":"), ensure_ascii=False), event["id"]),
+                    )
+            for project_id, values in unresolved.items():
+                if not values:
+                    continue
+                connection.execute(
+                    "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        new_id(), project_id, "unresolved_ability_reference",
+                        f"Could not canonicalize {len(values)} legacy ability reference(s).",
+                        json.dumps({"references": sorted(values)}), now,
+                    ),
+                )
+
         discarded = connection.execute(
             "SELECT t.project_id,COUNT(*) count "
             "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
@@ -248,6 +312,7 @@ class Database:
             "SELECT t.project_id,"
             "COALESCE(SUM("
             "COALESCE(json_array_length(json_extract(e.payload_json,'$.entity.active_effects')),0)+"
+            "COALESCE(json_array_length(json_extract(e.payload_json,'$.entity.state.active_effects')),0)+"
             "COALESCE(json_array_length(json_extract(e.payload_json,'$.patch.active_effects')),0)"
             "),0) count "
             "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
@@ -255,7 +320,10 @@ class Database:
         ).fetchall()
         connection.execute("DROP TRIGGER IF EXISTS world_events_no_update")
         connection.execute(
-            "UPDATE world_events SET payload_json=json_remove(payload_json,'$.entity.active_effects','$.patch.active_effects') WHERE json_type(payload_json,'$.entity.active_effects') IS NOT NULL OR json_type(payload_json,'$.patch.active_effects') IS NOT NULL"
+            "UPDATE world_events SET payload_json=json_remove(payload_json,'$.entity.active_effects','$.entity.state.active_effects','$.patch.active_effects') "
+            "WHERE json_type(payload_json,'$.entity.active_effects') IS NOT NULL "
+            "OR json_type(payload_json,'$.entity.state.active_effects') IS NOT NULL "
+            "OR json_type(payload_json,'$.patch.active_effects') IS NOT NULL"
         )
         connection.execute("CREATE TRIGGER world_events_no_update BEFORE UPDATE ON world_events BEGIN SELECT RAISE(ABORT, 'world events are immutable'); END")
         for row in embedded:
