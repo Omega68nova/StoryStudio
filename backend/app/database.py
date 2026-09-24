@@ -342,12 +342,6 @@ class Database:
         write(root_value, None, 0)
 
 
-def _safe_json(raw: Any, fallback: Any) -> Any:
-    try:
-        return json.loads(raw) if isinstance(raw, str) else (raw if raw is not None else fallback)
-    except (TypeError, json.JSONDecodeError):
-        return fallback
-
     def relocate(self, destination: Path) -> None:
         if self._environment_locked:
             raise ValueError("The data directory is controlled by STORYSTUDIO_DATA_DIR and cannot be changed here")
@@ -541,6 +535,13 @@ def _safe_json(raw: Any, fallback: Any) -> Any:
             "UPDATE generation_jobs SET payload_json = ?, status = ?, error = NULL, updated_at = ? WHERE id = ?",
             (json.dumps(payload), status, utc_now(), job_id),
         )
+
+
+def _safe_json(raw: Any, fallback: Any) -> Any:
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw if raw is not None else fallback)
+    except (TypeError, json.JSONDecodeError):
+        return fallback
 
 
 def decode_json_fields(row: dict[str, Any] | None, *fields: str) -> dict[str, Any] | None:
