@@ -14,6 +14,7 @@ CREATE TABLE spatial_project_state (
 CREATE TABLE spatial_locations (
     location_id TEXT PRIMARY KEY REFERENCES world_entities(id) ON DELETE CASCADE,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
     parent_location_id TEXT REFERENCES world_entities(id) ON DELETE SET NULL,
     topology TEXT NOT NULL DEFAULT 'closed' CHECK(topology IN ('open','closed')),
     occupancy TEXT NOT NULL DEFAULT 'direct_allowed' CHECK(occupancy IN ('direct_allowed','child_required')),
