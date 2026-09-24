@@ -1,526 +1,96 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  Button,
-  Dialog,
-  DialogActions,
-  DialogContent,
-  DialogTitle,
-  FormControlLabel,
-  MenuItem,
-  Stack,
-  Switch,
-  TextField,
-} from "@mui/material";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Alert, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem, Stack, Switch, TextField } from "@mui/material";
 import { api } from "./api";
-import type { AbilityDefinition, StatDefinition } from "./types";
+import type { AbilityAction, AbilityCost, AbilityDefinition, EffectDefinition, FormulaNode, RuleMigrationWarning, RuleOwnerKind, StatDefinition } from "./types";
 import type { BulletCatalog } from "./BulletHellStudio";
 
-const blankStat = {
-  stat_key: "",
-  label: "",
-  description: "",
-  scope: "character",
-  default_value: 0,
-  minimum: 0,
-  maximum: 100,
-  minimum_stat_key: null,
-  maximum_stat_key: null,
-  color: null,
-  minimum_color: null,
-  maximum_color: null,
-  display_style: "compact",
-  integer_only: true,
-  visibility: "public",
-};
-const blankAbility = {
-  ability_key: "",
-  name: "",
-  description: "",
-  target_type: "self",
-  requirements: "{}",
-  costs: "{}",
-  effects:
-    '[{"target":"target","stat_key":"hp","operation":"subtract","amount":10}]',
-  attack_profile_enabled: false,
-  attack_line_count: 1,
-  attack_damage_per_line: 10,
-  bullethell_skill_ids: "",
-};
+const ownerKinds: RuleOwnerKind[] = ["character", "item", "location", "faction", "lore_system", "fact", "plot_beat", "relationship"];
+const blankStat: StatDefinition = { stat_key: "", label: "", description: "", compatible_owner_kinds: ["character"], default_value: 0, minimum: 0, maximum: 100, minimum_stat_key: null, maximum_stat_key: null, color: null, minimum_color: null, maximum_color: null, display_style: "compact", integer_only: true, visibility: "public" };
+const blankEffect: EffectDefinition = { effect_key: "", name: "", description: "", target_stat_key: "", operation: "add", formula: { kind: "constant", value: 0 }, clock: "world_actions", duration: 0, tick_interval: 0, evaluation_mode: "snapshot", stacking_policy: "replace", max_stacks: 1, visibility: "public", icon: null, enabled: true };
+const blankAbility: AbilityDefinition = { ability_key: "", name: "", description: "", ability_kind: "active", compatible_owner_kinds: ["character"], target_type: "self", requirements: {}, costs: [], actions: [], passive_triggers: [], icon: null, enabled: true, timed_attack_line_count: null, timed_attack_damage_per_line: null, bullethell_skill_ids: [] };
 
-export function RulesStudio({
-  projectId,
-  revision,
-  fail,
-}: {
-  projectId: string;
-  revision: number;
-  fail: (message: string) => void;
-}) {
-  const [rules, setRules] = useState<{
-    stats: StatDefinition[];
-    abilities: AbilityDefinition[];
-  }>({ stats: [], abilities: [] });
-  const [stat, setStat] = useState<any | null>(null);
-  const [ability, setAbility] = useState<any | null>(null);
+function FormulaEditor({ node, stats, onChange }: { node: FormulaNode; stats: StatDefinition[]; onChange: (next: FormulaNode) => void }) {
+  function changeKind(kind: FormulaNode["kind"]) {
+    if (kind === "constant") onChange({ kind, value: 0 });
+    else if (kind === "stat") onChange({ kind, participant: "source", stat_key: stats[0]?.stat_key ?? "" });
+    else if (kind === "negate") onChange({ kind, children: [{ kind: "constant", value: 0 }] });
+    else onChange({ kind, children: [{ kind: "constant", value: 0 }, { kind: "constant", value: 0 }] } as FormulaNode);
+  }
+  return <Stack spacing={1} sx={{ borderLeft: "2px solid", borderColor: "divider", pl: 1 }}>
+    <TextField select size="small" label="Expression" value={node.kind} onChange={event => changeKind(event.target.value as FormulaNode["kind"])}>{["constant", "stat", "add", "subtract", "multiply", "divide", "minimum", "maximum", "negate"].map(kind => <MenuItem key={kind} value={kind}>{kind}</MenuItem>)}</TextField>
+    {node.kind === "constant" && <TextField size="small" type="number" label="Value" value={node.value} onChange={event => onChange({ ...node, value: Number(event.target.value) })} />}
+    {node.kind === "stat" && <Stack direction="row" spacing={1}><TextField select size="small" label="Participant" value={node.participant} onChange={event => onChange({ ...node, participant: event.target.value as "actor" | "source" | "target" })}>{["actor", "source", "target"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField select size="small" fullWidth label="Stat" value={node.stat_key} onChange={event => onChange({ ...node, stat_key: event.target.value })}>{stats.map(stat => <MenuItem key={stat.stat_key} value={stat.stat_key}>{stat.label}</MenuItem>)}</TextField></Stack>}
+    {"children" in node && node.children.map((child, index) => <FormulaEditor key={index} node={child} stats={stats} onChange={next => onChange({ ...node, children: node.children.map((item, childIndex) => childIndex === index ? next : item) } as FormulaNode)} />)}
+  </Stack>;
+}
+
+export function RulesStudio({ projectId, revision, fail }: { projectId: string; revision: number; fail: (message: string) => void }) {
+  const [rules, setRules] = useState<{ stats: StatDefinition[]; effects: EffectDefinition[]; abilities: AbilityDefinition[]; migration_warnings: RuleMigrationWarning[] }>({ stats: [], effects: [], abilities: [], migration_warnings: [] });
+  const [stat, setStat] = useState<StatDefinition | null>(null);
+  const [effect, setEffect] = useState<EffectDefinition | null>(null);
+  const [ability, setAbility] = useState<AbilityDefinition | null>(null);
+  const [editingKey, setEditingKey] = useState<string | null>(null);
   const [bulletSkills, setBulletSkills] = useState<Array<{ id: string; name: string }>>([]);
   const load = useCallback(async () => {
-    const [nextRules, catalog, settings] = await Promise.all([
-      api<typeof rules>(`/projects/${projectId}/rules`), api<BulletCatalog>("/bullethell/catalog"),
-      api<{ allowed_skill_ids: string[] }>(`/projects/${projectId}/bullethell`),
-    ]);
-    setRules(nextRules);
-    setBulletSkills(catalog.skills.filter((item) => settings.allowed_skill_ids.includes(item.id)));
+    const [next, catalog, settings] = await Promise.all([api<typeof rules>(`/projects/${projectId}/rules`), api<BulletCatalog>("/bullethell/catalog"), api<{ allowed_skill_ids: string[] }>(`/projects/${projectId}/bullethell`)]);
+    setRules(next); setBulletSkills(catalog.skills.filter(item => settings.allowed_skill_ids.includes(item.id)));
   }, [projectId]);
-  useEffect(() => {
-    void load().catch((cause) => fail(String(cause)));
-  }, [load, revision, fail]);
+  useEffect(() => { void load().catch(cause => fail(String(cause))); }, [load, revision, fail]);
 
-  async function saveStat() {
+  async function save(kind: "stats" | "effects" | "abilities", value: StatDefinition | EffectDefinition | AbilityDefinition) {
     try {
-      const path = stat.id
-        ? `/projects/${projectId}/stats/${stat.id}`
-        : `/projects/${projectId}/stats`;
-      await api(path, {
-        method: stat.id ? "PUT" : "POST",
-        body: JSON.stringify(stat),
-      });
-      setStat(null);
-      await load();
-    } catch (cause) {
-      fail(String(cause));
-    }
+      await api(`/projects/${projectId}/${kind}${editingKey ? `/${editingKey}` : ""}`, { method: editingKey ? "PUT" : "POST", body: JSON.stringify(value) });
+      setStat(null); setEffect(null); setAbility(null); setEditingKey(null); await load();
+    } catch (cause) { fail(String(cause)); }
   }
-  async function saveAbility() {
-    try {
-      const {
-        attack_profile_enabled,
-        attack_line_count,
-        attack_damage_per_line,
-        bullethell_skill_ids,
-        ...base
-      } = ability;
-      const linkedSkills = String(bullethell_skill_ids ?? "").split(",").map((item) => item.trim()).filter(Boolean);
-      const payload = {
-        ...base,
-        requirements: JSON.parse(ability.requirements),
-        costs: JSON.parse(ability.costs),
-        effects: JSON.parse(ability.effects),
-        minigame_profile: {
-          ...(attack_profile_enabled ? {
-              timed_attack: {
-                line_count: attack_line_count,
-                damage_per_line: attack_damage_per_line,
-              },
-            } : {}),
-          ...(linkedSkills.length ? { bullethell_skill_ids: linkedSkills } : {}),
-        },
-      };
-      const path = ability.id
-        ? `/projects/${projectId}/abilities/${ability.id}`
-        : `/projects/${projectId}/abilities`;
-      await api(path, {
-        method: ability.id ? "PUT" : "POST",
-        body: JSON.stringify(payload),
-      });
-      setAbility(null);
-      await load();
-    } catch (cause) {
-      fail(String(cause));
-    }
-  }
-  function editAbility(item: AbilityDefinition) {
-    const profile = item.minigame_profile?.timed_attack;
-    setAbility({
-      ...item,
-      requirements: JSON.stringify(item.requirements ?? {}, null, 2),
-      costs: JSON.stringify(item.costs, null, 2),
-      effects: JSON.stringify(item.effects, null, 2),
-      attack_profile_enabled: Boolean(profile),
-      attack_line_count: profile?.line_count ?? 1,
-      attack_damage_per_line: profile?.damage_per_line ?? 10,
-      bullethell_skill_ids:
-        item.minigame_profile?.bullethell_skill_ids?.join(", ") ?? "",
-    });
-  }
+  async function remove(kind: "stats" | "effects" | "abilities", key: string) { try { await api(`/projects/${projectId}/${kind}/${key}`, { method: "DELETE" }); await load(); } catch (cause) { fail(String(cause)); } }
+  const compatibleBounds = useMemo(() => stat ? rules.stats.filter(item => item.stat_key !== stat.stat_key && item.compatible_owner_kinds.some(kind => stat.compatible_owner_kinds.includes(kind))) : [], [rules.stats, stat]);
 
-  return (
-    <div className="page">
-      <header className="page-header">
-        <p className="eyebrow">OPTIONAL MECHANICS</p>
-        <h1>Stats and abilities</h1>
-        <p>
-          Rules are project-wide; values, costs, and temporary effects follow
-          the active branch.
-        </p>
-      </header>
-      <div className="rules-grid">
-        <section className="panel">
-          <Stack direction="row" justifyContent="space-between">
-            <h2>Stats</h2>
-            <Button onClick={() => setStat({ ...blankStat })}>Add stat</Button>
-          </Stack>
-          {rules.stats.map((item) => (
-            <article className="rule-row" key={item.id}>
-              <div>
-                <strong>{item.label}</strong>
-                <small>
-                  {item.stat_key} · {item.scope} · {item.minimum}–{item.maximum}
-                </small>
-              </div>
-              <div>
-                <Button
-                  onClick={() =>
-                    setStat({
-                      ...item,
-                      integer_only: Boolean(item.integer_only),
-                    })
-                  }
-                >
-                  Edit
-                </Button>
-                <Button
-                  color="error"
-                  onClick={async () => {
-                    try {
-                      await api(`/projects/${projectId}/stats/${item.id}`, {
-                        method: "DELETE",
-                      });
-                      await load();
-                    } catch (cause) {
-                      fail(String(cause));
-                    }
-                  }}
-                >
-                  Delete
-                </Button>
-              </div>
-            </article>
-          ))}
-        </section>
-        <section className="panel">
-          <Stack direction="row" justifyContent="space-between">
-            <h2>Abilities</h2>
-            <Button onClick={() => setAbility({ ...blankAbility })}>
-              Add ability
-            </Button>
-          </Stack>
-          {rules.abilities.map((item) => (
-            <article className="rule-row" key={item.id}>
-              <div>
-                <strong>{item.name}</strong>
-                <small>
-                  {item.ability_key} · {item.target_type}
-                  {item.minigame_profile?.timed_attack
-                    ? ` · ${item.minigame_profile.timed_attack.line_count} attack line(s)`
-                    : ""}
-                </small>
-                <p>{item.description}</p>
-              </div>
-              <div>
-                <Button onClick={() => editAbility(item)}>Edit</Button>
-                <Button
-                  color="error"
-                  onClick={async () => {
-                    try {
-                      await api(`/projects/${projectId}/abilities/${item.id}`, {
-                        method: "DELETE",
-                      });
-                      await load();
-                    } catch (cause) {
-                      fail(String(cause));
-                    }
-                  }}
-                >
-                  Delete
-                </Button>
-              </div>
-            </article>
-          ))}
-        </section>
-      </div>
-      <Dialog open={Boolean(stat)} onClose={() => setStat(null)}>
-        <DialogTitle>{stat?.id ? "Edit" : "Add"} stat</DialogTitle>
-        <DialogContent className="music-dialog">
-          {stat && (
-            <>
-              <TextField
-                label="Stable key"
-                disabled={Boolean(stat.id)}
-                value={stat.stat_key}
-                onChange={(e) => setStat({ ...stat, stat_key: e.target.value })}
-              />
-              <TextField
-                label="Label"
-                value={stat.label}
-                onChange={(e) => setStat({ ...stat, label: e.target.value })}
-              />
-              <TextField
-                multiline
-                minRows={2}
-                label="Description"
-                value={stat.description ?? ""}
-                helperText="General semantic description used by the editor and AI."
-                onChange={(e) => setStat({ ...stat, description: e.target.value })}
-              />
-              <TextField
-                select
-                label="Scope"
-                value={stat.scope}
-                onChange={(e) => setStat({ ...stat, scope: e.target.value })}
-              >
-                <MenuItem value="character">Character</MenuItem>
-                <MenuItem value="relationship">Relationship</MenuItem>
-              </TextField>
-              <Stack direction="row" spacing={1}>
-                <TextField
-                  type="number"
-                  label="Default"
-                  value={stat.default_value}
-                  onChange={(e) =>
-                    setStat({ ...stat, default_value: Number(e.target.value) })
-                  }
-                />
-                <TextField
-                  type="number"
-                  label="Minimum"
-                  value={stat.minimum}
-                  onChange={(e) =>
-                    setStat({ ...stat, minimum: Number(e.target.value) })
-                  }
-                />
-                <TextField
-                  type="number"
-                  label="Maximum"
-                  value={stat.maximum}
-                  onChange={(e) =>
-                    setStat({ ...stat, maximum: Number(e.target.value) })
-                  }
-                />
-              </Stack>
-              <Stack direction="row" spacing={1}>
-                <TextField
-                  select
-                  fullWidth
-                  label="Minimum from stat"
-                  value={stat.minimum_stat_key ?? ""}
-                  onChange={(e) => setStat({
-                    ...stat,
-                    minimum_stat_key: e.target.value || null,
-                  })}
-                >
-                  <MenuItem value="">Use numeric minimum</MenuItem>
-                  {rules.stats
-                    .filter((item) => item.scope === stat.scope && item.stat_key !== stat.stat_key)
-                    .map((item) => <MenuItem key={item.id} value={item.stat_key}>{item.label}</MenuItem>)}
-                </TextField>
-                <TextField
-                  select
-                  fullWidth
-                  label="Maximum from stat"
-                  value={stat.maximum_stat_key ?? ""}
-                  onChange={(e) => setStat({
-                    ...stat,
-                    maximum_stat_key: e.target.value || null,
-                  })}
-                >
-                  <MenuItem value="">Use numeric maximum</MenuItem>
-                  {rules.stats
-                    .filter((item) => item.scope === stat.scope && item.stat_key !== stat.stat_key)
-                    .map((item) => <MenuItem key={item.id} value={item.stat_key}>{item.label}</MenuItem>)}
-                </TextField>
-              </Stack>
-              <TextField
-                select
-                label="Display style"
-                value={stat.display_style ?? "compact"}
-                onChange={(e) => setStat({ ...stat, display_style: e.target.value })}
-              >
-                <MenuItem value="compact">Compact chip</MenuItem>
-                <MenuItem value="bar">Value / min / max bar</MenuItem>
-              </TextField>
-              <Stack direction="row" spacing={1}>
-                <TextField
-                  label="Main / max color"
-                  placeholder="#5a9b63"
-                  value={stat.color ?? ""}
-                  onChange={(e) => setStat({ ...stat, color: e.target.value || null })}
-                />
-                <TextField
-                  label="Minimum color"
-                  placeholder="#b94a48"
-                  value={stat.minimum_color ?? ""}
-                  onChange={(e) => setStat({ ...stat, minimum_color: e.target.value || null })}
-                />
-                <TextField
-                  label="Maximum color override"
-                  value={stat.maximum_color ?? ""}
-                  onChange={(e) => setStat({ ...stat, maximum_color: e.target.value || null })}
-                />
-              </Stack>
-              <FormControlLabel
-                control={<Switch
-                  checked={Boolean(stat.integer_only)}
-                  onChange={(e) => setStat({ ...stat, integer_only: e.target.checked })}
-                />}
-                label="Integer values only"
-              />
-              <TextField
-                select
-                label="Visibility"
-                value={stat.visibility ?? "public"}
-                onChange={(e) => setStat({ ...stat, visibility: e.target.value })}
-              >
-                <MenuItem value="public">Public</MenuItem>
-                <MenuItem value="private">Private</MenuItem>
-                <MenuItem value="narrator">Narrator only</MenuItem>
-              </TextField>
-            </>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setStat(null)}>Cancel</Button>
-          <Button variant="contained" onClick={() => void saveStat()}>
-            Save
-          </Button>
-        </DialogActions>
-      </Dialog>
-      <Dialog
-        open={Boolean(ability)}
-        onClose={() => setAbility(null)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>{ability?.id ? "Edit" : "Add"} ability</DialogTitle>
-        <DialogContent className="music-dialog">
-          {ability && (
-            <>
-              <TextField
-                label="Stable key"
-                disabled={Boolean(ability.id)}
-                value={ability.ability_key}
-                onChange={(e) =>
-                  setAbility({ ...ability, ability_key: e.target.value })
-                }
-              />
-              <TextField
-                label="Name"
-                value={ability.name}
-                onChange={(e) =>
-                  setAbility({ ...ability, name: e.target.value })
-                }
-              />
-              <TextField
-                multiline
-                label="Description"
-                value={ability.description}
-                onChange={(e) =>
-                  setAbility({ ...ability, description: e.target.value })
-                }
-              />
-              <TextField
-                select
-                label="Target"
-                value={ability.target_type}
-                onChange={(e) =>
-                  setAbility({ ...ability, target_type: e.target.value })
-                }
-              >
-                <MenuItem value="self">Self</MenuItem>
-                <MenuItem value="character">Character</MenuItem>
-                <MenuItem value="choice">Chosen character</MenuItem>
-                <MenuItem value="relationship">Relationship</MenuItem>
-                <MenuItem value="location">Location</MenuItem>
-                <MenuItem value="all">Everyone present</MenuItem>
-                <MenuItem value="party">Party</MenuItem>
-                <MenuItem value="allies">Allies</MenuItem>
-                <MenuItem value="enemies">Enemies</MenuItem>
-                <MenuItem value="nearby_enemies">Nearby enemies</MenuItem>
-                <MenuItem value="faction_members">Nearby faction members</MenuItem>
-                <MenuItem value="random">One resolved random target</MenuItem>
-              </TextField>
-              <TextField
-                multiline
-                label="Requirements JSON"
-                value={ability.requirements}
-                onChange={(e) =>
-                  setAbility({ ...ability, requirements: e.target.value })
-                }
-              />
-              <TextField
-                multiline
-                label="Costs JSON"
-                value={ability.costs}
-                onChange={(e) =>
-                  setAbility({ ...ability, costs: e.target.value })
-                }
-              />
-              <TextField
-                multiline
-                minRows={4}
-                label="Effects JSON"
-                value={ability.effects}
-                onChange={(e) =>
-                  setAbility({ ...ability, effects: e.target.value })
-                }
-              />
-              <TextField
-                label="Linked bullet-hell skill IDs"
-                value={ability.bullethell_skill_ids ?? ""}
-                onChange={(e) => setAbility({ ...ability, bullethell_skill_ids: e.target.value })}
-                helperText={bulletSkills.length ? `Enabled: ${bulletSkills.map((skill) => `${skill.name} (${skill.id})`).join(", ")}` : "Enable project skills in Bullet Hell first."}
-              />
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={ability.attack_profile_enabled}
-                    onChange={(e) =>
-                      setAbility({
-                        ...ability,
-                        attack_profile_enabled: e.target.checked,
-                      })
-                    }
-                  />
-                }
-                label="Use timed-attack profile"
-              />
-              {ability.attack_profile_enabled && (
-                <Stack direction="row" spacing={1}>
-                  <TextField
-                    type="number"
-                    label="Attack lines"
-                    value={ability.attack_line_count}
-                    inputProps={{ min: 1, max: 8 }}
-                    onChange={(e) =>
-                      setAbility({
-                        ...ability,
-                        attack_line_count: Number(e.target.value),
-                      })
-                    }
-                  />
-                  <TextField
-                    type="number"
-                    label="Damage per line"
-                    value={ability.attack_damage_per_line}
-                    inputProps={{ min: 0 }}
-                    onChange={(e) =>
-                      setAbility({
-                        ...ability,
-                        attack_damage_per_line: Number(e.target.value),
-                      })
-                    }
-                  />
-                </Stack>
-              )}
-            </>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setAbility(null)}>Cancel</Button>
-          <Button variant="contained" onClick={() => void saveAbility()}>
-            Save
-          </Button>
-        </DialogActions>
-      </Dialog>
+  return <div className="page">
+    <header className="page-header"><p className="eyebrow">CANONICAL RULES</p><h1>Stats, effects, and abilities</h1><p>Reusable effects calculate against actor, source, and target stats; abilities compose those effects with typed actions.</p></header>
+    {rules.migration_warnings.filter(item => !item.acknowledged).map(item => <Alert key={item.id} severity="warning" action={<Button onClick={async () => { await api(`/projects/${projectId}/rules/migration-warnings/${item.id}/acknowledge`, { method: "POST" }); await load(); }}>Acknowledge</Button>}>{item.message}</Alert>)}
+    <div className="rules-grid">
+      <RuleList title="Stats" add={() => { setEditingKey(null); setStat({ ...blankStat }); }} rows={rules.stats.map(item => ({ key: item.stat_key, title: item.label, subtitle: `${item.stat_key} · ${item.compatible_owner_kinds.join(", ")}`, edit: () => { setEditingKey(item.stat_key); setStat({ ...item }); }, remove: () => void remove("stats", item.stat_key) }))} />
+      <RuleList title="Effects" add={() => { setEditingKey(null); setEffect({ ...blankEffect, target_stat_key: rules.stats[0]?.stat_key ?? "" }); }} rows={rules.effects.map(item => ({ key: item.effect_key, title: item.name, subtitle: `${item.operation} ${item.target_stat_key} · ${item.clock}`, edit: () => { setEditingKey(item.effect_key); setEffect(structuredClone(item)); }, remove: () => void remove("effects", item.effect_key) }))} />
+      <RuleList title="Abilities" add={() => { setEditingKey(null); setAbility(structuredClone(blankAbility)); }} rows={rules.abilities.map(item => ({ key: item.ability_key, title: item.name, subtitle: `${item.ability_kind} · ${item.target_type} · ${item.actions.length} action(s)`, edit: () => { setEditingKey(item.ability_key); setAbility(structuredClone(item)); }, remove: () => void remove("abilities", item.ability_key) }))} />
     </div>
-  );
+
+    <Dialog open={Boolean(stat)} onClose={() => setStat(null)} maxWidth="md" fullWidth><DialogTitle>{editingKey ? "Edit" : "Add"} stat</DialogTitle><DialogContent className="music-dialog">{stat && <>
+      <TextField label="Stable key" disabled={Boolean(editingKey)} value={stat.stat_key} onChange={e => setStat({ ...stat, stat_key: e.target.value })}/><TextField label="Label" value={stat.label} onChange={e => setStat({ ...stat, label: e.target.value })}/><TextField multiline label="Description" value={stat.description} onChange={e => setStat({ ...stat, description: e.target.value })}/>
+      <Stack direction="row" flexWrap="wrap">{ownerKinds.map(kind => <FormControlLabel key={kind} control={<Checkbox checked={stat.compatible_owner_kinds.includes(kind)} onChange={e => setStat({ ...stat, compatible_owner_kinds: e.target.checked ? [...stat.compatible_owner_kinds, kind] : stat.compatible_owner_kinds.filter(value => value !== kind) })}/>} label={kind.replaceAll("_", " ")}/>)}</Stack>
+      <Stack direction="row" spacing={1}><TextField type="number" label="Default" value={stat.default_value} onChange={e => setStat({ ...stat, default_value: Number(e.target.value) })}/><TextField type="number" label="Minimum" value={stat.minimum} onChange={e => setStat({ ...stat, minimum: Number(e.target.value) })}/><TextField type="number" label="Maximum" value={stat.maximum} onChange={e => setStat({ ...stat, maximum: Number(e.target.value) })}/></Stack>
+      <Stack direction="row" spacing={1}><TextField select fullWidth label="Minimum from stat" value={stat.minimum_stat_key ?? ""} onChange={e => setStat({ ...stat, minimum_stat_key: e.target.value || null })}><MenuItem value="">Numeric minimum</MenuItem>{compatibleBounds.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}</TextField><TextField select fullWidth label="Maximum from stat" value={stat.maximum_stat_key ?? ""} onChange={e => setStat({ ...stat, maximum_stat_key: e.target.value || null })}><MenuItem value="">Numeric maximum</MenuItem>{compatibleBounds.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}</TextField></Stack>
+      <Stack direction="row" spacing={1}><TextField select label="Display" value={stat.display_style} onChange={e => setStat({ ...stat, display_style: e.target.value as "compact" | "bar" })}><MenuItem value="compact">Compact</MenuItem><MenuItem value="bar">Bar</MenuItem></TextField><TextField select label="Visibility" value={stat.visibility} onChange={e => setStat({ ...stat, visibility: e.target.value as StatDefinition["visibility"] })}>{["public", "private", "narrator"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><FormControlLabel control={<Switch checked={stat.integer_only} onChange={e => setStat({ ...stat, integer_only: e.target.checked })}/>} label="Integer only"/></Stack>
+    </>}</DialogContent><DialogActions><Button onClick={() => setStat(null)}>Cancel</Button><Button variant="contained" onClick={() => stat && void save("stats", stat)}>Save</Button></DialogActions></Dialog>
+
+    <Dialog open={Boolean(effect)} onClose={() => setEffect(null)} maxWidth="md" fullWidth><DialogTitle>{editingKey ? "Edit" : "Add"} effect</DialogTitle><DialogContent className="music-dialog">{effect && <>
+      <TextField label="Stable key" disabled={Boolean(editingKey)} value={effect.effect_key} onChange={e => setEffect({ ...effect, effect_key: e.target.value })}/><TextField label="Name" value={effect.name} onChange={e => setEffect({ ...effect, name: e.target.value })}/><TextField multiline label="Description" value={effect.description} onChange={e => setEffect({ ...effect, description: e.target.value })}/>
+      <Stack direction="row" spacing={1}><TextField select fullWidth label="Target stat" value={effect.target_stat_key} onChange={e => setEffect({ ...effect, target_stat_key: e.target.value })}>{rules.stats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}</TextField><TextField select label="Operation" value={effect.operation} onChange={e => setEffect({ ...effect, operation: e.target.value as EffectDefinition["operation"] })}>{["add", "subtract", "set", "multiply"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField></Stack>
+      <FormulaEditor node={effect.formula} stats={rules.stats} onChange={formula => setEffect({ ...effect, formula })}/>
+      <Stack direction="row" spacing={1}><TextField select label="Clock" value={effect.clock} onChange={e => setEffect({ ...effect, clock: e.target.value as EffectDefinition["clock"] })}>{["story_minutes", "target_actions", "world_actions"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField type="number" label="Duration (-1 indefinite)" value={effect.duration} onChange={e => setEffect({ ...effect, duration: Number(e.target.value) })}/><TextField type="number" label="Tick interval" value={effect.tick_interval} onChange={e => setEffect({ ...effect, tick_interval: Number(e.target.value) })}/></Stack>
+      <Stack direction="row" spacing={1}><TextField select label="Evaluation" value={effect.evaluation_mode} onChange={e => setEffect({ ...effect, evaluation_mode: e.target.value as EffectDefinition["evaluation_mode"] })}><MenuItem value="snapshot">Snapshot</MenuItem><MenuItem value="live">Live</MenuItem></TextField><TextField select label="Stacking" value={effect.stacking_policy} onChange={e => setEffect({ ...effect, stacking_policy: e.target.value as EffectDefinition["stacking_policy"] })}>{["replace", "refresh", "stack", "independent"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField type="number" label="Max stacks" value={effect.max_stacks} onChange={e => setEffect({ ...effect, max_stacks: Number(e.target.value) })}/></Stack>
+      <FormControlLabel control={<Switch checked={effect.enabled} onChange={e => setEffect({ ...effect, enabled: e.target.checked })}/>} label="Enabled"/>
+    </>}</DialogContent><DialogActions><Button onClick={() => setEffect(null)}>Cancel</Button><Button variant="contained" onClick={() => effect && void save("effects", effect)}>Save</Button></DialogActions></Dialog>
+    <AbilityDialog ability={ability} editing={Boolean(editingKey)} stats={rules.stats} effects={rules.effects} bulletSkills={bulletSkills} setAbility={setAbility} close={() => setAbility(null)} save={() => ability && void save("abilities", ability)} />
+  </div>;
+}
+
+function RuleList({ title, add, rows }: { title: string; add: () => void; rows: Array<{ key: string; title: string; subtitle: string; edit: () => void; remove: () => void }> }) { return <section className="panel"><Stack direction="row" justifyContent="space-between"><h2>{title}</h2><Button onClick={add}>Add</Button></Stack>{rows.map(row => <article className="rule-row" key={row.key}><div><strong>{row.title}</strong><small>{row.subtitle}</small></div><div><Button onClick={row.edit}>Edit</Button><Button color="error" onClick={row.remove}>Delete</Button></div></article>)}</section>; }
+
+function AbilityDialog({ ability, editing, stats, effects, bulletSkills, setAbility, close, save }: { ability: AbilityDefinition | null; editing: boolean; stats: StatDefinition[]; effects: EffectDefinition[]; bulletSkills: Array<{ id: string; name: string }>; setAbility: (value: AbilityDefinition) => void; close: () => void; save: () => void }) {
+  if (!ability) return null;
+  const updateCost = (index: number, patch: Partial<AbilityCost>) => setAbility({ ...ability, costs: ability.costs.map((item, i) => i === index ? { ...item, ...patch } : item) });
+  const updateAction = (index: number, patch: Partial<AbilityAction>) => setAbility({ ...ability, actions: ability.actions.map((item, i) => i === index ? { ...item, ...patch } : item) });
+  const requirementChildren = Array.isArray(ability.requirements?.children) ? ability.requirements.children as Array<Record<string, unknown>> : [];
+  const setRequirements = (children: Array<Record<string, unknown>>) => setAbility({ ...ability, requirements: children.length ? { kind: "and", children } : {} });
+  return <Dialog open onClose={close} maxWidth="md" fullWidth><DialogTitle>{editing ? "Edit" : "Add"} ability</DialogTitle><DialogContent className="music-dialog">
+    <TextField label="Stable key" disabled={editing} value={ability.ability_key} onChange={e => setAbility({ ...ability, ability_key: e.target.value })}/><TextField label="Name" value={ability.name} onChange={e => setAbility({ ...ability, name: e.target.value })}/><TextField multiline label="Description" value={ability.description} onChange={e => setAbility({ ...ability, description: e.target.value })}/>
+    <Stack direction="row" spacing={1}><TextField select label="Kind" value={ability.ability_kind} onChange={e => setAbility({ ...ability, ability_kind: e.target.value as "active" | "passive" })}><MenuItem value="active">Active</MenuItem><MenuItem value="passive">Passive</MenuItem></TextField><TextField select label="Target" value={ability.target_type} onChange={e => setAbility({ ...ability, target_type: e.target.value as AbilityDefinition["target_type"] })}>{["self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>{(["character", "item"] as const).map(kind => <FormControlLabel key={kind} control={<Checkbox checked={ability.compatible_owner_kinds.includes(kind)} onChange={e => setAbility({ ...ability, compatible_owner_kinds: e.target.checked ? [...ability.compatible_owner_kinds, kind] : ability.compatible_owner_kinds.filter(value => value !== kind) })}/>} label={kind}/>)}</Stack>
+    <h3>Requirements</h3>{requirementChildren.map((requirement, index) => <Stack key={index} direction="row" spacing={1}><TextField select label="Participant" value={String(requirement.target ?? "actor")} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, target: e.target.value } : item))}>{["actor", "target"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>{requirement.kind === "has_tag" ? <TextField label="Required tag" value={String(requirement.tag ?? "")} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, tag: e.target.value } : item))}/> : <><TextField select label="Stat" value={String(requirement.stat_key ?? "")} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, stat_key: e.target.value } : item))}>{stats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}</TextField><TextField select label="Comparison" value={String(requirement.comparison ?? "gte")} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, comparison: e.target.value } : item))}>{["eq", "ne", "lt", "lte", "gt", "gte"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField type="number" label="Value" value={Number(requirement.value ?? 0)} onChange={e => setRequirements(requirementChildren.map((item, i) => i === index ? { ...item, value: Number(e.target.value) } : item))}/></>}<Button onClick={() => setRequirements(requirementChildren.filter((_, i) => i !== index))}>Remove</Button></Stack>)}<Stack direction="row"><Button disabled={!stats.length} onClick={() => setRequirements([...requirementChildren, { kind: "compare", target: "actor", stat_key: stats[0]?.stat_key ?? "", comparison: "gte", value: 0 }])}>Add stat requirement</Button><Button onClick={() => setRequirements([...requirementChildren, { kind: "has_tag", target: "actor", tag: "" }])}>Add tag requirement</Button></Stack>
+    <h3>Costs</h3>{ability.costs.map((cost, index) => <Stack key={index} direction="row" spacing={1}><TextField select label="Cost" value={cost.kind} onChange={e => updateCost(index, { kind: e.target.value as AbilityCost["kind"] })}>{["stat", "consume_source", "consume_fuel"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>{cost.kind === "stat" && <TextField select label="Stat" value={cost.stat_key ?? ""} onChange={e => updateCost(index, { stat_key: e.target.value })}>{stats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}</TextField>}{cost.kind === "consume_fuel" && <TextField label="Fuel item ID" value={cost.item_id ?? ""} onChange={e => updateCost(index, { item_id: e.target.value })}/>}<TextField type="number" label="Amount" value={cost.amount} onChange={e => updateCost(index, { amount: Number(e.target.value) })}/><Button onClick={() => setAbility({ ...ability, costs: ability.costs.filter((_, i) => i !== index) })}>Remove</Button></Stack>)}<Button onClick={() => setAbility({ ...ability, costs: [...ability.costs, { kind: "stat", stat_key: stats[0]?.stat_key ?? "", amount: 1 }] })}>Add cost</Button>
+    <h3>Ordered actions</h3>{ability.actions.map((action, index) => <Stack key={index} direction="row" spacing={1}><TextField select label="Action" value={action.kind} onChange={e => updateAction(index, { kind: e.target.value as AbilityAction["kind"] })}>{["apply_effect", "move", "create", "remove", "reveal_knowledge", "change_relationship", "advance_time", "play_noise"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField><TextField label="Target selector" value={action.target} onChange={e => updateAction(index, { target: e.target.value })}/>{action.kind === "apply_effect" && <TextField select label="Effect" value={action.effect_key ?? ""} onChange={e => updateAction(index, { effect_key: e.target.value })}>{effects.map(item => <MenuItem key={item.effect_key} value={item.effect_key}>{item.name}</MenuItem>)}</TextField>}{action.kind === "advance_time" && <TextField type="number" label="Minutes" value={action.minutes ?? 0} onChange={e => updateAction(index, { minutes: Number(e.target.value) })}/>}<Button onClick={() => setAbility({ ...ability, actions: ability.actions.filter((_, i) => i !== index) })}>Remove</Button></Stack>)}<Button disabled={!effects.length} onClick={() => setAbility({ ...ability, actions: [...ability.actions, { kind: "apply_effect", target: "target", effect_key: effects[0]?.effect_key }] })}>Add effect action</Button>
+    {ability.ability_kind === "passive" && <><h3>Passive triggers</h3>{["ability_used", "stat_changed", "damage", "owner_action", "movement", "time_advanced"].map(kind => <FormControlLabel key={kind} control={<Checkbox checked={ability.passive_triggers.some(item => item.kind === kind)} onChange={e => setAbility({ ...ability, passive_triggers: e.target.checked ? [...ability.passive_triggers, { kind: kind as AbilityDefinition["passive_triggers"][number]["kind"] }] : ability.passive_triggers.filter(item => item.kind !== kind) })}/>} label={kind}/>)}</>}
+    <h3>Minigames</h3><Stack direction="row" flexWrap="wrap">{bulletSkills.map(skill => <FormControlLabel key={skill.id} control={<Checkbox checked={ability.bullethell_skill_ids.includes(skill.id)} onChange={e => setAbility({ ...ability, bullethell_skill_ids: e.target.checked ? [...ability.bullethell_skill_ids, skill.id] : ability.bullethell_skill_ids.filter(id => id !== skill.id) })}/>} label={skill.name}/>)}</Stack>
+    <FormControlLabel control={<Switch checked={ability.enabled} onChange={e => setAbility({ ...ability, enabled: e.target.checked })}/>} label="Enabled"/>
+  </DialogContent><DialogActions><Button onClick={close}>Cancel</Button><Button variant="contained" onClick={save}>Save</Button></DialogActions></Dialog>;
 }

@@ -5,6 +5,7 @@ import os
 import shutil
 import sqlite3
 import threading
+import re
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -103,6 +104,16 @@ class Database:
             applied = {
                 row[0] for row in connection.execute("SELECT version FROM schema_migrations").fetchall()
             }
+            # The unfinished canonical-rules branch originally used migration 041.
+            # In the merged history, spatial storage owns 041 and canonical rules
+            # move to 042. Databases that already ran the unfinished branch must
+            # not execute the canonical schema rewrite a second time.
+            if "041_canonical_rules" in applied and "042_canonical_rules" not in applied:
+                connection.execute(
+                    "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    ("042_canonical_rules", utc_now()),
+                )
+                applied.add("042_canonical_rules")
             for path in sorted(migration_dir.glob("*.sql")):
                 if path.stem in applied:
                     continue
@@ -111,6 +122,7 @@ class Database:
                     "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                     (path.stem, utc_now()),
                 )
+            self._migrate_canonical_rules(connection)
             connection.execute(
                 "INSERT OR IGNORE INTO runtime_settings(id, updated_at) VALUES (1, ?)",
                 (utc_now(),),
@@ -134,6 +146,207 @@ class Database:
                 (utc_now(),),
             )
             # GenerationPlan owns generation/review recovery.
+
+    def _migrate_canonical_rules(self, connection: sqlite3.Connection) -> None:
+        """Complete the canonical-rules data conversion once, atomically."""
+        legacy_stats = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='stat_definitions_legacy_v2'"
+        ).fetchone()
+        legacy_abilities = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ability_definitions_legacy_v2'"
+        ).fetchone()
+        if not legacy_stats and not legacy_abilities:
+            return
+
+        now = utc_now()
+        if legacy_stats:
+            rows = connection.execute("SELECT * FROM stat_definitions_legacy_v2").fetchall()
+            for row in rows:
+                record = dict(row)
+                connection.execute(
+                    "INSERT OR IGNORE INTO stat_definitions("
+                    "project_id,stat_key,label,description,default_value,minimum,maximum,"
+                    "minimum_stat_key,maximum_stat_key,color,minimum_color,maximum_color,"
+                    "display_style,integer_only,visibility,created_at,updated_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (
+                        record["project_id"], record["stat_key"], record["label"],
+                        record.get("description") or "", record["default_value"],
+                        record["minimum"], record["maximum"], record.get("minimum_stat_key"),
+                        record.get("maximum_stat_key"), record.get("color"),
+                        record.get("minimum_color"), record.get("maximum_color"),
+                        record.get("display_style") or "compact", record["integer_only"],
+                        record.get("visibility") or "public", record["created_at"], record["updated_at"],
+                    ),
+                )
+                owner_kind = "relationship" if record.get("scope") == "relationship" else "character"
+                connection.execute(
+                    "INSERT OR IGNORE INTO stat_definition_owner_kinds(project_id,stat_key,owner_kind) VALUES(?,?,?)",
+                    (record["project_id"], record["stat_key"], owner_kind),
+                )
+            for project in connection.execute("SELECT DISTINCT project_id FROM stat_definitions").fetchall():
+                graph = {row["stat_key"]: [key for key in (row["minimum_stat_key"], row["maximum_stat_key"]) if key] for row in connection.execute("SELECT stat_key,minimum_stat_key,maximum_stat_key FROM stat_definitions WHERE project_id=?", (project["project_id"],)).fetchall()}
+                visiting: set[str] = set(); visited: set[str] = set()
+                def visit(key: str) -> None:
+                    if key in visiting: raise ValueError(f"Stat bound dependency cycle in project {project['project_id']}")
+                    if key in visited: return
+                    visiting.add(key)
+                    for child in graph.get(key, []): visit(child)
+                    visiting.remove(key); visited.add(key)
+                for key in graph: visit(key)
+
+        if legacy_abilities:
+            rows = connection.execute("SELECT * FROM ability_definitions_legacy_v2").fetchall()
+            for row in rows:
+                self._migrate_legacy_ability(connection, dict(row), now)
+
+        discarded = connection.execute(
+            "SELECT project_id,COUNT(*) count FROM world_events WHERE event_type='effect.applied' GROUP BY project_id"
+        ).fetchall()
+        for row in discarded:
+            connection.execute(
+                "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) "
+                "VALUES(?,?,?,?,?,?)",
+                (new_id(), row["project_id"], "discarded_active_effects",
+                 f"Discarded {row['count']} legacy active effect event(s).",
+                 json.dumps({"instance_count": row["count"]}), now),
+            )
+        connection.execute("DELETE FROM world_events WHERE event_type='effect.applied'")
+        embedded = connection.execute(
+            "SELECT project_id,COALESCE(SUM(COALESCE(json_array_length(json_extract(payload_json,'$.entity.active_effects')),0)+COALESCE(json_array_length(json_extract(payload_json,'$.patch.active_effects')),0)),0) count FROM world_events GROUP BY project_id"
+        ).fetchall()
+        connection.execute("DROP TRIGGER IF EXISTS world_events_no_update")
+        connection.execute(
+            "UPDATE world_events SET payload_json=json_remove(payload_json,'$.entity.active_effects','$.patch.active_effects') WHERE json_type(payload_json,'$.entity.active_effects') IS NOT NULL OR json_type(payload_json,'$.patch.active_effects') IS NOT NULL"
+        )
+        connection.execute("CREATE TRIGGER world_events_no_update BEFORE UPDATE ON world_events BEGIN SELECT RAISE(ABORT, 'world events are immutable'); END")
+        for row in embedded:
+            if int(row["count"] or 0) <= 0: continue
+            connection.execute(
+                "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
+                (new_id(), row["project_id"], "discarded_embedded_effects", f"Discarded {row['count']} embedded legacy active effect instance(s).", json.dumps({"instance_count": row["count"]}), now),
+            )
+        connection.execute("DELETE FROM world_projection_cache")
+        if legacy_abilities:
+            connection.execute("DROP TABLE ability_definitions_legacy_v2")
+        if legacy_stats:
+            connection.execute("DROP TABLE stat_definitions_legacy_v2")
+
+    def _migrate_legacy_ability(
+        self, connection: sqlite3.Connection, record: dict[str, Any], now: str
+    ) -> None:
+        project_id, ability_key = record["project_id"], record["ability_key"]
+        profile = _safe_json(record.get("minigame_profile_json"), {})
+        timed = profile.get("timed_attack") if isinstance(profile, dict) else None
+        connection.execute(
+            "INSERT OR IGNORE INTO ability_definitions("
+            "project_id,ability_key,name,description,ability_kind,target_type,enabled,"
+            "timed_attack_line_count,timed_attack_damage_per_line,created_at,updated_at"
+            ") VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (project_id, ability_key, record["name"], record.get("description") or "", "active",
+             record.get("target_type") or "self", 1,
+             timed.get("line_count") if isinstance(timed, dict) else None,
+             timed.get("damage_per_line") if isinstance(timed, dict) else None,
+             record["created_at"], record["updated_at"]),
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO ability_owner_kinds(project_id,ability_key,owner_kind) VALUES(?,?, 'character')",
+            (project_id, ability_key),
+        )
+        requirements = _safe_json(record.get("requirements_json"), {})
+        if requirements:
+            self._insert_legacy_requirement(connection, project_id, ability_key, requirements)
+        costs = _safe_json(record.get("costs_json"), {})
+        for position, (stat_key, amount) in enumerate(costs.items() if isinstance(costs, dict) else []):
+            connection.execute(
+                "INSERT INTO ability_costs(id,project_id,ability_key,position,cost_kind,stat_key,amount) VALUES(?,?,?,?, 'stat',?,?)",
+                (new_id(), project_id, ability_key, position, stat_key, amount),
+            )
+        effects = _safe_json(record.get("effects_json"), [])
+        for position, effect in enumerate(effects if isinstance(effects, list) else []):
+            if not isinstance(effect, dict):
+                continue
+            operation = effect.get("operation", "add")
+            if operation == "apply_status":
+                connection.execute(
+                    "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (new_id(), project_id, "discarded_marker_status",
+                     f"Discarded marker-only status from ability {ability_key}.",
+                     json.dumps({"ability_key": ability_key, "position": position, "status": effect.get("status") or effect.get("name")}), now),
+                )
+                continue
+            if operation in {"add", "subtract", "set", "multiply"}:
+                base = re.sub(r"[^a-z0-9_]", "_", f"{ability_key}_effect_{position + 1}".lower())[:64]
+                effect_key, suffix = base, 2
+                while connection.execute(
+                    "SELECT 1 FROM effect_definitions WHERE project_id=? AND effect_key=?", (project_id, effect_key)
+                ).fetchone():
+                    tail = f"_{suffix}"
+                    effect_key, suffix = base[:64-len(tail)] + tail, suffix + 1
+                duration = max(0, int(effect.get("duration_value") or 0))
+                duration_type = effect.get("duration_type")
+                clock = "story_minutes" if duration_type == "minutes" else "world_actions"
+                connection.execute(
+                    "INSERT INTO effect_definitions(project_id,effect_key,name,description,target_stat_key,operation,clock,duration,tick_interval,evaluation_mode,stacking_policy,max_stacks,visibility,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,0,'snapshot','replace',1,'public',1,?,?)",
+                    (project_id, effect_key, effect.get("name") or effect_key.replace("_", " ").title(),
+                     "Migrated from an inline ability effect.", effect.get("stat_key"), operation,
+                     clock, duration, now, now),
+                )
+                connection.execute(
+                    "INSERT INTO effect_formula_nodes(id,project_id,effect_key,parent_id,position,node_kind,constant_value) VALUES(?,?,?,?,0,'constant',?)",
+                    (new_id(), project_id, effect_key, None, float(effect.get("amount") or 0)),
+                )
+                connection.execute(
+                    "INSERT INTO ability_actions(id,project_id,ability_key,position,action_kind,target,effect_key) VALUES(?,?,?,?, 'apply_effect',?,?)",
+                    (new_id(), project_id, ability_key, position, effect.get("target") or "target", effect_key),
+                )
+                continue
+            action_kind = {
+                "move": "move", "create": "create", "remove": "remove",
+                "reveal_knowledge": "reveal_knowledge", "change_relationship": "change_relationship",
+                "advance_time": "advance_time", "play_noise": "play_noise",
+            }.get(operation)
+            if action_kind:
+                connection.execute(
+                    "INSERT INTO ability_actions(id,project_id,ability_key,position,action_kind,target,destination_id,entity_kind,entity_name,state_json,fact_id,relation,minutes,noise_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (new_id(), project_id, ability_key, position, action_kind, effect.get("target") or "target",
+                     effect.get("destination_id"), effect.get("entity_kind"), effect.get("name"),
+                     json.dumps(effect.get("state") or {}), effect.get("fact_id"), effect.get("relation"),
+                     int(effect.get("minutes") or effect.get("amount") or 0), effect.get("noise_id")),
+                )
+        for position, skill_id in enumerate(profile.get("bullethell_skill_ids", []) if isinstance(profile, dict) else []):
+            connection.execute(
+                "INSERT OR IGNORE INTO ability_bullethell_skills(project_id,ability_key,skill_id,position) VALUES(?,?,?,?)",
+                (project_id, ability_key, skill_id, position),
+            )
+
+    def _insert_legacy_requirement(
+        self, connection: sqlite3.Connection, project_id: str, ability_key: str, value: dict[str, Any]
+    ) -> None:
+        leaves: list[dict[str, Any]] = []
+        leaves.extend({"kind": "has_tag", "target": "actor", "tag": tag} for tag in value.get("tags", []) if isinstance(tag, str))
+        leaves.extend({"kind": "compare", "target": "actor", "stat_key": key, "comparison": "gte", "value": amount} for key, amount in (value.get("min_stats") or {}).items())
+        if value.get("kind"): leaves.append({key: item for key, item in value.items() if key not in {"tags", "min_stats"}})
+        if not leaves: return
+        root_value = leaves[0] if len(leaves) == 1 else {"kind": "and", "children": leaves}
+
+        def write(node: dict[str, Any], parent_id: str | None, position: int) -> None:
+            node_id = new_id()
+            connection.execute(
+                "INSERT INTO ability_requirement_nodes(id,project_id,ability_key,parent_id,position,node_kind,target,stat_key,comparison,value_json,item_id,tag,relation,location_id,time_phase_id,weather_id,required_ability_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (node_id, project_id, ability_key, parent_id, position, node.get("kind"), node.get("target", "actor"), node.get("stat_key"), node.get("comparison", "gte"), json.dumps(node.get("value")) if node.get("value") is not None else None, node.get("item_id"), node.get("tag"), node.get("relation"), node.get("location_id"), node.get("time_phase_id"), node.get("weather_id"), node.get("ability_key")),
+            )
+            children = node.get("children") or ([node.get("child")] if node.get("child") else [])
+            for index, child in enumerate(children):
+                if isinstance(child, dict): write(child, node_id, index)
+        write(root_value, None, 0)
+
+
+def _safe_json(raw: Any, fallback: Any) -> Any:
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw if raw is not None else fallback)
+    except (TypeError, json.JSONDecodeError):
+        return fallback
 
     def relocate(self, destination: Path) -> None:
         if self._environment_locked:

@@ -134,6 +134,7 @@ def stat_from_record(value: Mapping[str, Any]) -> Stat:
     raw = _record(value)
     if "integer_only" in raw:
         raw["integer_only"] = bool(raw["integer_only"])
+    raw.setdefault("compatible_owner_kinds", ["character"])
     return Stat.model_validate(raw)
 
 
@@ -146,23 +147,8 @@ def stat_to_record(stat: Stat) -> dict[str, Any]:
 
 def ability_from_record(value: Mapping[str, Any]) -> Ability:
     raw = _record(value)
-    raw["requirements"] = _json_field(raw, "requirements_json", dict)
-    raw["costs"] = _json_field(raw, "costs_json", dict)
-    raw["effects"] = _json_field(raw, "effects_json", list)
-    raw["minigame_profile"] = _json_field(
-        raw,
-        "minigame_profile_json",
-        dict,
-    )
     return Ability.model_validate(raw)
 
 
 def ability_to_record(ability: Ability) -> dict[str, Any]:
-    raw = _dump(ability)
-    raw["requirements_json"] = json.dumps(raw.pop("requirements", {}))
-    raw["costs_json"] = json.dumps(raw.pop("costs", {}))
-    raw["effects_json"] = json.dumps(raw.pop("effects", []))
-    raw["minigame_profile_json"] = json.dumps(
-        raw.pop("minigame_profile", {})
-    )
-    return raw
+    return _dump(ability)
