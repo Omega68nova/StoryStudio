@@ -321,7 +321,12 @@ class RulesRuntime:
                     RequirementEvaluator().ensure_satisfied(actor, ability, projection=working, primary_target=primary, stat_lookup=lookup, effective_stats=effective)
                     cost_result = EffectExecutor().normalize(projection=working, actor=actor, primary_target=primary, ability=ability, next_sequence=int(working.get("branch_sequence", 0)) + 1, elapsed_minutes=int(working.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective)
                     for cost in cost_result.costs:
-                        row = {"event_type": "stat.changed", **cost, "passive_ability_key": ability.ability_key}; emitted.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id")); queue.append(("stat_changed", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                        row = {"event_type": "stat.changed", **cost, "passive_ability_key": ability.ability_key}
+                        emitted.append(row)
+                        if len(emitted) > 64:
+                            raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
+                        self.apply_event(working, "stat.changed", row, row.get("entity_id"))
+                        queue.append(("stat_changed", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
                     passive_inventory = {
                         str(entry.get("item_id")): int(entry.get("quantity", 0))
                         for entry in owner_raw.get("state", {}).get("inventory", [])
@@ -350,6 +355,8 @@ class RulesRuntime:
                             "passive_ability_key": ability.ability_key,
                         }
                         emitted.append(row)
+                        if len(emitted) > 64:
+                            raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
                         self.apply_event(working, "inventory.adjusted", row, owner_raw["id"])
                     participants = {"actor": self.participant(project_id, owner_raw), "source": self.participant(project_id, source_raw)}
                     for action in ability.actions:
