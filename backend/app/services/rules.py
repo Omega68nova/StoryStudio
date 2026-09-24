@@ -140,15 +140,32 @@ class RulesRuntime:
             RequirementEvaluator().ensure_satisfied(actor, ability, projection=projection, primary_target=primary, stat_lookup=lookup, effective_stats=effective)
             execution = EffectExecutor(targets).normalize(projection=projection, actor=actor, primary_target=primary, ability=ability, next_sequence=int(projection.get("_next_sequence", 0)), elapsed_minutes=int(projection.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective, id_factory=new_id)
             inventory_changes: list[dict[str, Any]] = []
+            available_inventory = {
+                str(entry.get("item_id")): int(entry.get("quantity", 0))
+                for entry in actor_raw.get("state", {}).get("inventory", [])
+            }
+            equipped_ids = set(map(str, actor_raw.get("state", {}).get("equipment", [])))
             for cost in ability.costs:
                 kind = str(cost.kind)
-                if kind == "stat": continue
+                if kind == "stat":
+                    continue
                 item_id = str(source_item_id) if kind == "consume_source" else str(cost.item_id)
-                current = next((int(entry.get("quantity", 0)) for entry in actor_raw.get("state", {}).get("inventory", []) if str(entry.get("item_id")) == item_id), 0)
-                if kind == "consume_source" and item_id in set(map(str, actor_raw.get("state", {}).get("equipment", []))): current = max(current, 1)
+                current = available_inventory.get(item_id, 0)
+                if kind == "consume_source" and item_id in equipped_ids:
+                    current = max(current, 1)
                 quantity = int(cost.amount)
-                if current < quantity: raise DomainOperationError("Ability item cost is unavailable")
-                inventory_changes.append({"character_id": str(actor.id), "entity_id": str(actor.id), "item_id": item_id, "previous_quantity": current, "quantity": current - quantity, "delta": -quantity})
+                if current < quantity:
+                    raise DomainOperationError("Ability item cost is unavailable")
+                remaining = current - quantity
+                available_inventory[item_id] = remaining
+                inventory_changes.append({
+                    "character_id": str(actor.id),
+                    "entity_id": str(actor.id),
+                    "item_id": item_id,
+                    "previous_quantity": current,
+                    "quantity": remaining,
+                    "delta": -quantity,
+                })
             effects: list[dict[str, Any]] = []
             participants = {"actor": self.participant(project_id, actor_raw), "source": self.participant(project_id, source_raw)}
             # Active effects created by this ability begin after the action that
