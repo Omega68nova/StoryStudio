@@ -103,12 +103,12 @@ class SpatialRepository:
                 )
                 self.db.execute(
                     "INSERT INTO spatial_locations("
-                    "location_id,project_id,parent_location_id,topology,occupancy,boundary_access,spatial_kind,exposure,"
+                    "location_id,project_id,name,parent_location_id,topology,occupancy,boundary_access,spatial_kind,exposure,"
                     "x,y,hidden,discovered,enabled,random_encounter,minutes_per_unit,base_visibility_units,encounter_rate,"
                     "requires_map_review,footprint_kind,footprint_space_id,local_bounds_kind,local_bounds_space_id,updated_at"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        location_id, project_id, state.get("parent_location_id"),
+                        location_id, project_id, str(entity.get("name") or location_id), state.get("parent_location_id"),
                         state.get("topology", "closed"), state.get("occupancy", "direct_allowed"),
                         state.get("boundary_access", "free"), state.get("spatial_kind", "spot"),
                         state.get("exposure", "outdoor"), state.get("x"), state.get("y"),
@@ -409,9 +409,8 @@ class SpatialRepository:
 
         visibility = "" if administrative else " AND l.discovered=1 AND l.hidden=0"
         rows = self.db.fetch_all(
-            "SELECT l.*,e.canonical_name AS name FROM spatial_locations l "
-            "JOIN world_entities e ON e.id=l.location_id "
-            "WHERE l.project_id=? AND l.parent_location_id=?" + visibility + " ORDER BY e.canonical_name COLLATE NOCASE",
+            "SELECT * FROM spatial_locations l "
+            "WHERE l.project_id=? AND l.parent_location_id=?" + visibility + " ORDER BY l.name COLLATE NOCASE",
             (project_id, focus_id),
         )
         locations: list[dict[str, Any]] = []
