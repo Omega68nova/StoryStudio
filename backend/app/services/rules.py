@@ -201,19 +201,48 @@ class RulesRuntime:
         return emitted
 
     def dependent_clamps(self, project_id: str, projection: dict[str, Any], events: list[Event]) -> list[dict[str, Any]]:
+        """Persist transitive clamping caused by dynamic stat bounds.
+
+        A bound stat can itself be another stat's bound, so one mutation may
+        require a chain of deterministic derived stat.changed events. The
+        definition graph is validated as acyclic at write/migration time; the
+        event cap is a second line of defence against malformed persisted data.
+        """
         working, derived = copy.deepcopy(projection), []
-        for event_type, entity_id, payload in events:
+        queue: list[Event] = list(events)
+        definitions = list(self.data.rules.stats(project_id))
+        while queue:
+            event_type, entity_id, payload = queue.pop(0)
             self.apply_event(working, event_type, payload, entity_id)
-            if event_type != "stat.changed": continue
+            if event_type != "stat.changed":
+                continue
             container = working["relations"].get(payload.get("relation_id")) or working["entities"].get(payload.get("entity_id"))
-            if not container: continue
+            if not container:
+                continue
             kind = "relationship" if payload.get("relation_id") else str(container.get("kind"))
-            for definition in self.data.rules.stats(project_id):
-                if kind not in map(str, definition.compatible_owner_kinds) or payload.get("stat_key") not in {definition.minimum_stat_key, definition.maximum_stat_key}: continue
-                raw = float(container.get("stats", {}).get(definition.stat_key, definition.default_value)); effective = self.effective_stats(project_id, container, kind).get(definition.stat_key, raw)
-                if float(effective) == raw: continue
-                row = {"event_type": "stat.changed", "relation_id" if kind == "relationship" else "entity_id": container["id"], "stat_key": definition.stat_key, "previous_value": raw, "value": effective, "derived": True, "reason": f"clamped after {payload.get('stat_key')} changed"}
-                derived.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id"))
+            changed_key = payload.get("stat_key")
+            for definition in definitions:
+                if kind not in map(str, definition.compatible_owner_kinds):
+                    continue
+                if changed_key not in {definition.minimum_stat_key, definition.maximum_stat_key}:
+                    continue
+                raw = float(container.get("stats", {}).get(definition.stat_key, definition.default_value))
+                effective = self.effective_stats(project_id, container, kind).get(definition.stat_key, raw)
+                if float(effective) == raw:
+                    continue
+                row = {
+                    "event_type": "stat.changed",
+                    ("relation_id" if kind == "relationship" else "entity_id"): container["id"],
+                    "stat_key": definition.stat_key,
+                    "previous_value": raw,
+                    "value": effective,
+                    "derived": True,
+                    "reason": f"clamped after {changed_key} changed",
+                }
+                derived.append(row)
+                if len(derived) > 256:
+                    raise RulesRuntimeError("Dependent stat clamping exceeded 256 derived events")
+                queue.append(("stat.changed", row.get("entity_id"), row))
         return derived
 
     def passive_cascade(self, project_id: str, projection: dict[str, Any], events: list[Event]) -> list[dict[str, Any]]:
