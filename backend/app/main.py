@@ -2656,7 +2656,106 @@ async def update_effect(project_id: str, effect_key: str, request: EffectDefinit
 def _validate_formula_stats(project_id: str, node: Any) -> None:
     if str(node.kind) == "stat" and not data.rules.stat(project_id, str(node.stat_key)):
         raise HTTPException(422, f"Formula references unknown stat: {node.stat_key}")
-    for child in node.children: _validate_formula_stats(project_id, child)
+    for child in node.children:
+        _validate_formula_stats(project_id, child)
+
+
+def _validate_requirement_references(project_id: str, node: RequirementExpression, *, ability_key: str) -> None:
+    projection = scheduler.world.projection(project_id)
+    entities = projection.get("entities", {})
+    kind = str(node.kind or "")
+    if kind == "compare":
+        definition = data.rules.stat(project_id, str(node.stat_key or ""))
+        if not definition:
+            raise HTTPException(422, f"Requirement references unknown stat: {node.stat_key}")
+    elif kind == "has_item":
+        item = entities.get(str(node.item_id or ""))
+        if not item or item.get("kind") != "item":
+            raise HTTPException(422, f"Requirement references unknown item: {node.item_id}")
+    elif kind == "location":
+        location = entities.get(str(node.location_id or ""))
+        if not location or location.get("kind") != "location":
+            raise HTTPException(422, f"Requirement references unknown location: {node.location_id}")
+    elif kind == "time":
+        if not db.fetch_one("SELECT id FROM time_phases WHERE id=? AND project_id=?", (node.time_phase_id, project_id)):
+            raise HTTPException(422, f"Requirement references unknown time phase: {node.time_phase_id}")
+    elif kind == "weather":
+        if not db.fetch_one("SELECT id FROM weather_definitions WHERE id=? AND project_id=?", (node.weather_id, project_id)):
+            raise HTTPException(422, f"Requirement references unknown weather: {node.weather_id}")
+    elif kind == "has_ability":
+        required = str(node.ability_key or "")
+        if required == ability_key or not data.rules.ability(project_id, required):
+            raise HTTPException(422, f"Requirement references unknown or recursive ability: {required}")
+    for child in node.children:
+        _validate_requirement_references(project_id, child, ability_key=ability_key)
+    if node.child:
+        _validate_requirement_references(project_id, node.child, ability_key=ability_key)
+
+
+def _validate_effect_action_timing(effect: EffectDefinition, action: Any) -> None:
+    duration = effect.duration if action.duration_override is None else action.duration_override
+    tick = effect.tick_interval if action.tick_override is None else action.tick_override
+    if not (
+        (duration == 0 and tick == 0)
+        or (duration > 0 and 0 <= tick <= duration)
+        or (duration == -1 and tick > 0)
+    ):
+        raise HTTPException(422, f"Effect action for {effect.effect_key} has an invalid duration/tick override")
+
+
+def _validate_ability_references(project_id: str, request: AbilityDefinitionCreate) -> RequirementExpression:
+    projection = scheduler.world.projection(project_id)
+    entities = projection.get("entities", {})
+    requirement = RequirementExpression.model_validate(request.requirements)
+    _validate_requirement_references(project_id, requirement, ability_key=request.ability_key)
+
+    for cost in request.costs:
+        kind = str(cost.kind)
+        if kind == "stat":
+            definition = data.rules.stat(project_id, str(cost.stat_key or ""))
+            if not definition:
+                raise HTTPException(422, f"Unknown stat in ability cost: {cost.stat_key}")
+            if "character" not in map(str, definition.compatible_owner_kinds):
+                raise HTTPException(422, f"Ability cost stat is not compatible with characters: {cost.stat_key}")
+        elif kind == "consume_source":
+            if "item" not in request.compatible_owner_kinds:
+                raise HTTPException(422, "consume_source costs require item ownership")
+        elif kind == "consume_fuel":
+            item = entities.get(str(cost.item_id or ""))
+            if not item or item.get("kind") != "item":
+                raise HTTPException(422, f"Ability fuel references unknown item: {cost.item_id}")
+
+    for trigger in request.passive_triggers:
+        if trigger.stat_key:
+            definition = data.rules.stat(project_id, trigger.stat_key)
+            if not definition:
+                raise HTTPException(422, f"Passive trigger references unknown stat: {trigger.stat_key}")
+            if "character" not in map(str, definition.compatible_owner_kinds):
+                raise HTTPException(422, f"Passive trigger stat is not character-compatible: {trigger.stat_key}")
+
+    allowed_targets = {
+        "actor", "target", "party", "location", "nearby_enemies", "faction_members",
+        "relationship_target", "allies", "enemies", "all", "random",
+    }
+    for action in request.actions:
+        if str(action.target) not in allowed_targets:
+            raise HTTPException(422, f"Unsupported ability action target selector: {action.target}")
+        if action.effect_key:
+            definition = data.rules.effect(project_id, action.effect_key)
+            if not definition:
+                raise HTTPException(422, f"Unknown effect in ability: {action.effect_key}")
+            _validate_effect_action_timing(definition, action)
+        if action.destination_id:
+            destination = entities.get(str(action.destination_id))
+            if not destination or destination.get("kind") != "location":
+                raise HTTPException(422, f"Ability movement references unknown location: {action.destination_id}")
+        if action.fact_id:
+            fact = entities.get(str(action.fact_id))
+            if not fact or fact.get("kind") != "fact":
+                raise HTTPException(422, f"Ability references unknown fact: {action.fact_id}")
+        if str(action.kind) == "play_noise" and not data.sound.noise_variant(project_id, str(action.noise_id), playable_only=False):
+            raise HTTPException(422, f"Ability references unknown noise: {action.noise_id}")
+    return requirement
 
 
 @app.post("/api/projects/{project_id}/abilities", status_code=201)
@@ -2669,12 +2768,17 @@ async def create_ability(project_id: str, request: AbilityDefinitionCreate) -> d
         config = next(row for row in scheduler.minigames.configs(project_id) if row["game_key"] == "timed_attack")
         if not (config["min_attack_lines"] <= request.timed_attack_line_count <= config["max_attack_lines"] and config["min_attack_damage"] <= request.timed_attack_damage_per_line <= config["max_attack_damage"]):
             raise HTTPException(422, "Timed-attack ability profile is outside the project minigame ranges")
-    for cost in request.costs:
-        if cost.stat_key and not data.rules.stat(project_id, cost.stat_key): raise HTTPException(422, f"Unknown stat in ability: {cost.stat_key}")
-    for action in request.actions:
-        if action.effect_key and not data.rules.effect(project_id, action.effect_key): raise HTTPException(422, f"Unknown effect in ability: {action.effect_key}")
-    try: result = data.rules.save_ability(Ability.model_validate({"project_id": project_id, **request.model_dump(), "requirements": RequirementExpression.model_validate(request.requirements)}))
-    except Exception as exc: raise HTTPException(422, str(exc)) from exc
+    try:
+        requirement = _validate_ability_references(project_id, request)
+        result = data.rules.save_ability(Ability.model_validate({
+            "project_id": project_id,
+            **request.model_dump(),
+            "requirements": requirement,
+        }))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
     return result.model_dump(mode="json")
 
 
