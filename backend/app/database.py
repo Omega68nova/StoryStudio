@@ -159,6 +159,16 @@ class Database:
             return
 
         now = utc_now()
+        legacy_ability_refs: dict[str, dict[str, str]] = {}
+        if legacy_abilities:
+            for row in connection.execute(
+                "SELECT id,project_id,ability_key,name FROM ability_definitions_legacy_v2"
+            ).fetchall():
+                project_refs = legacy_ability_refs.setdefault(str(row["project_id"]), {})
+                key = str(row["ability_key"])
+                project_refs[key] = key
+                project_refs[str(row["id"])] = key
+                project_refs[str(row["name"])] = key
         if legacy_stats:
             rows = connection.execute("SELECT * FROM stat_definitions_legacy_v2").fetchall()
             for row in rows:
@@ -185,23 +195,109 @@ class Database:
                     (record["project_id"], record["stat_key"], owner_kind),
                 )
             for project in connection.execute("SELECT DISTINCT project_id FROM stat_definitions").fetchall():
-                graph = {row["stat_key"]: [key for key in (row["minimum_stat_key"], row["maximum_stat_key"]) if key] for row in connection.execute("SELECT stat_key,minimum_stat_key,maximum_stat_key FROM stat_definitions WHERE project_id=?", (project["project_id"],)).fetchall()}
-                visiting: set[str] = set(); visited: set[str] = set()
+                project_id = project["project_id"]
+                stat_rows = connection.execute(
+                    "SELECT stat_key,minimum_stat_key,maximum_stat_key FROM stat_definitions WHERE project_id=?",
+                    (project_id,),
+                ).fetchall()
+                graph = {
+                    row["stat_key"]: [key for key in (row["minimum_stat_key"], row["maximum_stat_key"]) if key]
+                    for row in stat_rows
+                }
+                owners = {
+                    row["stat_key"]: {
+                        owner["owner_kind"]
+                        for owner in connection.execute(
+                            "SELECT owner_kind FROM stat_definition_owner_kinds WHERE project_id=? AND stat_key=?",
+                            (project_id, row["stat_key"]),
+                        ).fetchall()
+                    }
+                    for row in stat_rows
+                }
+                for stat_key, dependencies in graph.items():
+                    for dependency in dependencies:
+                        if dependency not in graph:
+                            raise ValueError(f"Stat {stat_key} references unavailable bound stat {dependency}")
+                        if not owners.get(stat_key, set()).intersection(owners.get(dependency, set())):
+                            raise ValueError(f"Stat {stat_key} has no compatible owner kind in common with bound stat {dependency}")
+                visiting: set[str] = set()
+                visited: set[str] = set()
                 def visit(key: str) -> None:
-                    if key in visiting: raise ValueError(f"Stat bound dependency cycle in project {project['project_id']}")
-                    if key in visited: return
+                    if key in visiting:
+                        raise ValueError(f"Stat bound dependency cycle in project {project_id}")
+                    if key in visited:
+                        return
                     visiting.add(key)
-                    for child in graph.get(key, []): visit(child)
-                    visiting.remove(key); visited.add(key)
-                for key in graph: visit(key)
+                    for child in graph.get(key, []):
+                        visit(child)
+                    visiting.remove(key)
+                    visited.add(key)
+                for key in graph:
+                    visit(key)
 
         if legacy_abilities:
             rows = connection.execute("SELECT * FROM ability_definitions_legacy_v2").fetchall()
             for row in rows:
                 self._migrate_legacy_ability(connection, dict(row), now)
 
+        # Canonical persistent ability references are keys, never legacy row IDs
+        # or display names. Rewrite the two event payload shapes that can store
+        # entity state before the legacy definitions are dropped.
+        if legacy_ability_refs:
+            connection.execute("DROP TRIGGER IF EXISTS world_events_no_update")
+            unresolved: dict[str, set[str]] = {}
+            event_rows = connection.execute(
+                "SELECT e.id,e.payload_json,t.project_id "
+                "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id"
+            ).fetchall()
+            for event in event_rows:
+                try:
+                    payload = json.loads(event["payload_json"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                project_id = str(event["project_id"])
+                refs = legacy_ability_refs.get(project_id, {})
+                changed = False
+                for container in (
+                    (payload.get("entity") or {}).get("state") if isinstance(payload.get("entity"), dict) else None,
+                    payload.get("patch") if isinstance(payload.get("patch"), dict) else None,
+                ):
+                    if not isinstance(container, dict) or not isinstance(container.get("abilities"), list):
+                        continue
+                    normalized: list[str] = []
+                    for value in container["abilities"]:
+                        raw = str(value)
+                        key = refs.get(raw)
+                        if key is None:
+                            unresolved.setdefault(project_id, set()).add(raw)
+                            key = raw
+                        if key not in normalized:
+                            normalized.append(key)
+                    if normalized != container["abilities"]:
+                        container["abilities"] = normalized
+                        changed = True
+                if changed:
+                    connection.execute(
+                        "UPDATE world_events SET payload_json=? WHERE id=?",
+                        (json.dumps(payload, separators=(",", ":"), ensure_ascii=False), event["id"]),
+                    )
+            for project_id, values in unresolved.items():
+                if not values:
+                    continue
+                connection.execute(
+                    "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        new_id(), project_id, "unresolved_ability_reference",
+                        f"Could not canonicalize {len(values)} legacy ability reference(s).",
+                        json.dumps({"references": sorted(values)}), now,
+                    ),
+                )
+
         discarded = connection.execute(
-            "SELECT project_id,COUNT(*) count FROM world_events WHERE event_type='effect.applied' GROUP BY project_id"
+            "SELECT t.project_id,COUNT(*) count "
+            "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
+            "WHERE e.event_type='effect.applied' GROUP BY t.project_id"
         ).fetchall()
         for row in discarded:
             connection.execute(
@@ -213,11 +309,21 @@ class Database:
             )
         connection.execute("DELETE FROM world_events WHERE event_type='effect.applied'")
         embedded = connection.execute(
-            "SELECT project_id,COALESCE(SUM(COALESCE(json_array_length(json_extract(payload_json,'$.entity.active_effects')),0)+COALESCE(json_array_length(json_extract(payload_json,'$.patch.active_effects')),0)),0) count FROM world_events GROUP BY project_id"
+            "SELECT t.project_id,"
+            "COALESCE(SUM("
+            "COALESCE(json_array_length(json_extract(e.payload_json,'$.entity.active_effects')),0)+"
+            "COALESCE(json_array_length(json_extract(e.payload_json,'$.entity.state.active_effects')),0)+"
+            "COALESCE(json_array_length(json_extract(e.payload_json,'$.patch.active_effects')),0)"
+            "),0) count "
+            "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
+            "GROUP BY t.project_id"
         ).fetchall()
         connection.execute("DROP TRIGGER IF EXISTS world_events_no_update")
         connection.execute(
-            "UPDATE world_events SET payload_json=json_remove(payload_json,'$.entity.active_effects','$.patch.active_effects') WHERE json_type(payload_json,'$.entity.active_effects') IS NOT NULL OR json_type(payload_json,'$.patch.active_effects') IS NOT NULL"
+            "UPDATE world_events SET payload_json=json_remove(payload_json,'$.entity.active_effects','$.entity.state.active_effects','$.patch.active_effects') "
+            "WHERE json_type(payload_json,'$.entity.active_effects') IS NOT NULL "
+            "OR json_type(payload_json,'$.entity.state.active_effects') IS NOT NULL "
+            "OR json_type(payload_json,'$.patch.active_effects') IS NOT NULL"
         )
         connection.execute("CREATE TRIGGER world_events_no_update BEFORE UPDATE ON world_events BEGIN SELECT RAISE(ABORT, 'world events are immutable'); END")
         for row in embedded:
@@ -330,23 +436,20 @@ class Database:
         if not leaves: return
         root_value = leaves[0] if len(leaves) == 1 else {"kind": "and", "children": leaves}
 
-        def write(node: dict[str, Any], parent_id: str | None, position: int) -> None:
+        def write(node: dict[str, Any], parent_id: str | None, position: int, edge_kind: str = "child") -> None:
             node_id = new_id()
             connection.execute(
-                "INSERT INTO ability_requirement_nodes(id,project_id,ability_key,parent_id,position,node_kind,target,stat_key,comparison,value_json,item_id,tag,relation,location_id,time_phase_id,weather_id,required_ability_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (node_id, project_id, ability_key, parent_id, position, node.get("kind"), node.get("target", "actor"), node.get("stat_key"), node.get("comparison", "gte"), json.dumps(node.get("value")) if node.get("value") is not None else None, node.get("item_id"), node.get("tag"), node.get("relation"), node.get("location_id"), node.get("time_phase_id"), node.get("weather_id"), node.get("ability_key")),
+                "INSERT INTO ability_requirement_nodes(id,project_id,ability_key,parent_id,position,edge_kind,node_kind,target,stat_key,comparison,value_json,item_id,tag,relation,location_id,time_phase_id,weather_id,required_ability_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (node_id, project_id, ability_key, parent_id, position, edge_kind, node.get("kind"), node.get("target", "actor"), node.get("stat_key"), node.get("comparison", "gte"), json.dumps(node.get("value")) if node.get("value") is not None else None, node.get("item_id"), node.get("tag"), node.get("relation"), node.get("location_id"), node.get("time_phase_id"), node.get("weather_id"), node.get("ability_key")),
             )
-            children = node.get("children") or ([node.get("child")] if node.get("child") else [])
-            for index, child in enumerate(children):
-                if isinstance(child, dict): write(child, node_id, index)
+            for index, child in enumerate(node.get("children") or []):
+                if isinstance(child, dict):
+                    write(child, node_id, index, "child")
+            child = node.get("child")
+            if isinstance(child, dict):
+                write(child, node_id, 0, "not_child")
         write(root_value, None, 0)
 
-
-def _safe_json(raw: Any, fallback: Any) -> Any:
-    try:
-        return json.loads(raw) if isinstance(raw, str) else (raw if raw is not None else fallback)
-    except (TypeError, json.JSONDecodeError):
-        return fallback
 
     def relocate(self, destination: Path) -> None:
         if self._environment_locked:
@@ -541,6 +644,13 @@ def _safe_json(raw: Any, fallback: Any) -> Any:
             "UPDATE generation_jobs SET payload_json = ?, status = ?, error = NULL, updated_at = ? WHERE id = ?",
             (json.dumps(payload), status, utc_now(), job_id),
         )
+
+
+def _safe_json(raw: Any, fallback: Any) -> Any:
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw if raw is not None else fallback)
+    except (TypeError, json.JSONDecodeError):
+        return fallback
 
 
 def decode_json_fields(row: dict[str, Any] | None, *fields: str) -> dict[str, Any] | None:

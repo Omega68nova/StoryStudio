@@ -120,12 +120,21 @@ class RulesRuntime:
         if str(ability.ability_kind) != "active": raise RulesRuntimeError("Passive abilities cannot be used directly")
         source_raw, source_item_id = actor_raw, arguments.get("source_item_id")
         if source_item_id:
-            if "item" not in map(str, ability.compatible_owner_kinds): raise RulesRuntimeError("This ability cannot be supplied by an item")
+            if "item" not in map(str, ability.compatible_owner_kinds):
+                raise RulesRuntimeError("This ability cannot be supplied by an item")
             source_raw = self.entity(projection, source_item_id, "item")
-            inventory = {str(entry.get("item_id")): int(entry.get("quantity", 0)) for entry in actor_raw.get("state", {}).get("inventory", [])}
-            if inventory.get(str(source_item_id), 0) <= 0 and str(source_item_id) not in set(map(str, actor_raw.get("state", {}).get("equipment", []))): raise RulesRuntimeError("The source item must be held or equipped")
+            source_abilities = set(map(str, source_raw.get("state", {}).get("abilities", [])))
+            if ability.ability_key not in source_abilities:
+                raise RulesRuntimeError("The source item does not provide this ability")
+            inventory = {
+                str(entry.get("item_id")): int(entry.get("quantity", 0))
+                for entry in actor_raw.get("state", {}).get("inventory", [])
+            }
+            if inventory.get(str(source_item_id), 0) <= 0 and str(source_item_id) not in set(map(str, actor_raw.get("state", {}).get("equipment", []))):
+                raise RulesRuntimeError("The source item must be held or equipped")
         elif "character" not in map(str, ability.compatible_owner_kinds): raise RulesRuntimeError("This ability requires a source item")
-        elif ability.ability_key not in actor.state.abilities and ability.name not in actor.state.abilities: raise RulesRuntimeError(f"{actor.name} does not know {ability.name}")
+        elif ability.ability_key not in actor.state.abilities:
+            raise RulesRuntimeError(f"{actor.name} does not know {ability.name}")
         lookup = lambda key, owner="character": self.stat(project_id, key, owner)
         effective = lambda character: self.effective_stats(project_id, projection["entities"].get(str(character.id), actor_raw), "character")
         targets = TargetResolver()
@@ -140,17 +149,42 @@ class RulesRuntime:
             RequirementEvaluator().ensure_satisfied(actor, ability, projection=projection, primary_target=primary, stat_lookup=lookup, effective_stats=effective)
             execution = EffectExecutor(targets).normalize(projection=projection, actor=actor, primary_target=primary, ability=ability, next_sequence=int(projection.get("_next_sequence", 0)), elapsed_minutes=int(projection.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective, id_factory=new_id)
             inventory_changes: list[dict[str, Any]] = []
+            available_inventory = {
+                str(entry.get("item_id")): int(entry.get("quantity", 0))
+                for entry in actor_raw.get("state", {}).get("inventory", [])
+            }
+            equipped_ids = set(map(str, actor_raw.get("state", {}).get("equipment", [])))
             for cost in ability.costs:
                 kind = str(cost.kind)
-                if kind == "stat": continue
+                if kind == "stat":
+                    continue
                 item_id = str(source_item_id) if kind == "consume_source" else str(cost.item_id)
-                current = next((int(entry.get("quantity", 0)) for entry in actor_raw.get("state", {}).get("inventory", []) if str(entry.get("item_id")) == item_id), 0)
-                if kind == "consume_source" and item_id in set(map(str, actor_raw.get("state", {}).get("equipment", []))): current = max(current, 1)
+                current = available_inventory.get(item_id, 0)
+                if kind == "consume_source" and item_id in equipped_ids:
+                    current = max(current, 1)
                 quantity = int(cost.amount)
-                if current < quantity: raise DomainOperationError("Ability item cost is unavailable")
-                inventory_changes.append({"character_id": str(actor.id), "entity_id": str(actor.id), "item_id": item_id, "previous_quantity": current, "quantity": current - quantity, "delta": -quantity})
+                if current < quantity:
+                    raise DomainOperationError("Ability item cost is unavailable")
+                remaining = current - quantity
+                available_inventory[item_id] = remaining
+                inventory_changes.append({
+                    "character_id": str(actor.id),
+                    "entity_id": str(actor.id),
+                    "item_id": item_id,
+                    "previous_quantity": current,
+                    "quantity": remaining,
+                    "delta": -quantity,
+                })
             effects: list[dict[str, Any]] = []
             participants = {"actor": self.participant(project_id, actor_raw), "source": self.participant(project_id, source_raw)}
+            # Active effects created by this ability begin after the action that
+            # applied them has committed. Otherwise an effect with a one-action
+            # delay would already be overdue immediately after creation.
+            timing_projection = copy.deepcopy(projection)
+            timing_projection["world_action_count"] = int(projection.get("world_action_count", 0)) + 1
+            target_counts = dict(projection.get("target_action_counts", {}))
+            target_counts[str(actor.id)] = int(target_counts.get(str(actor.id), 0)) + 1
+            timing_projection["target_action_counts"] = target_counts
             proposed_names = {str(entity.get("name", "")).casefold() for entity in projection["entities"].values() if not entity.get("state", {}).get("archived")}
             for action in ability.actions:
                 if action.destination_id: self.entity(projection, action.destination_id, "location")
@@ -164,7 +198,7 @@ class RulesRuntime:
                 if str(action.kind) == "apply_effect":
                     definition = self.data.rules.effect(project_id, str(action.effect_key))
                     if not definition or not definition.enabled: raise DomainOperationError(f"Unknown effect: {action.effect_key}")
-                    effects.extend(self.normalize_effect(project_id, projection, definition, target, participants, action.duration_override, action.tick_override) for target in resolved)
+                    effects.extend(self.normalize_effect(project_id, timing_projection, definition, target, participants, action.duration_override, action.tick_override) for target in resolved)
                 else: effects.extend(self.normalize_action(action, target, actor) for target in (resolved[:1] if str(action.kind) in {"advance_time", "play_noise", "create"} else resolved))
         except DomainOperationError as exc: raise RulesRuntimeError(str(exc)) from exc
         return {"actor_id": actor.id, "target_id": primary.id, "ability_key": ability.ability_key, "ability_name": ability.name, "source_item_id": source_item_id, "costs": execution.costs, "inventory_changes": inventory_changes, "effects": effects}
@@ -201,19 +235,48 @@ class RulesRuntime:
         return emitted
 
     def dependent_clamps(self, project_id: str, projection: dict[str, Any], events: list[Event]) -> list[dict[str, Any]]:
+        """Persist transitive clamping caused by dynamic stat bounds.
+
+        A bound stat can itself be another stat's bound, so one mutation may
+        require a chain of deterministic derived stat.changed events. The
+        definition graph is validated as acyclic at write/migration time; the
+        event cap is a second line of defence against malformed persisted data.
+        """
         working, derived = copy.deepcopy(projection), []
-        for event_type, entity_id, payload in events:
+        queue: list[Event] = list(events)
+        definitions = list(self.data.rules.stats(project_id))
+        while queue:
+            event_type, entity_id, payload = queue.pop(0)
             self.apply_event(working, event_type, payload, entity_id)
-            if event_type != "stat.changed": continue
+            if event_type != "stat.changed":
+                continue
             container = working["relations"].get(payload.get("relation_id")) or working["entities"].get(payload.get("entity_id"))
-            if not container: continue
+            if not container:
+                continue
             kind = "relationship" if payload.get("relation_id") else str(container.get("kind"))
-            for definition in self.data.rules.stats(project_id):
-                if kind not in map(str, definition.compatible_owner_kinds) or payload.get("stat_key") not in {definition.minimum_stat_key, definition.maximum_stat_key}: continue
-                raw = float(container.get("stats", {}).get(definition.stat_key, definition.default_value)); effective = self.effective_stats(project_id, container, kind).get(definition.stat_key, raw)
-                if float(effective) == raw: continue
-                row = {"event_type": "stat.changed", "relation_id" if kind == "relationship" else "entity_id": container["id"], "stat_key": definition.stat_key, "previous_value": raw, "value": effective, "derived": True, "reason": f"clamped after {payload.get('stat_key')} changed"}
-                derived.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id"))
+            changed_key = payload.get("stat_key")
+            for definition in definitions:
+                if kind not in map(str, definition.compatible_owner_kinds):
+                    continue
+                if changed_key not in {definition.minimum_stat_key, definition.maximum_stat_key}:
+                    continue
+                raw = float(container.get("stats", {}).get(definition.stat_key, definition.default_value))
+                effective = self.effective_stats(project_id, container, kind).get(definition.stat_key, raw)
+                if float(effective) == raw:
+                    continue
+                row = {
+                    "event_type": "stat.changed",
+                    ("relation_id" if kind == "relationship" else "entity_id"): container["id"],
+                    "stat_key": definition.stat_key,
+                    "previous_value": raw,
+                    "value": effective,
+                    "derived": True,
+                    "reason": f"clamped after {changed_key} changed",
+                }
+                derived.append(row)
+                if len(derived) > 256:
+                    raise RulesRuntimeError("Dependent stat clamping exceeded 256 derived events")
+                queue.append(("stat.changed", row.get("entity_id"), row))
         return derived
 
     def passive_cascade(self, project_id: str, projection: dict[str, Any], events: list[Event]) -> list[dict[str, Any]]:
@@ -221,9 +284,14 @@ class RulesRuntime:
         working, emitted, queue = copy.deepcopy(projection), [], []
         for event_type, entity_id, payload in events:
             self.apply_event(working, event_type, payload, entity_id)
-            hook = "damage" if event_type == "stat.changed" and payload.get("operation") == "subtract" else hooks.get(event_type)
-            if hook: queue.append((hook, entity_id or payload.get("entity_id"), payload, 1, ()))
-        definitions = self.data.rules.abilities(project_id); by_key = {item.ability_key: item for item in definitions}; by_name = {item.name: item for item in definitions}
+            owner = entity_id or payload.get("entity_id")
+            hook = hooks.get(event_type)
+            if hook:
+                queue.append((hook, owner, payload, 1, ()))
+            if event_type == "stat.changed" and payload.get("operation") == "subtract":
+                queue.append(("damage", owner, payload, 1, ()))
+        definitions = self.data.rules.abilities(project_id)
+        by_key = {item.ability_key: item for item in definitions}
         while queue:
             hook, owner_id, payload, depth, ancestry = queue.pop(0)
             if depth > 8: raise RulesRuntimeError("Passive ability cascade exceeds depth 8")
@@ -231,12 +299,12 @@ class RulesRuntime:
             for owner_raw in [item for item in owners if item and item.get("kind") == "character"]:
                 sources: list[tuple[Any, dict[str, Any]]] = []
                 for key in owner_raw.get("state", {}).get("abilities", []):
-                    ability = by_key.get(str(key)) or by_name.get(str(key))
+                    ability = by_key.get(str(key))
                     if ability and str(ability.ability_kind) == "passive" and "character" in map(str, ability.compatible_owner_kinds): sources.append((ability, owner_raw))
                 for item_id in owner_raw.get("state", {}).get("equipment", []):
                     item_raw = working["entities"].get(str(item_id))
                     for key in (item_raw or {}).get("state", {}).get("abilities", []):
-                        ability = by_key.get(str(key)) or by_name.get(str(key))
+                        ability = by_key.get(str(key))
                         if ability and str(ability.ability_kind) == "passive" and "item" in map(str, ability.compatible_owner_kinds): sources.append((ability, item_raw))
                 actor = entity_from_projection(owner_raw)
                 if not isinstance(actor, Character): continue
@@ -253,13 +321,43 @@ class RulesRuntime:
                     RequirementEvaluator().ensure_satisfied(actor, ability, projection=working, primary_target=primary, stat_lookup=lookup, effective_stats=effective)
                     cost_result = EffectExecutor().normalize(projection=working, actor=actor, primary_target=primary, ability=ability, next_sequence=int(working.get("branch_sequence", 0)) + 1, elapsed_minutes=int(working.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective)
                     for cost in cost_result.costs:
-                        row = {"event_type": "stat.changed", **cost, "passive_ability_key": ability.ability_key}; emitted.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id")); queue.append(("stat_changed", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                        row = {"event_type": "stat.changed", **cost, "passive_ability_key": ability.ability_key}
+                        emitted.append(row)
+                        if len(emitted) > 64:
+                            raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
+                        self.apply_event(working, "stat.changed", row, row.get("entity_id"))
+                        queue.append(("stat_changed", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                    passive_inventory = {
+                        str(entry.get("item_id")): int(entry.get("quantity", 0))
+                        for entry in owner_raw.get("state", {}).get("inventory", [])
+                    }
+                    passive_equipment = set(map(str, owner_raw.get("state", {}).get("equipment", [])))
                     for cost in ability.costs:
-                        if str(cost.kind) == "stat": continue
-                        item_id = str(source_raw["id"]) if str(cost.kind) == "consume_source" else str(cost.item_id); current = next((int(entry.get("quantity", 0)) for entry in owner_raw.get("state", {}).get("inventory", []) if str(entry.get("item_id")) == item_id), 0)
-                        if str(cost.kind) == "consume_source" and item_id in set(map(str, owner_raw.get("state", {}).get("equipment", []))): current = max(current, 1)
-                        if current < int(cost.amount): raise RulesRuntimeError(f"Passive ability {ability.name} lacks its item cost")
-                        row = {"event_type": "inventory.adjusted", "entity_id": owner_raw["id"], "character_id": owner_raw["id"], "item_id": item_id, "previous_quantity": current, "quantity": current - int(cost.amount), "delta": -int(cost.amount), "passive_ability_key": ability.ability_key}; emitted.append(row); self.apply_event(working, "inventory.adjusted", row, owner_raw["id"])
+                        if str(cost.kind) == "stat":
+                            continue
+                        item_id = str(source_raw["id"]) if str(cost.kind) == "consume_source" else str(cost.item_id)
+                        current = passive_inventory.get(item_id, 0)
+                        if str(cost.kind) == "consume_source" and item_id in passive_equipment:
+                            current = max(current, 1)
+                        amount = int(cost.amount)
+                        if current < amount:
+                            raise RulesRuntimeError(f"Passive ability {ability.name} lacks its item cost")
+                        remaining = current - amount
+                        passive_inventory[item_id] = remaining
+                        row = {
+                            "event_type": "inventory.adjusted",
+                            "entity_id": owner_raw["id"],
+                            "character_id": owner_raw["id"],
+                            "item_id": item_id,
+                            "previous_quantity": current,
+                            "quantity": remaining,
+                            "delta": -amount,
+                            "passive_ability_key": ability.ability_key,
+                        }
+                        emitted.append(row)
+                        if len(emitted) > 64:
+                            raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
+                        self.apply_event(working, "inventory.adjusted", row, owner_raw["id"])
                     participants = {"actor": self.participant(project_id, owner_raw), "source": self.participant(project_id, source_raw)}
                     for action in ability.actions:
                         targets = resolver.resolve_effect_targets(working, actor, primary, ability, action)
@@ -269,7 +367,15 @@ class RulesRuntime:
                                 if not effect: raise RulesRuntimeError(f"Passive ability references missing effect {action.effect_key}")
                                 row = self.normalize_effect(project_id, working, effect, target, participants, action.duration_override, action.tick_override)
                             else: row = self.normalize_action(action, target, actor)
-                            emitted.append(row); event_type = str(row["event_type"]); event_payload = {key: value for key, value in row.items() if key != "event_type"}; self.apply_event(working, event_type, event_payload, row.get("entity_id")); next_hook = "damage" if event_type == "stat.changed" and row.get("operation") == "subtract" else hooks.get(event_type)
-                            if next_hook: queue.append((next_hook, row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
-                            if len(emitted) > 64: raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
+                            emitted.append(row)
+                            event_type = str(row["event_type"])
+                            event_payload = {key: value for key, value in row.items() if key != "event_type"}
+                            self.apply_event(working, event_type, event_payload, row.get("entity_id"))
+                            next_hook = hooks.get(event_type)
+                            if next_hook:
+                                queue.append((next_hook, row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                            if event_type == "stat.changed" and row.get("operation") == "subtract":
+                                queue.append(("damage", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                            if len(emitted) > 64:
+                                raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
         return emitted

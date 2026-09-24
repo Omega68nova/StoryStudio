@@ -114,7 +114,7 @@ from app.services.generationPlanApiService import GenerationPlanApiService
 from app.services.batchGenerationApiService import BatchGenerationApiService
 from app.services.batchGeneration import GenerationPlanError
 from app.domain.adapters import outfit_from_record
-from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat
+from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat, validate_stat_dependency_graph
 
 
 db = Database()
@@ -2574,27 +2574,36 @@ async def get_rules(project_id: str) -> dict[str, Any]:
 def _validate_stat_bound_references(
     project_id: str,
     request: StatDefinitionCreate,
-    *,
 ) -> None:
     definitions = {item.stat_key: item for item in data.rules.stats(project_id)}
-    for field in ("minimum_stat_key", "maximum_stat_key"):
-        key = getattr(request, field)
-        if not key:
-            continue
-        referenced = definitions.get(key)
-        if not referenced: raise HTTPException(422, f"{field} references an unknown stat: {key}")
-        if not set(request.compatible_owner_kinds).intersection(map(str, referenced.compatible_owner_kinds)):
-            raise HTTPException(422, f"{field} has no compatible owner kind in common with {request.stat_key}")
-    graph = {key: [candidate for candidate in (item.minimum_stat_key, item.maximum_stat_key) if candidate] for key, item in definitions.items()}
-    graph[request.stat_key] = [candidate for candidate in (request.minimum_stat_key, request.maximum_stat_key) if candidate]
-    visiting: set[str] = set(); visited: set[str] = set()
-    def visit(key: str) -> None:
-        if key in visiting: raise HTTPException(422, "Stat bound dependencies contain a cycle")
-        if key in visited: return
-        visiting.add(key)
-        for child in graph.get(key, []): visit(child)
-        visiting.remove(key); visited.add(key)
-    for key in graph: visit(key)
+    try:
+        candidate = Stat.model_validate({"project_id": project_id, **request.model_dump()})
+        definitions[candidate.stat_key] = candidate
+        validate_stat_dependency_graph(list(definitions.values()))
+
+        # Changing owner compatibility must not invalidate already-persisted
+        # ability costs, passive triggers, effect targets, or formula participants.
+        if "character" not in set(map(str, candidate.compatible_owner_kinds)):
+            for ability in data.rules.abilities(project_id):
+                if any(str(cost.stat_key or "") == candidate.stat_key for cost in ability.costs):
+                    raise ValueError(f"Stat {candidate.stat_key} is used by character ability cost {ability.ability_key}")
+                if any(str(trigger.stat_key or "") == candidate.stat_key for trigger in ability.passive_triggers):
+                    raise ValueError(f"Stat {candidate.stat_key} is used by character passive trigger {ability.ability_key}")
+        for ability in data.rules.abilities(project_id):
+            for action in ability.actions:
+                if not action.effect_key:
+                    continue
+                effect = data.rules.effect(project_id, str(action.effect_key))
+                if not effect:
+                    continue
+                _validate_ability_effect_compatibility(
+                    ability,
+                    effect,
+                    action,
+                    lambda key: definitions.get(key),
+                )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/stats", status_code=201)
@@ -2657,7 +2666,172 @@ async def update_effect(project_id: str, effect_key: str, request: EffectDefinit
 def _validate_formula_stats(project_id: str, node: Any) -> None:
     if str(node.kind) == "stat" and not data.rules.stat(project_id, str(node.stat_key)):
         raise HTTPException(422, f"Formula references unknown stat: {node.stat_key}")
-    for child in node.children: _validate_formula_stats(project_id, child)
+    for child in node.children:
+        _validate_formula_stats(project_id, child)
+
+
+def _validate_requirement_references(project_id: str, node: RequirementExpression, *, ability_key: str) -> None:
+    projection = scheduler.world.projection(project_id)
+    entities = projection.get("entities", {})
+    kind = str(node.kind or "")
+    if kind == "compare":
+        definition = data.rules.stat(project_id, str(node.stat_key or ""))
+        if not definition:
+            raise HTTPException(422, f"Requirement references unknown stat: {node.stat_key}")
+    elif kind == "has_item":
+        item = entities.get(str(node.item_id or ""))
+        if not item or item.get("kind") != "item":
+            raise HTTPException(422, f"Requirement references unknown item: {node.item_id}")
+    elif kind == "location":
+        location = entities.get(str(node.location_id or ""))
+        if not location or location.get("kind") != "location":
+            raise HTTPException(422, f"Requirement references unknown location: {node.location_id}")
+    elif kind == "time":
+        if not db.fetch_one("SELECT id FROM time_phases WHERE id=? AND project_id=?", (node.time_phase_id, project_id)):
+            raise HTTPException(422, f"Requirement references unknown time phase: {node.time_phase_id}")
+    elif kind == "weather":
+        if not db.fetch_one("SELECT id FROM weather_definitions WHERE id=? AND project_id=?", (node.weather_id, project_id)):
+            raise HTTPException(422, f"Requirement references unknown weather: {node.weather_id}")
+    elif kind == "has_ability":
+        required = str(node.ability_key or "")
+        if required == ability_key or not data.rules.ability(project_id, required):
+            raise HTTPException(422, f"Requirement references unknown or recursive ability: {required}")
+    for child in node.children:
+        _validate_requirement_references(project_id, child, ability_key=ability_key)
+    if node.child:
+        _validate_requirement_references(project_id, node.child, ability_key=ability_key)
+
+
+def _ability_action_target_kinds(ability_target_type: str, selector: str) -> set[str]:
+    if selector in {"actor", "party", "allies", "enemies", "nearby_enemies", "faction_members", "all", "random", "relationship_target"}:
+        return {"character"}
+    if selector == "location":
+        return {"location"}
+    if selector != "target":
+        return set()
+    if ability_target_type == "relationship":
+        return {"relationship"}
+    if ability_target_type == "location":
+        return {"location"}
+    return {"character"}
+
+
+def _formula_stat_references(node: Any) -> list[tuple[str, str]]:
+    references: list[tuple[str, str]] = []
+    if str(node.kind) == "stat" and node.stat_key:
+        references.append((str(node.participant), str(node.stat_key)))
+    for child in node.children:
+        references.extend(_formula_stat_references(child))
+    return references
+
+
+def _validate_ability_effect_compatibility(
+    ability: Any,
+    effect: EffectDefinition,
+    action: Any,
+    stat_lookup: Any,
+) -> None:
+    target_kinds = _ability_action_target_kinds(str(ability.target_type), str(action.target))
+    target_stat = stat_lookup(effect.target_stat_key)
+    if not target_stat:
+        raise ValueError(f"Effect {effect.effect_key} references unknown target stat {effect.target_stat_key}")
+    supported_target_kinds = set(map(str, target_stat.compatible_owner_kinds))
+    if target_kinds and not target_kinds <= supported_target_kinds:
+        missing = ", ".join(sorted(target_kinds - supported_target_kinds))
+        raise ValueError(f"Effect {effect.effect_key} target stat {effect.target_stat_key} is incompatible with {missing}")
+
+    for participant, stat_key in _formula_stat_references(effect.formula):
+        definition = stat_lookup(stat_key)
+        if not definition:
+            raise ValueError(f"Effect {effect.effect_key} formula references unknown stat {stat_key}")
+        supported = set(map(str, definition.compatible_owner_kinds))
+        required = (
+            {"character"}
+            if participant == "actor"
+            else set(map(str, ability.compatible_owner_kinds))
+            if participant == "source"
+            else target_kinds
+        )
+        if required and not required <= supported:
+            missing = ", ".join(sorted(required - supported))
+            raise ValueError(
+                f"Effect {effect.effect_key} formula stat {stat_key} is incompatible with {participant} owner kind(s): {missing}"
+            )
+
+
+def _validate_effect_action_timing(effect: EffectDefinition, action: Any) -> None:
+    duration = effect.duration if action.duration_override is None else action.duration_override
+    tick = effect.tick_interval if action.tick_override is None else action.tick_override
+    if not (
+        (duration == 0 and tick == 0)
+        or (duration > 0 and 0 <= tick <= duration)
+        or (duration == -1 and tick > 0)
+    ):
+        raise HTTPException(422, f"Effect action for {effect.effect_key} has an invalid duration/tick override")
+
+
+def _validate_ability_references(project_id: str, request: AbilityDefinitionCreate) -> RequirementExpression:
+    projection = scheduler.world.projection(project_id)
+    entities = projection.get("entities", {})
+    requirement = RequirementExpression.model_validate(request.requirements)
+    _validate_requirement_references(project_id, requirement, ability_key=request.ability_key)
+
+    for cost in request.costs:
+        kind = str(cost.kind)
+        if kind == "stat":
+            definition = data.rules.stat(project_id, str(cost.stat_key or ""))
+            if not definition:
+                raise HTTPException(422, f"Unknown stat in ability cost: {cost.stat_key}")
+            if "character" not in map(str, definition.compatible_owner_kinds):
+                raise HTTPException(422, f"Ability cost stat is not compatible with characters: {cost.stat_key}")
+        elif kind == "consume_source":
+            if "item" not in request.compatible_owner_kinds:
+                raise HTTPException(422, "consume_source costs require item ownership")
+        elif kind == "consume_fuel":
+            item = entities.get(str(cost.item_id or ""))
+            if not item or item.get("kind") != "item":
+                raise HTTPException(422, f"Ability fuel references unknown item: {cost.item_id}")
+
+    for trigger in request.passive_triggers:
+        if trigger.stat_key:
+            definition = data.rules.stat(project_id, trigger.stat_key)
+            if not definition:
+                raise HTTPException(422, f"Passive trigger references unknown stat: {trigger.stat_key}")
+            if "character" not in map(str, definition.compatible_owner_kinds):
+                raise HTTPException(422, f"Passive trigger stat is not character-compatible: {trigger.stat_key}")
+
+    allowed_targets = {
+        "actor", "target", "party", "location", "nearby_enemies", "faction_members",
+        "relationship_target", "allies", "enemies", "all", "random",
+    }
+    for action in request.actions:
+        if str(action.target) not in allowed_targets:
+            raise HTTPException(422, f"Unsupported ability action target selector: {action.target}")
+        if action.effect_key:
+            definition = data.rules.effect(project_id, action.effect_key)
+            if not definition:
+                raise HTTPException(422, f"Unknown effect in ability: {action.effect_key}")
+            _validate_effect_action_timing(definition, action)
+            try:
+                _validate_ability_effect_compatibility(
+                    request,
+                    definition,
+                    action,
+                    lambda key: data.rules.stat(project_id, key),
+                )
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from exc
+        if action.destination_id:
+            destination = entities.get(str(action.destination_id))
+            if not destination or destination.get("kind") != "location":
+                raise HTTPException(422, f"Ability movement references unknown location: {action.destination_id}")
+        if action.fact_id:
+            fact = entities.get(str(action.fact_id))
+            if not fact or fact.get("kind") != "fact":
+                raise HTTPException(422, f"Ability references unknown fact: {action.fact_id}")
+        if str(action.kind) == "play_noise" and not data.sound.noise_variant(project_id, str(action.noise_id), playable_only=False):
+            raise HTTPException(422, f"Ability references unknown noise: {action.noise_id}")
+    return requirement
 
 
 @app.post("/api/projects/{project_id}/abilities", status_code=201)
@@ -2670,20 +2844,51 @@ async def create_ability(project_id: str, request: AbilityDefinitionCreate) -> d
         config = next(row for row in scheduler.minigames.configs(project_id) if row["game_key"] == "timed_attack")
         if not (config["min_attack_lines"] <= request.timed_attack_line_count <= config["max_attack_lines"] and config["min_attack_damage"] <= request.timed_attack_damage_per_line <= config["max_attack_damage"]):
             raise HTTPException(422, "Timed-attack ability profile is outside the project minigame ranges")
-    for cost in request.costs:
-        if cost.stat_key and not data.rules.stat(project_id, cost.stat_key): raise HTTPException(422, f"Unknown stat in ability: {cost.stat_key}")
-    for action in request.actions:
-        if action.effect_key and not data.rules.effect(project_id, action.effect_key): raise HTTPException(422, f"Unknown effect in ability: {action.effect_key}")
-    try: result = data.rules.save_ability(Ability.model_validate({"project_id": project_id, **request.model_dump(), "requirements": RequirementExpression.model_validate(request.requirements)}))
-    except Exception as exc: raise HTTPException(422, str(exc)) from exc
+    try:
+        requirement = _validate_ability_references(project_id, request)
+        result = data.rules.save_ability(Ability.model_validate({
+            "project_id": project_id,
+            **request.model_dump(),
+            "requirements": requirement,
+        }))
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
     return result.model_dump(mode="json")
 
 
 @app.put("/api/projects/{project_id}/abilities/{ability_key}")
 async def update_ability(project_id: str, ability_key: str, request: AbilityDefinitionCreate) -> dict[str, Any]:
-    if not data.rules.ability(project_id, ability_key): raise HTTPException(404, "Ability definition not found")
-    if request.ability_key != ability_key: raise HTTPException(422, "ability_key is immutable")
-    return await create_ability(project_id, request)
+    if not data.rules.ability(project_id, ability_key):
+        raise HTTPException(404, "Ability definition not found")
+    if request.ability_key != ability_key:
+        raise HTTPException(422, "ability_key is immutable")
+    known_bullet_skills = {row["id"] for row in scheduler.minigames.bullethell.catalog()["skills"]}
+    if not set(request.bullethell_skill_ids) <= known_bullet_skills:
+        raise HTTPException(422, "Ability references an unavailable bullet-hell skill")
+    if request.timed_attack_line_count is not None:
+        config = next(row for row in scheduler.minigames.configs(project_id) if row["game_key"] == "timed_attack")
+        if not (
+            config["min_attack_lines"] <= request.timed_attack_line_count <= config["max_attack_lines"]
+            and config["min_attack_damage"] <= request.timed_attack_damage_per_line <= config["max_attack_damage"]
+        ):
+            raise HTTPException(422, "Timed-attack ability profile is outside the project minigame ranges")
+    try:
+        requirement = _validate_ability_references(project_id, request)
+        result = data.rules.save_ability(
+            Ability.model_validate({
+                "project_id": project_id,
+                **request.model_dump(),
+                "requirements": requirement,
+            }),
+            previous_key=ability_key,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return result.model_dump(mode="json")
 
 
 @app.post("/api/projects/{project_id}/abilities/use")

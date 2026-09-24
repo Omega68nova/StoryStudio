@@ -725,6 +725,40 @@ def resolve_stat_bounds(
     )
 
 
+
+def validate_stat_dependency_graph(definitions: list[Stat]) -> None:
+    """Validate all dynamic stat bounds as one project-local dependency graph."""
+    by_key = {item.stat_key: item for item in definitions}
+    graph: dict[str, list[str]] = {}
+    for definition in definitions:
+        dependencies = [
+            key for key in (definition.minimum_stat_key, definition.maximum_stat_key)
+            if key
+        ]
+        for key in dependencies:
+            referenced = by_key.get(key)
+            if referenced is None:
+                raise ValueError(f"Stat {definition.stat_key} references unavailable bound stat {key}")
+            if not set(map(str, definition.compatible_owner_kinds)).intersection(map(str, referenced.compatible_owner_kinds)):
+                raise ValueError(f"Stat {definition.stat_key} has no compatible owner kind in common with bound stat {key}")
+        graph[definition.stat_key] = dependencies
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+    def visit(key: str) -> None:
+        if key in visiting:
+            raise ValueError("Stat bound dependencies contain a cycle")
+        if key in visited:
+            return
+        visiting.add(key)
+        for child in graph.get(key, []):
+            visit(child)
+        visiting.remove(key)
+        visited.add(key)
+    for key in graph:
+        visit(key)
+
+
 class RequirementExpression(DomainModel):
     """Recursive requirement tree with legacy leaf compatibility."""
 
@@ -985,6 +1019,10 @@ class AbilityAction(DomainModel):
         }
         if self.kind in required and not required[self.kind]:
             raise ValueError(f"{self.kind} action is missing its required reference")
+        if self.kind != AbilityActionKind.APPLY_EFFECT and (
+            self.duration_override is not None or self.tick_override is not None
+        ):
+            raise ValueError("effect timing overrides are valid only for apply_effect actions")
         return self
 
 
@@ -1022,6 +1060,9 @@ class Ability(DomainModel):
         self.compatible_owner_kinds = list(dict.fromkeys(self.compatible_owner_kinds))
         if self.ability_kind == AbilityKind.PASSIVE and not self.passive_triggers:
             raise ValueError("passive ability needs at least one trigger")
+        trigger_keys = [(str(item.kind), item.stat_key) for item in self.passive_triggers]
+        if len(trigger_keys) != len(set(trigger_keys)):
+            raise ValueError("passive ability triggers must be unique")
         if (self.timed_attack_line_count is None) != (self.timed_attack_damage_per_line is None):
             raise ValueError("timed attack line count and damage must be configured together")
         return self

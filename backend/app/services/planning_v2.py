@@ -5,7 +5,7 @@ import json
 from typing import Any
 
 from app.database import Database, new_id, utc_now
-from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat
+from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat, validate_stat_dependency_graph
 from app.data.dataProvider import DataProvider
 from app.services.world import WorldValidationError
 
@@ -14,7 +14,7 @@ PLANNING_STAGES = (
     (1, "foundation", "Core Bible, theme, style, world overview, cast direction, and narration defaults"),
     (2, "macro_world", "Scale-appropriate major geography, routes, factions, weather, and transitions"),
     (3, "detailed_locations", "Important minor locations and only the rooms likely to be revisited"),
-    (4, "systems", "Lore rules, stats, abilities, sickness, skills, and system-linked items"),
+    (4, "systems", "Lore rules, stats, reusable effects, abilities, sickness, skills, and system-linked items"),
     (5, "cast", "Playable characters, active NPCs, supporting cast, factions, knowledge, and starting locations"),
     (6, "character_details", "Character details, outfits, relationships, routines, arcs, secrets, and plot hooks"),
     (7, "runtime_presentation", "Minigames, ambient assignments, bullet-hell options, and Music themes"),
@@ -44,7 +44,7 @@ STAGE_CONSUMES = {
 STAGE_GENERATION_FOCI: dict[int, tuple[str, ...]] = {
     2: ("locations", "weather", "factions", "anchors", "connections"),
     3: ("locations", "anchors", "connections"),
-    4: ("lore_systems", "stats", "abilities", "items"),
+    4: ("lore_systems", "stats", "effects", "abilities", "items"),
     5: ("characters", "factions", "facts"),
     6: ("character_updates", "outfits", "relationships", "routines", "facts", "plot_beats"),
     7: ("minigames", "bullethell", "ambient", "music"),
@@ -167,7 +167,7 @@ def compact_schema(stage_number: int, focus: str | None = None) -> dict[str, Any
 def _record_identity(item: Any) -> str:
     if not isinstance(item, dict):
         return stable_hash(item)
-    for key in ("key", "id", "stat_key", "ability_key", "game_key"):
+    for key in ("key", "id", "stat_key", "effect_key", "ability_key", "game_key"):
         if item.get(key):
             return f"{key}:{str(item[key]).casefold()}"
     if item.get("source_key") and item.get("target_key"):
@@ -335,6 +335,25 @@ def validate_stage(stage_number: int, draft: dict[str, Any], settings: dict[str,
         if not isinstance(foundation, dict) or foundation.get("narration_mode", "third_limited") not in {"first_person", "third_limited", "third_omniscient"} or foundation.get("pov_strategy", "first_player") not in {"first_player", "selected_character", "none"}:
             raise WorldValidationError("Foundation requires valid narration and POV settings")
     if stage_number == 4:
+        planned_stats: list[Stat] = []
+        for raw_stat in draft.get("stats", []):
+            try:
+                planned_stats.append(Stat.model_validate({
+                    "project_id": "planning",
+                    **raw_stat,
+                    "stat_key": raw_stat.get("stat_key") or raw_stat.get("key"),
+                    "label": raw_stat.get("label") or raw_stat.get("stat_key") or raw_stat.get("key"),
+                }))
+            except (TypeError, ValueError) as exc:
+                raise WorldValidationError(f"Stat '{raw_stat.get('label') or raw_stat.get('key')}' is invalid: {exc}") from exc
+        if planned_stats:
+            try:
+                validate_stat_dependency_graph(planned_stats)
+            except ValueError as exc:
+                # Cross-draft references are checked again at publication against
+                # existing project stats; local cycles are still rejected here.
+                if "unavailable bound stat" not in str(exc):
+                    raise WorldValidationError(str(exc)) from exc
         for lore_system in draft.get("lore_systems", []):
             lore_name = str(lore_system.get("name") or lore_system.get("key") or "Unnamed lore system")
             description = str((lore_system.get("state") or {}).get("description") or "").strip()
@@ -385,7 +404,7 @@ def generated_stage_has_content(stage_number: int, draft: dict[str, Any], focus:
     required_fields = {
         2: ("locations",),
         3: ("locations",),
-        4: ("lore_systems", "stats", "abilities", "items"),
+        4: ("lore_systems", "stats", "effects", "abilities", "items"),
         5: ("characters",),
         6: ("character_updates", "outfits", "relationships", "routines", "facts", "plot_beats"),
     }
@@ -405,8 +424,20 @@ def validate_catalog_references(db: Database, project_id: str, stage_number: int
         defined.update(row["stat_key"] for row in db.fetch_all("SELECT stat_key FROM stat_definitions WHERE project_id=?", (project_id,)))
         effect_keys = {str(item.get("effect_key") or item.get("key") or "") for item in draft.get("effects", [])}
         effect_keys.update(row["effect_key"] for row in db.fetch_all("SELECT effect_key FROM effect_definitions WHERE project_id=?", (project_id,)))
+        def formula_stat_keys(node: Any) -> set[str]:
+            if not isinstance(node, dict):
+                return set()
+            found = {str(node.get("stat_key"))} if node.get("kind") == "stat" and node.get("stat_key") else set()
+            for child in node.get("children") or []:
+                found.update(formula_stat_keys(child))
+            return found
         for effect in draft.get("effects", []):
-            if str(effect.get("target_stat_key") or "") not in defined: raise WorldValidationError(f"Effect '{effect.get('name') or effect.get('key')}' targets an unavailable stat")
+            effect_name = effect.get("name") or effect.get("key")
+            if str(effect.get("target_stat_key") or "") not in defined:
+                raise WorldValidationError(f"Effect '{effect_name}' targets an unavailable stat")
+            missing_formula = sorted(formula_stat_keys(effect.get("formula")) - defined)
+            if missing_formula:
+                raise WorldValidationError(f"Effect '{effect_name}' formula references unavailable stat(s): {', '.join(missing_formula)}")
         for ability in draft.get("abilities", []):
             ability_name = str(ability.get("name") or ability.get("ability_key") or ability.get("key") or "Unnamed ability")
             referenced = {str(item.get("stat_key")) for item in ability.get("costs", []) if isinstance(item, dict) and item.get("stat_key")}
@@ -576,12 +607,22 @@ def apply_weather(db: Database, project_id: str, owner_id: str, stage_number: in
 
 def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int, draft: dict[str, Any]) -> None:
     rules = DataProvider(db).rules
+    pending_stats: list[tuple[str, Stat, dict[str, Any]]] = []
+    merged_stats = {item.stat_key: item for item in rules.stats(project_id)}
     for stat in draft.get("stats", []):
         key = str(stat.get("key") or stat.get("stat_key") or "").strip()
-        if not key: raise WorldValidationError("Invalid stat definition")
+        if not key:
+            raise WorldValidationError("Invalid stat definition")
         model = Stat.model_validate({"project_id": project_id, **stat, "stat_key": key, "label": stat.get("label") or key})
+        pending_stats.append((key, model, stat))
+        merged_stats[key] = model
+    try:
+        validate_stat_dependency_graph(list(merged_stats.values()))
+    except ValueError as exc:
+        raise WorldValidationError(str(exc)) from exc
+    for key, model, raw in pending_stats:
         rules.save_stat(model, previous_key=key if rules.stat(project_id, key) else None)
-        record_resource(db, owner_id, stage_number, key, "stat", key, stat)
+        record_resource(db, owner_id, stage_number, key, "stat", key, raw)
     known_stats = {item.stat_key for item in rules.stats(project_id)}
     for effect in draft.get("effects", []):
         key = str(effect.get("key") or effect.get("effect_key") or "").strip()

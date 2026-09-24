@@ -337,6 +337,11 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       stats={rules.stats}
       abilities={rules.abilities}
       activeEffects={Object.values(world?.active_effects ?? {}).filter(item => item.target_id === draft.id)}
+      effectProgress={{
+        story_minutes: world?.elapsed_minutes ?? 0,
+        world_actions: world?.world_action_count ?? 0,
+        target_actions: world?.target_action_counts?.[draft.id ?? ""] ?? 0,
+      }}
       removeActiveEffect={removeActiveEffect}
       outfitDraft={outfitDraft}
       setOutfitDraft={setOutfitDraft}
