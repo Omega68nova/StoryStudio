@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from app.data.dataProvider import DataProvider
 from app.database import Database
 from app.domain.world import Stat
@@ -126,3 +128,27 @@ def test_library_resources_form_explicit_dependency_trees(tmp_path: Path) -> Non
     assert loaded is not None
     assert [item["relation_kind"] for item in loaded["children"]] == ["outfit", "ability"]
     assert [item["name"] for item in loaded["children"]] == ["Travel coat", "Dash"]
+
+
+def test_library_resource_tree_rejects_cycles(tmp_path: Path) -> None:
+    _, data, _ = setup_library(tmp_path)
+    parent = data.library.create_resource(resource_kind="bundle", name="Parent")
+    child = data.library.create_resource(resource_kind="bundle", name="Child")
+    data.library.set_children(parent["id"], [{"child_resource_id": child["id"]}])
+    with pytest.raises(ValueError, match="cycles"):
+        data.library.set_children(child["id"], [{"child_resource_id": parent["id"]}])
+
+
+def test_library_revision_provenance_rejects_cross_project_story_node(tmp_path: Path) -> None:
+    db, data, _ = setup_library(tmp_path)
+    first = db.create_project("First")
+    second = db.create_project("Second")
+    node = db.create_story_node(first["id"], None, "user", "branch")
+    resource = data.library.create_resource(resource_kind="bundle", name="Bundle")
+    with pytest.raises(ValueError, match="does not belong"):
+        data.library.add_revision(
+            resource["id"],
+            {"schema_version": 1},
+            source_project_id=second["id"],
+            source_story_node_id=node["id"],
+        )
