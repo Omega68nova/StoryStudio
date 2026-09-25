@@ -1092,6 +1092,15 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   font-size: 9px;
   text-transform: capitalize;
 }
+.location-map-node-contents {
+  max-width: 145px;
+  overflow: hidden;
+  color: #756b5e;
+  font-size: 8px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .location-map-node.area-node {
   border-color: #71865e;
   background: rgba(247, 250, 242, .92);
