@@ -6,11 +6,11 @@ import { RecordDrawer, ResourceButton, ResourceList } from "./customComponents/A
 import { CharacterEditorForm, type OutfitDraft } from "./CharacterEditorForm";
 import { applyAdvancedState, entityToDraft, updateDraftState } from "./entityDrafts";
 import type { BulletCatalog } from "./BulletHellStudio";
-import type { AbilityDefinition, CharacterEditorDraft, MediaAsset, Outfit, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection, WorldRelationship } from "./types";
+import type { AbilityDefinition, CharacterEditorDraft, EffectDefinition, MediaAsset, Outfit, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection, WorldRelationship } from "./types";
 
 export function CharacterStudio({ projectId, revision, workflows, fail }: { projectId: string; revision: number; workflows: WorkflowPreset[]; fail: (message: string) => void }) {
   const [world, setWorld] = useState<WorldProjection | null>(null); const [catalog, setCatalog] = useState<BulletCatalog>({ skills: [], modes: [], attacks: [] }); const [bullet, setBullet] = useState({ allowed_mode_ids: [] as string[], allowed_skill_ids: [] as string[] });
-  const [rules, setRules] = useState<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>({ stats: [], abilities: [] });
+  const [rules, setRules] = useState<{ stats: StatDefinition[]; effects: EffectDefinition[]; abilities: AbilityDefinition[] }>({ stats: [], effects: [], abilities: [] });
   const [characterMedia, setCharacterMedia] = useState<Record<string, MediaAsset[]>>({});
   const [query, setQuery] = useState(""); const [control, setControl] = useState(""); const [status, setStatus] = useState("active"); const [locationFilter, setLocationFilter] = useState(""); const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [draft, setDraft] = useState<CharacterEditorDraft | null>(null); const [initial, setInitial] = useState(""); const [error, setError] = useState("");
@@ -21,7 +21,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       api<WorldProjection>(`/projects/${projectId}/world`),
       api<BulletCatalog>("/bullethell/catalog"),
       api<{ allowed_mode_ids: string[]; allowed_skill_ids: string[] }>(`/projects/${projectId}/bullethell`),
-      api<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>(`/projects/${projectId}/rules`),
+      api<{ stats: StatDefinition[]; effects: EffectDefinition[]; abilities: AbilityDefinition[] }>(`/projects/${projectId}/rules`),
     ]);
     setWorld(nextWorld);
     setCatalog(nextCatalog);
@@ -336,6 +336,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
       media={media}
       stats={rules.stats}
       abilities={rules.abilities}
+      effects={rules.effects}
       activeEffects={Object.values(world?.active_effects ?? {}).filter(item => item.target_id === draft.id)}
       removeActiveEffect={removeActiveEffect}
       outfitDraft={outfitDraft}
