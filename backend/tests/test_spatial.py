@@ -85,6 +85,31 @@ def test_open_map_resolves_scaled_free_travel() -> None:
     assert result["travel_minutes"] == 10
 
 
+def test_route_validation_uses_endpoint_coordinate_space() -> None:
+    world = location("world", "World", topology="closed", occupancy="direct_allowed")
+    area = location("area", "Area", "world", spatial_kind="area")
+    spot = location("spot", "Spot", "world", spatial_kind="spot")
+    view = projection(world, area, spot)
+    view["map_anchors"] = {
+        "free": {
+            "id": "free", "location_id": "world", "coordinate_space_id": "world",
+            "name": "Free", "kind": "waypoint", "x": 20, "y": 20,
+        },
+        "spot-anchor": {
+            "id": "spot-anchor", "location_id": "spot", "coordinate_space_id": "world",
+            "binding_kind": "spot", "binding_target_id": "spot",
+            "name": "Spot", "kind": "waypoint", "x": 30, "y": 30,
+        },
+    }
+    normalized = SpatialService(view).validate_connection({
+        "id": "route", "kind": "route",
+        "source_anchor_id": "free", "target_anchor_id": "spot-anchor",
+        "travel_minutes": 1, "modes": ["walk"], "bidirectional": True,
+    })
+    assert normalized["source_anchor_id"] == "free"
+    assert normalized["target_anchor_id"] == "spot-anchor"
+
+
 def test_closed_map_needs_a_connection() -> None:
     world = location("world", "World", topology="closed", occupancy="child_required")
     a = location("a", "A", "world", x=0, y=0)
