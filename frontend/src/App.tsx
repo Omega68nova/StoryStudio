@@ -70,6 +70,7 @@ import type {
   StoryNode,
   PendingReview,
   WorldEntity,
+  WorldProjection,
   AbilityDefinition,
   MediaAsset,
   SceneAppearance,
@@ -791,14 +792,11 @@ function StoryWorkspace(props: {
       transcript.scrollTop = transcript.scrollHeight;
   }, [path.length, streamText, reviews.length, composerExpanded, project.id]);
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (leafId) params.set("head_node_id", leafId);
-    if (pov) params.set("pov_character_id", pov);
-    params.set("narration_mode", narration);
-    api<WorldEntity[]>(`/projects/${project.id}/entities?${params.toString()}`)
-      .then(setEntities)
+    const query = leafId ? `?head_node_id=${encodeURIComponent(leafId)}` : "";
+    api<WorldProjection>(`/projects/${project.id}/world${query}`)
+      .then(world => setEntities(Object.values(world.entities)))
       .catch((cause) => fail(errorMessage(cause)));
-  }, [project.id, revision, leafId, pov, narration, fail]);
+  }, [project.id, revision, leafId, fail]);
   useEffect(() => {
     if (!isAdmin) {
       setReviews([]);
