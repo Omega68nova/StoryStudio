@@ -1980,25 +1980,66 @@ def _route_anchor_rebind_mutations(projection: dict[str, Any], location_id: str,
     return result
 
 
-def _canonical_map_location_patch(state: dict[str, Any], request: MapLocationPlacementUpdate, location_id: str) -> dict[str, Any]:
+def _canonical_map_location_patch(
+    state: dict[str, Any],
+    request: MapLocationPlacementUpdate,
+    location_id: str,
+    projection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    from app.domain.world import LocationState
     from app.services.spatial import validate_geometry, SpatialValidationError
 
     def enum_value(value: Any, allowed: set[str], fallback: str) -> str:
-        text = str(value or "")
+        text = str(value or "").strip()
         return text if text in allowed else fallback
 
+    def bool_value(value: Any, fallback: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            lowered = value.strip().casefold()
+            if lowered in {"true", "1", "yes", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "off", ""}:
+                return False
+        return fallback
+
+    entities = (projection or {}).get("entities", {})
+    raw_parent = state.get("parent_location_id")
+    legacy_parent = raw_parent.strip() if isinstance(raw_parent, str) else None
     footprint = dict(request.footprint)
-    footprint["location_id"] = footprint.get("location_id") or state.get("parent_location_id") or location_id
+    requested_space = str(footprint.get("location_id") or "").strip() or None
+
+    def valid_parent(candidate: str | None) -> bool:
+        if not candidate or candidate == location_id:
+            return False
+        parent = entities.get(candidate)
+        return bool(parent and parent.get("kind") == "location" and not parent.get("state", {}).get("archived"))
+
+    # The map layer used for this placement is authoritative for legacy
+    # locations whose stored parent points at a removed/nonexistent location.
+    if valid_parent(requested_space):
+        parent_location_id = requested_space
+    elif valid_parent(legacy_parent):
+        parent_location_id = legacy_parent
+    else:
+        parent_location_id = None
+
+    footprint["location_id"] = requested_space if valid_parent(requested_space) else parent_location_id or location_id
     try:
         footprint = validate_geometry(footprint)
     except SpatialValidationError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise HTTPException(422, f"Invalid placement geometry: {exc}") from exc
 
     local_bounds = state.get("local_bounds")
     if isinstance(local_bounds, dict):
         try:
             local_bounds = validate_geometry(local_bounds)
         except SpatialValidationError:
+            # Legacy invalid bounds should not prevent repairing the location's
+            # actual map position.
             local_bounds = None
     else:
         local_bounds = None
@@ -2012,16 +2053,16 @@ def _canonical_map_location_patch(state: dict[str, Any], request: MapLocationPla
     priority = state.get("priority_layer")
     priority = float(priority) if isinstance(priority, (int, float)) else 0.0
 
-    return {
-        "parent_location_id": state.get("parent_location_id"),
-        "exposure": enum_value(state.get("exposure"), {"indoor", "outdoor", "isolated"}, "outdoor"),
+    # Build every known LocationState field explicitly instead of validating a
+    # deep-merge with legacy values. Extra extension fields remain untouched in
+    # the persisted entity, but malformed legacy values for canonical fields
+    # cannot keep a simple map placement stuck on 422 forever.
+    canonical = {
         "description": str(state.get("description") or ""),
         "imagegen_description": str(state.get("imagegen_description") or ""),
         "image_tags": [str(item) for item in state.get("image_tags", [])] if isinstance(state.get("image_tags"), list) else [],
-        "enabled": state.get("enabled", True) is not False,
-        "random_encounter": bool(state.get("random_encounter", False)),
-        "discovered": bool(state.get("discovered", True)),
-        "hidden": bool(state.get("hidden", False)),
+        "parent_location_id": parent_location_id,
+        "exposure": enum_value(state.get("exposure"), {"indoor", "outdoor", "isolated"}, "outdoor"),
         "x": float(request.x),
         "y": float(request.y),
         "topology": enum_value(state.get("topology"), {"open", "closed"}, "closed"),
@@ -2031,10 +2072,23 @@ def _canonical_map_location_patch(state: dict[str, Any], request: MapLocationPla
         "priority_layer": priority,
         "minutes_per_unit": minutes,
         "base_visibility_units": radius,
-        "encounter_rate": rate,
         "footprint": footprint,
         "local_bounds": local_bounds,
+        "encounter_rate": rate,
+        "enabled": bool_value(state.get("enabled"), True),
+        "random_encounter": bool_value(state.get("random_encounter"), False),
+        "hidden": bool_value(state.get("hidden"), False),
+        "discovered": bool_value(state.get("discovered"), True),
+        "important": bool_value(state.get("important"), False),
+        "planning_tier": str(state.get("planning_tier") or "minor"),
+        "archived": False,
+        "visibility": str(state.get("visibility") or "public"),
     }
+
+    try:
+        return LocationState.model_validate(canonical).model_dump(mode="json")
+    except ValueError as exc:
+        raise HTTPException(422, f"Unable to canonicalize legacy location for placement: {exc}") from exc
 
 
 @app.put("/api/projects/{project_id}/spatial/locations/{location_id}/placement")
@@ -2044,7 +2098,7 @@ async def place_spatial_location(project_id: str, location_id: str, request: Map
     current = projection.get("entities", {}).get(location_id)
     if not current or current.get("kind") != "location" or current.get("state", {}).get("archived"):
         raise HTTPException(404, "Location not found")
-    patch = _canonical_map_location_patch(current.get("state", {}), request, location_id)
+    patch = _canonical_map_location_patch(current.get("state", {}), request, location_id, projection)
     try:
         mutations = scheduler.world.normalize_mutations(
             project_id,
