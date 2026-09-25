@@ -430,3 +430,83 @@ def test_favorite_both_keeps_latest_current_when_latest_already_exists(tmp_path:
     assert current is not None
     assert current["snapshot"]["source_variant"] == "latest"
     assert current["snapshot"]["payload"]["name"] == "Awakened Relic"
+
+
+
+def test_legacy_character_outfit_dependency_preview_uses_projection_name(tmp_path: Path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    world = WorldEngine(db, data_provider=data)
+    library = GlobalLibraryService(data, world=world)
+    project = db.create_project("Legacy outfit favorite")
+
+    create = world.normalize_mutations(project["id"], None, [{
+        "tool": "createEntity",
+        "arguments": {
+            "entity_id": "legacy-character",
+            "kind": "character",
+            "name": "Legacy Character",
+            "aliases": [],
+            "tags": [],
+            "state": {"description": "Old profile."},
+        },
+    }], provenance="author")
+    world.commit_root(project["id"], create, provenance="author", summary="Create legacy character")
+
+    now = "2026-01-01T00:00:00+00:00"
+    db.execute(
+        """
+        INSERT INTO entity_outfits(
+          id,entity_id,name,description,equipment_json,created_at,updated_at,
+          appearance,imagegen_description
+        ) VALUES(?,?,?,?,?,?,?,?,?)
+        """,
+        ("legacy-outfit", "legacy-character", "Old Coat", "", "[]", now, now, "", ""),
+    )
+
+    preview = library.favorite_preview(
+        project["id"],
+        source_kind="character",
+        source_key="legacy-character",
+    )
+    outfit = next(item for item in preview["dependencies"] if item["token"] == "outfit:legacy-outfit")
+    assert outfit["name"] == "Old Coat"
+
+    outfit_versions = library._source_versions(
+        project["id"],
+        "outfit",
+        "legacy-outfit",
+        None,
+    )
+    assert outfit_versions["tags"] == ["Legacy Character"]
+
+
+def test_library_batch_unfavorite_named_preset_and_export(tmp_path: Path) -> None:
+    _, data, library = setup_library(tmp_path)
+    first = data.library.create_resource(resource_kind="item", name="Sword", marked=True)
+    second = data.library.create_resource(resource_kind="ability", name="Slash", marked=True)
+    data.library.add_revision(first["id"], {"schema_version": 1, "resource_kind": "item"})
+    data.library.add_revision(second["id"], {"schema_version": 1, "resource_kind": "ability"})
+
+    changed = data.library.set_marked_many([first["id"], second["id"]], False)
+    assert changed == [first["id"], second["id"]]
+    assert data.library.resource(first["id"])["marked"] == 0
+    assert data.library.resource(second["id"])["marked"] == 0
+
+    preset = library.create_named_preset(
+        name="Melee starter",
+        description="Reusable melee pieces",
+        resource_ids=[first["id"], second["id"]],
+        tags=["combat"],
+    )
+    assert preset["resource_kind"] == "bundle"
+    assert preset["marked"] == 1
+    assert {child["child_resource_id"] for child in preset["children"]} == {first["id"], second["id"]}
+    assert {child["relation_kind"] for child in preset["children"]} == {"preset_member"}
+
+    exported = library.export_library_resources([preset["id"], first["id"]])
+    assert exported["schema"] == "storystudio.global_library.export"
+    assert exported["schema_version"] == 1
+    assert [resource["id"] for resource in exported["resources"]] == [preset["id"], first["id"]]
+    assert exported["resources"][0]["revisions"][0]["snapshot"]["preset_kind"] == "named_preset"
