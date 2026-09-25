@@ -483,6 +483,10 @@ class WorldEngine:
                     if binding_kind == "coordinate":
                         arguments["binding_target_id"] = None
                     else:
+                        # Bound endpoints derive their position from their
+                        # location/area geometry. Do not persist absolute x/y.
+                        arguments["x"] = None
+                        arguments["y"] = None
                         if not binding_target_id:
                             raise WorldValidationError("Bound map anchors require a binding_target_id")
                         target = self._entity(projection, binding_target_id, "location")
