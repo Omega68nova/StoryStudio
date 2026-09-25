@@ -176,31 +176,39 @@ class SpatialRepository:
                 if not source or not target:
                     continue
                 source_state, target_state = source.get("state", {}), target.get("state", {})
+                source_kind = "area" if source_state.get("spatial_kind") == "area" else "spot"
+                target_kind = "area" if target_state.get("spatial_kind") == "area" else "spot"
                 source_anchor = {
                     "id": f"legacy:{relation_id}:source",
                     "location_id": source["id"],
                     "coordinate_space_id": source_state.get("parent_location_id") or source["id"],
+                    "binding_kind": source_kind,
+                    "binding_target_id": source["id"],
+                    **({"binding_offset_x": 0.0, "binding_offset_y": 0.0} if source_kind == "area" else {}),
                     "name": f"{source['name']} route",
                     "kind": "waypoint",
-                    "x": source_state.get("x"),
-                    "y": source_state.get("y"),
+                    "x": None,
+                    "y": None,
                     "hidden": bool(relation.get("hidden", False)),
                     "discovered": bool(relation.get("discovered", True)),
                     "enabled": not bool(relation.get("blocked", False)),
-                    "requires_map_review": source_state.get("x") is None or source_state.get("y") is None,
+                    "requires_map_review": False,
                 }
                 target_anchor = {
                     "id": f"legacy:{relation_id}:target",
                     "location_id": target["id"],
                     "coordinate_space_id": target_state.get("parent_location_id") or target["id"],
+                    "binding_kind": target_kind,
+                    "binding_target_id": target["id"],
+                    **({"binding_offset_x": 0.0, "binding_offset_y": 0.0} if target_kind == "area" else {}),
                     "name": f"{target['name']} route",
                     "kind": "waypoint",
-                    "x": target_state.get("x"),
-                    "y": target_state.get("y"),
+                    "x": None,
+                    "y": None,
                     "hidden": bool(relation.get("hidden", False)),
                     "discovered": bool(relation.get("discovered", True)),
                     "enabled": not bool(relation.get("blocked", False)),
-                    "requires_map_review": target_state.get("x") is None or target_state.get("y") is None,
+                    "requires_map_review": False,
                 }
                 connection = {
                     "id": str(relation_id),

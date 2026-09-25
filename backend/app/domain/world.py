@@ -797,8 +797,12 @@ class MapAnchor(DomainModel):
     def validate_position(self) -> "MapAnchor":
         if (self.x is None) != (self.y is None):
             raise ValueError("map anchor x and y must both be set or both be null")
-        if self.x is None:
+        # Semantic bindings derive their position from the bound location or
+        # area geometry. Only free-coordinate anchors require stored x/y.
+        if self.binding_kind == "coordinate" and self.x is None:
             self.requires_map_review = True
+        elif self.binding_kind != "coordinate":
+            self.requires_map_review = False
         return self
 
 

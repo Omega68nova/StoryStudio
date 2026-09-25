@@ -129,6 +129,35 @@ def test_location_archive_can_cleanup_spatial_paths_atomically(tmp_path: Path) -
     assert "legacy-road" not in projection["relations"]
 
 
+def test_bound_anchor_normalization_drops_absolute_coordinates(tmp_path: Path) -> None:
+    _, project, world = setup_world(tmp_path)
+    root = create(world, project["id"], kind="location", name="World", aliases=[], tags=[], state={"topology": "open"})
+    spot = create(world, project["id"], kind="location", name="Spot", aliases=[], tags=[], state={
+        "parent_location_id": root,
+        "spatial_kind": "spot",
+        "x": 25,
+        "y": 30,
+        "footprint": {"location_id": root, "kind": "point", "points": [{"x": 25, "y": 30}]},
+    })
+    anchor = world.normalize_mutations(project["id"], None, [{
+        "tool": "upsertMapAnchor",
+        "arguments": {
+            "id": "bound",
+            "location_id": spot,
+            "coordinate_space_id": root,
+            "binding_kind": "spot",
+            "binding_target_id": spot,
+            "name": "Bound",
+            "kind": "waypoint",
+            "x": 25,
+            "y": 30,
+        },
+    }], provenance="author")[0]
+    assert anchor.arguments["x"] is None
+    assert anchor.arguments["y"] is None
+    assert anchor.arguments["requires_map_review"] is False
+
+
 def test_routes_cardinal_queries_and_movement_time(tmp_path: Path) -> None:
     _, project, world = setup_world(tmp_path)
     south = create(world, project["id"], kind="location", name="South", aliases=[], tags=[], state={"x": 0, "y": 0})

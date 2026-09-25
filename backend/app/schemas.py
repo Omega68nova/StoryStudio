@@ -689,6 +689,13 @@ class EnvironmentLocationUpdate(BaseModel):
     local_bounds: dict[str, Any] | None = None
 
 
+class MapLocationPlacementUpdate(BaseModel):
+    x: float
+    y: float
+    spatial_kind: Literal["spot", "area"] = "spot"
+    footprint: dict[str, Any]
+
+
 class WorldRootUpdate(BaseModel):
     root_location_id: str
     reparent_previous: bool = True

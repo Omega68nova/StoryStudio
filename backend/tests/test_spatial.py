@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from app.domain.world import LocationState, MapGeometry, RequirementExpression
+from app.domain.world import LocationState, MapAnchor, MapGeometry, RequirementExpression
 from app.services.spatial import SpatialService, SpatialValidationError, validate_geometry
 from app.services.world import WorldEngine
 
@@ -25,6 +25,19 @@ def test_location_topology_and_occupancy_are_independent() -> None:
     assert state.topology == "open"
     assert state.occupancy == "child_required"
     assert state.boundary_access == "connection_required"
+
+
+def test_bound_anchor_does_not_require_absolute_coordinates() -> None:
+    anchor = MapAnchor(
+        id="bound",
+        location_id="spot",
+        coordinate_space_id="world",
+        binding_kind="spot",
+        binding_target_id="spot",
+        name="Bound spot",
+    )
+    assert anchor.x is None and anchor.y is None
+    assert anchor.requires_map_review is False
 
 
 def test_two_point_area_is_valid_authoring_geometry() -> None:

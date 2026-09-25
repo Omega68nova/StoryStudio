@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   Button,
@@ -132,6 +132,9 @@ type RouteDialogState = {
   travelMinutes: number;
   modes: string;
   bidirectional: boolean;
+  enabled: boolean;
+  discovered: boolean;
+  hidden: boolean;
 } | null;
 type ConnectionDraft = {
   kind: SpatialConnection["kind"];
@@ -147,6 +150,20 @@ type ConnectionDraft = {
 };
 type HitCandidate = { id: string; label: string; detail: string };
 type HitMenuState = { mouseX: number; mouseY: number; candidates: HitCandidate[] } | null;
+type LocationAuthoringDefaults = {
+  exposure: EnvironmentLocation["exposure"];
+  enabled: boolean;
+  discovered: boolean;
+  hidden: boolean;
+  randomEncounter: boolean;
+};
+type ConnectionAuthoringDefaults = {
+  kind: SpatialConnection["kind"];
+  bidirectional: boolean;
+  enabled: boolean;
+  discovered: boolean;
+  hidden: boolean;
+};
 
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 const round = (value: number) => Math.round(value * 10) / 10;
@@ -272,6 +289,34 @@ export function LocationMapStudio({
   const [imageBusy, setImageBusy] = useState(false);
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
   const [hitMenu, setHitMenu] = useState<HitMenuState>(null);
+  const [locationDefaults, setLocationDefaults] = useState<LocationAuthoringDefaults>({
+    exposure: "outdoor",
+    enabled: true,
+    discovered: true,
+    hidden: false,
+    randomEncounter: false,
+  });
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const [connectionDefaults, setConnectionDefaults] = useState<ConnectionAuthoringDefaults>({
+    kind: "route",
+    bidirectional: true,
+    enabled: true,
+    discovered: true,
+    hidden: false,
+  });
+
+  useEffect(() => {
+    const node = canvasRef.current;
+    if (!node) return;
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setZoom(value => Math.max(.5, Math.min(2, round(value - event.deltaY * .001))));
+    };
+    node.addEventListener("wheel", handleWheel, { passive: false });
+    return () => node.removeEventListener("wheel", handleWheel);
+  }, []);
 
   const load = useCallback(async () => {
     const [nextMap, nextWorld, nextSettings] = await Promise.all([
@@ -339,7 +384,7 @@ export function LocationMapStudio({
         messages.push(`${item.name} has no canonical map position; drag it once to adopt its drop coordinates.`);
       }
     });
-    map?.anchors.filter(item => item.x == null || item.y == null).forEach(item => {
+    map?.anchors.filter(item => (item.binding_kind ?? "coordinate") === "coordinate" && (item.x == null || item.y == null)).forEach(item => {
       messages.push(`${item.name} needs map review: its position is incomplete.`);
     });
     return messages;
@@ -417,15 +462,15 @@ export function LocationMapStudio({
       body: JSON.stringify({
         name,
         parent_location_id: layerId,
-        exposure: "outdoor",
+        exposure: locationDefaults.exposure,
         description: "",
         imagegen_description: "",
         tags: [],
         image_tags: [],
-        enabled: true,
-        random_encounter: false,
-        hidden: false,
-        discovered: true,
+        enabled: locationDefaults.enabled,
+        random_encounter: locationDefaults.randomEncounter,
+        hidden: locationDefaults.hidden,
+        discovered: locationDefaults.discovered,
         x: point.x,
         y: point.y,
         topology: "closed",
@@ -467,15 +512,15 @@ export function LocationMapStudio({
         body: JSON.stringify({
           name,
           parent_location_id: layerId,
-          exposure: "outdoor",
+          exposure: locationDefaults.exposure,
           description: "",
           imagegen_description: "",
           tags: [],
           image_tags: [],
-          enabled: true,
-          random_encounter: false,
-          hidden: false,
-          discovered: true,
+          enabled: locationDefaults.enabled,
+          random_encounter: locationDefaults.randomEncounter,
+          hidden: locationDefaults.hidden,
+          discovered: locationDefaults.discovered,
           x: round(center.x),
           y: round(center.y),
           topology: "open",
@@ -631,10 +676,13 @@ export function LocationMapStudio({
       points: [first, second],
       options: [firstOptions, secondOptions],
       selections: [preferredEndpoint(firstOptions).key, preferredEndpoint(secondOptions).key],
-      kind: "route",
+      kind: connectionDefaults.kind,
       travelMinutes: 0,
       modes: "walk",
-      bidirectional: true,
+      bidirectional: connectionDefaults.bidirectional,
+      enabled: connectionDefaults.enabled,
+      discovered: connectionDefaults.discovered,
+      hidden: connectionDefaults.hidden,
     });
   }
 
@@ -659,8 +707,8 @@ export function LocationMapStudio({
           binding_segment_t: choice.segmentT ?? null,
           name: `${target?.name ?? currentLayer?.name ?? "Map"} route ${side}`,
           kind: "waypoint",
-          x: choice.point.x,
-          y: choice.point.y,
+          x: choice.kind === "coordinate" ? choice.point.x : null,
+          y: choice.kind === "coordinate" ? choice.point.y : null,
         }),
       });
     };
@@ -678,6 +726,9 @@ export function LocationMapStudio({
           ? routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean)
           : ["walk"],
         bidirectional: routeDialog.bidirectional,
+        enabled: routeDialog.enabled,
+        discovered: routeDialog.discovered,
+        hidden: routeDialog.hidden,
       }),
     });
     setRouteDialog(null);
@@ -760,7 +811,7 @@ export function LocationMapStudio({
   }
 
   async function beginLocationDrag(event: ReactPointerEvent<HTMLElement>, id: string) {
-    if (tool !== "drag" || !world) return;
+    if ((tool !== "drag" && tool !== "select") || !world || event.button !== 0) return;
     event.stopPropagation();
     const entity = world.entities[id];
     if (!entity) return;
@@ -784,6 +835,11 @@ export function LocationMapStudio({
     if (!dragLocation || !world) return;
     const entity = world.entities[dragLocation.id];
     if (!entity) return;
+    if (Math.abs(dragOffset.x) < .1 && Math.abs(dragOffset.y) < .1) {
+      setDragLocation(null);
+      setDragOffset({ x: 0, y: 0 });
+      return;
+    }
     const next = locationDraft(entity);
     next.x = clamp(round(dragLocation.x + dragOffset.x));
     next.y = clamp(round(dragLocation.y + dragOffset.y));
@@ -804,9 +860,20 @@ export function LocationMapStudio({
         ? { location_id: layerId, kind: "polygon", points: triangleAt(center) }
         : { location_id: layerId, kind: "point", points: [center] };
     }
+    const footprint = next.footprint;
     setDragLocation(null);
     setDragOffset({ x: 0, y: 0 });
-    await saveLocation(next);
+    if (!footprint) return;
+    await api(`/projects/${projectId}/spatial/locations/${entity.id}/placement`, {
+      method: "PUT",
+      body: JSON.stringify({
+        x: next.x,
+        y: next.y,
+        spatial_kind: next.spatial_kind,
+        footprint,
+      }),
+    });
+    await load();
   }
 
   async function finishVertexDrag() {
@@ -1118,6 +1185,45 @@ export function LocationMapStudio({
           <Button size="small" onClick={() => setLayerId(item.id)}>{item.name}</Button>
         </span>)}
       </div>
+      <div className="location-map-quick-settings">
+        {(tool === "spot" || tool === "area") ? <>
+          <span className="location-map-quick-label">{tool === "spot" ? "New spot defaults" : "New area defaults"}</span>
+          <TextField
+            select
+            size="small"
+            label="Exposure"
+            value={locationDefaults.exposure}
+            onChange={event => setLocationDefaults({ ...locationDefaults, exposure: event.target.value as EnvironmentLocation["exposure"] })}
+          >
+            <MenuItem value="outdoor">Outdoor</MenuItem>
+            <MenuItem value="indoor">Indoor</MenuItem>
+            <MenuItem value="isolated">Sealed / isolated</MenuItem>
+          </TextField>
+          <FormControlLabel control={<Switch size="small" checked={locationDefaults.enabled} onChange={event => setLocationDefaults({ ...locationDefaults, enabled: event.target.checked })} />} label="Enabled" />
+          <FormControlLabel control={<Switch size="small" checked={locationDefaults.discovered} onChange={event => setLocationDefaults({ ...locationDefaults, discovered: event.target.checked })} />} label="Discovered" />
+          <FormControlLabel control={<Switch size="small" checked={locationDefaults.hidden} onChange={event => setLocationDefaults({ ...locationDefaults, hidden: event.target.checked })} />} label="Hidden" />
+          <FormControlLabel control={<Switch size="small" checked={locationDefaults.randomEncounter} onChange={event => setLocationDefaults({ ...locationDefaults, randomEncounter: event.target.checked })} />} label="Random encounter" />
+        </> : tool === "route" ? <>
+          <span className="location-map-quick-label">New connection defaults</span>
+          <TextField
+            select
+            size="small"
+            label="Type"
+            value={connectionDefaults.kind}
+            onChange={event => setConnectionDefaults({ ...connectionDefaults, kind: event.target.value as SpatialConnection["kind"] })}
+          >
+            <MenuItem value="route">Route / shortcut</MenuItem>
+            <MenuItem value="door">Door</MenuItem>
+            <MenuItem value="portal">Portal / teleporter</MenuItem>
+          </TextField>
+          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.bidirectional} onChange={event => setConnectionDefaults({ ...connectionDefaults, bidirectional: event.target.checked })} />} label="Bidirectional" />
+          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.enabled} onChange={event => setConnectionDefaults({ ...connectionDefaults, enabled: event.target.checked })} />} label="Enabled" />
+          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.discovered} onChange={event => setConnectionDefaults({ ...connectionDefaults, discovered: event.target.checked })} />} label="Discovered" />
+          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.hidden} onChange={event => setConnectionDefaults({ ...connectionDefaults, hidden: event.target.checked })} />} label="Hidden" />
+        </> : <span className="location-map-quick-hint">
+          {tool === "select" ? "Select mode · drag location labels to move them · Shift-click overlaps to choose an object" : tool === "edit" ? "Edit geometry · drag vertices or right-click them for point actions" : "Map authoring"}
+        </span>}
+      </div>
       <div className="location-map-toolbar">
         <ButtonGroup size="small">
           {toolLabels.map(item => <Button
@@ -1149,13 +1255,10 @@ export function LocationMapStudio({
 
     <div className="location-map-body">
       <div
+        ref={canvasRef}
         className={`location-map-canvas tool-${tool}`}
         onClickCapture={openShiftHitMenu}
         onClick={canvasClick}
-        onWheel={event => {
-          event.preventDefault();
-          setZoom(value => Math.max(.5, Math.min(2, round(value - event.deltaY * .001))));
-        }}
         onPointerMove={event => {
           const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
           if (dragLocation) {
@@ -1633,6 +1736,9 @@ export function LocationMapStudio({
             <TextField size="small" type="number" label="Travel minutes" value={routeDialog.travelMinutes} onChange={event => setRouteDialog({ ...routeDialog, travelMinutes: Number(event.target.value) })} />
             <TextField size="small" label="Modes" value={routeDialog.modes} onChange={event => setRouteDialog({ ...routeDialog, modes: event.target.value })} />
             <FormControlLabel control={<Switch checked={routeDialog.bidirectional} onChange={event => setRouteDialog({ ...routeDialog, bidirectional: event.target.checked })} />} label="Bidirectional" />
+            <FormControlLabel control={<Switch checked={routeDialog.enabled} onChange={event => setRouteDialog({ ...routeDialog, enabled: event.target.checked })} />} label="Enabled" />
+            <FormControlLabel control={<Switch checked={routeDialog.discovered} onChange={event => setRouteDialog({ ...routeDialog, discovered: event.target.checked })} />} label="Discovered" />
+            <FormControlLabel control={<Switch checked={routeDialog.hidden} onChange={event => setRouteDialog({ ...routeDialog, hidden: event.target.checked })} />} label="Hidden" />
           </div>}
         </div>
       </DialogContent>
