@@ -44,7 +44,11 @@ surface that previously required EnvironmentStudio:
 - Global Library favorite action.
 
 Background authoring now exposes all stored weather/time variants rather than
-silently showing only the first row. New backgrounds can be generated or
+silently showing only the first row.
+
+Map V2 also now exposes the first project-level Environment settings directly:
+environment enablement, AI location creation, AI weather proposals, automatic
+backgrounds, initial weather, background workflow, and perception stat. New backgrounds can be generated or
 uploaded for:
 
 - any weather / any time,
@@ -82,14 +86,13 @@ authoring surfaces.
 
 ## Next Slice A work
 
-A2 should move into Environment & Map:
+A2 should continue moving into Environment & Map:
 
-1. project environment settings;
-2. weather definitions/transitions;
-3. time-cycle definitions/order;
-4. location conditional ambient sets;
-5. ambient/noise catalogs;
-6. any remaining background controls not represented in Map V2.
+1. weather definitions/transitions;
+2. time-cycle definitions/order;
+3. location conditional ambient sets;
+4. ambient/noise catalogs;
+5. any remaining background controls not represented in Map V2.
 
 After parity:
 
