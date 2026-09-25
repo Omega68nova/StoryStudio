@@ -318,6 +318,25 @@ export function LocationMapStudio({
     ?? map?.barriers.find(item => item.id === selectedId)
     ?? map?.connections.find(item => item.id === selectedId)
     ?? null;
+  const selectedConnection = map?.connections.find(item => item.id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (!selectedConnection) {
+      setConnectionDraft(null);
+      return;
+    }
+    setConnectionDraft({
+      travelMinutes: selectedConnection.travel_minutes,
+      modes: (selectedConnection.modes ?? ["walk"]).join(", "),
+      bidirectional: selectedConnection.bidirectional !== false,
+      hidden: Boolean(selectedConnection.hidden),
+      discovered: selectedConnection.discovered !== false,
+      enabled: selectedConnection.enabled !== false,
+      locked: Boolean(selectedConnection.lock?.locked),
+      minigameKey: selectedConnection.lock?.minigame_key ?? "",
+      difficulty: Number(selectedConnection.lock?.difficulty ?? 1),
+    });
+  }, [selectedConnection?.id, selectedConnection?.travel_minutes, selectedConnection?.bidirectional, selectedConnection?.hidden, selectedConnection?.discovered, selectedConnection?.enabled]);
 
   const backgroundAsset = useMemo<MediaAsset | null>(() => {
     if (!selectedLocation || !backgrounds.length) return null;
