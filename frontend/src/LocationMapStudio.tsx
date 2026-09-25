@@ -381,6 +381,7 @@ export function LocationMapStudio({
         occupancy: "direct_allowed",
         boundary_access: "free",
         spatial_kind: "spot",
+        priority_layer: 0,
         minutes_per_unit: 1,
         base_visibility_units: null,
         encounter_rate: 0,
@@ -407,7 +408,6 @@ export function LocationMapStudio({
         }),
       });
     } else {
-      if (areaDraft.length < 3) return;
       const name = window.prompt("Area name")?.trim();
       if (!name) return;
       const center = centroid(areaDraft);
@@ -431,6 +431,7 @@ export function LocationMapStudio({
           occupancy: "direct_allowed",
           boundary_access: "free",
           spatial_kind: "area",
+          priority_layer: 0,
           minutes_per_unit: 1,
           base_visibility_units: null,
           encounter_rate: 0,
@@ -453,75 +454,182 @@ export function LocationMapStudio({
     await load();
   }
 
-  async function createRoute(sourceId: string, targetId: string) {
-    const source = world?.entities[sourceId];
-    const target = world?.entities[targetId];
-    if (!source || !target) return;
-    const sourcePoints = geometryPoints(source);
-    const targetPoints = geometryPoints(target);
-    const sourcePoint = sourcePoints.length ? centroid(sourcePoints) : {
-      x: Number(source.state.x ?? 50),
-      y: Number(source.state.y ?? 50),
-    };
-    const targetPoint = targetPoints.length ? centroid(targetPoints) : {
-      x: Number(target.state.x ?? 50),
-      y: Number(target.state.y ?? 50),
-    };
-    const [sourceAnchor, targetAnchor] = await Promise.all([
-      api<{ id: string }>(`/projects/${projectId}/spatial/anchors`, {
+  function routeEndpointOptions(point: Point): EndpointChoice[] {
+    if (!layerId || !world || !map) return [{
+      key: "coordinate",
+      kind: "coordinate",
+      label: `Free coordinates (${point.x}, ${point.y})`,
+      point,
+    }];
+    const options: EndpointChoice[] = [{
+      key: "coordinate",
+      kind: "coordinate",
+      label: `Free coordinates (${point.x}, ${point.y})`,
+      point,
+    }];
+    const areaEntities = map.locations
+      .map(item => world.entities[item.id])
+      .filter((item): item is WorldEntity => Boolean(item && item.kind === "location" && item.state.spatial_kind === "area"))
+      .sort(compareAreaPriority);
+
+    for (const entity of areaEntities) {
+      const points = geometryPoints(entity);
+      if (pointInPolygon(point, points)) {
+        options.push({
+          key: `area:${entity.id}`,
+          kind: "area",
+          targetId: entity.id,
+          label: `Inside area · ${entity.name} (priority ${areaPriority(entity)})`,
+          point,
+        });
+      }
+      const border = closestBorderPoint(point, points);
+      if (border && border.distance <= 2.2) {
+        options.push({
+          key: `area_border:${entity.id}`,
+          kind: "area_border",
+          targetId: entity.id,
+          label: `Area border · ${entity.name}`,
+          point: border.point,
+        });
+      }
+    }
+
+    for (const item of map.locations) {
+      const entity = world.entities[item.id];
+      if (!entity || entity.state.spatial_kind === "area") continue;
+      const points = geometryPoints(entity);
+      const spot = points[0] ?? { x: Number(item.x ?? entity.state.x ?? 0), y: Number(item.y ?? entity.state.y ?? 0) };
+      if (distance(point, spot) <= 2.6) {
+        options.push({
+          key: `spot:${entity.id}`,
+          kind: "spot",
+          targetId: entity.id,
+          label: `Spot · ${entity.name}`,
+          point: { x: round(spot.x), y: round(spot.y) },
+        });
+      }
+    }
+    return options;
+  }
+
+  function preferredEndpoint(options: EndpointChoice[]) {
+    return options.find(item => item.kind === "spot")
+      ?? options.find(item => item.kind === "area_border")
+      ?? options.find(item => item.kind === "area")
+      ?? options[0];
+  }
+
+  function beginRouteDialog(first: Point, second: Point) {
+    const firstOptions = routeEndpointOptions(first);
+    const secondOptions = routeEndpointOptions(second);
+    setRouteDialog({
+      points: [first, second],
+      options: [firstOptions, secondOptions],
+      selections: [preferredEndpoint(firstOptions).key, preferredEndpoint(secondOptions).key],
+      travelMinutes: 0,
+      modes: "walk",
+      bidirectional: true,
+    });
+  }
+
+  async function createConfiguredRoute() {
+    if (!routeDialog || !layerId) return;
+    const choices = routeDialog.selections.map((key, index) =>
+      routeDialog.options[index as 0 | 1].find(item => item.key === key) ?? routeDialog.options[index as 0 | 1][0]
+    ) as [EndpointChoice, EndpointChoice];
+
+    const makeAnchor = async (choice: EndpointChoice, side: "A" | "B") => {
+      const target = choice.targetId ? world?.entities[choice.targetId] : null;
+      return api<{ id: string }>(`/projects/${projectId}/spatial/anchors`, {
         method: "PUT",
         body: JSON.stringify({
-          location_id: sourceId,
-          name: `${source.name} route`,
+          location_id: choice.targetId ?? layerId,
+          coordinate_space_id: layerId,
+          binding_kind: choice.kind,
+          binding_target_id: choice.targetId ?? null,
+          name: `${target?.name ?? currentLayer?.name ?? "Map"} route ${side}`,
           kind: "waypoint",
-          x: sourcePoint.x,
-          y: sourcePoint.y,
+          x: choice.point.x,
+          y: choice.point.y,
         }),
-      }),
-      api<{ id: string }>(`/projects/${projectId}/spatial/anchors`, {
-        method: "PUT",
-        body: JSON.stringify({
-          location_id: targetId,
-          name: `${target.name} route`,
-          kind: "waypoint",
-          x: targetPoint.x,
-          y: targetPoint.y,
-        }),
-      }),
-    ]);
-    const direction = window.prompt("Route direction", "bidirectional")?.trim().toLocaleLowerCase();
-    if (direction == null) return;
-    await api(`/projects/${projectId}/spatial/connections`, {
+      });
+    };
+
+    const sourceAnchor = await makeAnchor(choices[0], "A");
+    const targetAnchor = await makeAnchor(choices[1], "B");
+    const connection = await api<{ id: string }>(`/projects/${projectId}/spatial/connections`, {
       method: "PUT",
       body: JSON.stringify({
         kind: "route",
         source_anchor_id: sourceAnchor.id,
         target_anchor_id: targetAnchor.id,
-        travel_minutes: 0,
-        modes: ["walk"],
-        bidirectional: direction !== "one-way" && direction !== "oneway",
+        travel_minutes: Math.max(0, Math.round(routeDialog.travelMinutes)),
+        modes: routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean),
+        bidirectional: routeDialog.bidirectional,
       }),
     });
-    setRouteStartId(null);
+    setRouteDialog(null);
+    setRoutePoints([]);
     setTool("select");
+    setSelectedId(connection.id);
     await load();
   }
 
-  async function chooseLocation(id: string) {
-    if (tool !== "route") {
-      setSelectedId(id);
-      return;
+  async function removeVertex(locationId: string, index: number) {
+    if (!world) return;
+    const entity = world.entities[locationId];
+    if (!entity) return;
+    const points = geometryPoints(entity);
+    if (points.length <= 2) return;
+    points.splice(index, 1);
+    const next = locationDraft(entity);
+    const center = centroid(points);
+    next.x = round(center.x);
+    next.y = round(center.y);
+    next.footprint = { location_id: layerId, kind: "polygon", points };
+    setVertexMenu(null);
+    await saveLocation(next);
+  }
+
+  async function saveConnection(connection: SpatialConnection) {
+    if (!connectionDraft) return;
+    await api(`/projects/${projectId}/spatial/connections`, {
+      method: "PUT",
+      body: JSON.stringify({
+        id: connection.id,
+        kind: connection.kind,
+        source_anchor_id: connection.source_anchor_id,
+        target_anchor_id: connection.target_anchor_id,
+        travel_minutes: Math.max(0, Math.round(connectionDraft.travelMinutes)),
+        modes: connectionDraft.modes.split(",").map(item => item.trim()).filter(Boolean),
+        bidirectional: connectionDraft.bidirectional,
+        requirements: connection.requirements ?? null,
+        lock: connectionDraft.locked ? {
+          locked: true,
+          minigame_key: connectionDraft.minigameKey || null,
+          difficulty: Math.max(0, Math.round(connectionDraft.difficulty)),
+          success_behavior: connection.lock?.success_behavior ?? "persistent",
+        } : null,
+        hidden: connectionDraft.hidden,
+        discovered: connectionDraft.discovered,
+        enabled: connectionDraft.enabled,
+      }),
+    });
+    await load();
+  }
+
+  async function deleteConnection(connection: SpatialConnection) {
+    await api(`/projects/${projectId}/spatial/connection/${connection.id}`, { method: "DELETE" });
+    for (const anchorId of [connection.source_anchor_id, connection.target_anchor_id]) {
+      await api(`/projects/${projectId}/spatial/anchor/${anchorId}`, { method: "DELETE" }).catch(() => undefined);
     }
-    if (!routeStartId) {
-      setRouteStartId(id);
-      setSelectedId(id);
-      return;
-    }
-    if (routeStartId === id) {
-      setRouteStartId(null);
-      return;
-    }
-    await createRoute(routeStartId, id);
+    setSelectedId(null);
+    await load();
+  }
+
+  function chooseLocation(id: string) {
+    setSelectedId(id);
   }
 
   async function beginLocationDrag(event: ReactPointerEvent<HTMLElement>, id: string) {
