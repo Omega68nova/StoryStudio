@@ -636,6 +636,10 @@ class GlobalLibraryService:
         unknown = selected.difference(allowed)
         if unknown:
             raise ValueError(f"Unknown favorite dependency: {sorted(unknown)[0]}")
+        for token in selected:
+            parent_token = allowed[token]["parent_token"]
+            if parent_token != preview["token"] and parent_token not in selected:
+                raise ValueError(f"Favorite dependency requires its parent: {token}")
 
         resources: dict[str, dict[str, Any]] = {}
         root_token = preview["token"]
