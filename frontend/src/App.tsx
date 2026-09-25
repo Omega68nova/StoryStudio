@@ -17,6 +17,7 @@ import { OperationCenter } from "./OperationCenter";
 import { DataStudio } from "./DataStudio";
 import { UsersStudio } from "./UsersStudio";
 import { WorldConfigurationStudio } from "./WorldConfigurationStudio";
+import { GlobalLibraryStudio } from "./GlobalLibraryStudio";
 import { MinigameCheckpoint, MinigameResult } from "./minigames/MinigameCheckpoint";
 import {
   StoryComposer,
@@ -102,6 +103,7 @@ const expectedBackendVersion = "0.17.0-environment";
 type View =
   | "story"
   | "configuration"
+  | "library"
   | "settings"
   | "data"
   | "users";
@@ -110,6 +112,7 @@ type MobileScale = "comfortable" | "compact" | "dense" | "tiny";
 const viewLabels: Record<View, string> = {
   story: "Story",
   configuration: "World configuration",
+  library: "Global Library",
   settings: "Settings",
   data: "Data management",
   users: "Users",
@@ -144,7 +147,8 @@ export default function App() {
   );
   const [createOpen, setCreateOpen] = useState(false);
   const [newTitle, setNewTitle] = useState("Untitled story");
-  const [newPreset, setNewPreset] = useState("none");
+  const [newStatPack, setNewStatPack] = useState("");
+  const [statPacks, setStatPacks] = useState<Array<{ id: string; name: string; revision_count: number }>>([]);
   const [pendingView, setPendingView] = useState<View | null>(null);
   const [pendingProjectId, setPendingProjectId] = useState<string | null>(null);
   const [navigationAnchor, setNavigationAnchor] = useState<HTMLElement | null>(
@@ -211,6 +215,12 @@ export default function App() {
     setWorkflows(await api<WorkflowPreset[]>("/workflows"));
   }, []);
 
+  const loadStatPacks = useCallback(async () => {
+    setStatPacks(await api<Array<{ id: string; name: string; revision_count: number }>>(
+      "/library/resources?resource_kind=stat_pack&marked_only=true",
+    ));
+  }, []);
+
   useEffect(() => {
     api<{ user: AuthUser }>("/auth/me")
       .then(({ user }) => setAuthUser(user))
@@ -223,10 +233,10 @@ export default function App() {
 
   useEffect(() => {
     if (!authUser) return;
-    Promise.all([loadProjects(), loadWorkflows()])
+    Promise.all([loadProjects(), loadWorkflows(), isAdmin ? loadStatPacks() : Promise.resolve()])
       .then(([list]) => list[0] && loadProject(list[0].id))
       .catch((cause) => setError(String(cause.message ?? cause)));
-  }, [authUser, loadProject, loadProjects, loadWorkflows]);
+  }, [authUser, loadProject, loadProjects, loadWorkflows, loadStatPacks]);
 
   useEffect(() => {
     api<{ version: string }>("/version")
@@ -291,11 +301,14 @@ export default function App() {
   async function createProject() {
     const title = newTitle.trim();
     if (!title) return;
-    const stats_preset = newPreset;
     try {
       const created = await api<ProjectSummary>("/projects", {
         method: "POST",
-        body: JSON.stringify({ title, stats_preset }),
+        body: JSON.stringify({
+          title,
+          stats_preset: "none",
+          stats_library_id: newStatPack || null,
+        }),
       });
       await loadProjects();
       await loadProject(created.id);
@@ -367,6 +380,12 @@ export default function App() {
             </div>
           ))}
         </nav>
+        {isAdmin && <Button
+          className={`global-library-nav ${view === "library" ? "active" : ""}`}
+          onClick={() => requestView("library")}
+        >
+          Global Library
+        </Button>}
         <div
           className={`runtime-pill ${runtime === "runtime_error" ? "bad" : ""}`}
         >
@@ -387,7 +406,7 @@ export default function App() {
             </IconButton>
           </Tooltip>
           <div className="app-topbar-title">
-            <h1>{project?.title ?? "StoryStudio"}</h1>
+            <h1>{view === "library" ? "Global Library" : project?.title ?? "StoryStudio"}</h1>
             {view !== "story" && <span>{viewLabels[view]}</span>}
           </div>
           <div className="app-topbar-spacer" />
@@ -503,6 +522,13 @@ export default function App() {
             reloadWorkflows={loadWorkflows}
           />
         )}
+        {view === "library" && isAdmin && (
+          <GlobalLibraryStudio
+            projectId={project?.id}
+            fail={setError}
+            changed={() => void loadStatPacks()}
+          />
+        )}
         {view === "settings" && (
           <SettingsPanel
             runtime={runtime}
@@ -550,13 +576,13 @@ export default function App() {
           />
           <TextField
             select
-            label="Stats preset"
-            value={newPreset}
-            onChange={(event) => setNewPreset(event.target.value)}
+            label="Reusable stat pack"
+            value={newStatPack}
+            onChange={(event) => setNewStatPack(event.target.value)}
+            helperText="Marked stat packs from the Global Library. The new story receives independent project-local copies."
           >
-            <MenuItem value="none">No stats</MenuItem>
-            <MenuItem value="adventure">Adventure (HP and mana)</MenuItem>
-            <MenuItem value="romance">Romance (favorability)</MenuItem>
+            <MenuItem value="">No stats</MenuItem>
+            {statPacks.map(pack => <MenuItem key={pack.id} value={pack.id}>{pack.name} · r{pack.revision_count}</MenuItem>)}
           </TextField>
         </DialogContent>
         <DialogActions>
