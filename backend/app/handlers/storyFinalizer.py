@@ -165,7 +165,7 @@ class StoryFinalizer:
                 "entity_name": entity["name"],
                 "outfit_id": outfit_id,
                 "encounter_kind": (
-                    "character" if first_encounter else "scene_character"
+                    ("character" if first_encounter else "scene_character")
                     if entity["kind"] == "character"
                     else "location"
                 ),
