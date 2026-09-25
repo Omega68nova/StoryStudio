@@ -691,6 +691,11 @@ async def list_projects() -> list[dict[str, Any]]:
 
 @app.post("/api/projects", status_code=201)
 async def create_project(request: ProjectCreate) -> dict[str, Any]:
+    if request.stats_library_id:
+        try:
+            library_service.stat_pack_snapshot(request.stats_library_id)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     project = db.create_project(request.title.strip())
     environment.ensure_project(project["id"])
     db.execute("INSERT OR IGNORE INTO project_music_settings(project_id) VALUES (?)", (project["id"],))
