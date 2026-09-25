@@ -113,6 +113,23 @@ class LibraryFavoritePublishRequest(LibraryFavoritePreviewRequest):
     tags: list[str] = Field(default_factory=list, max_length=100)
 
 
+class LibraryBatchMarkRequest(BaseModel):
+    resource_ids: list[str] = Field(min_length=1, max_length=1000)
+    marked: bool
+
+
+class LibraryPresetCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=20_000)
+    resource_ids: list[str] = Field(min_length=1, max_length=1000)
+    tags: list[str] = Field(default_factory=list, max_length=100)
+
+
+class LibraryExportRequest(BaseModel):
+    resource_ids: list[str] = Field(min_length=1, max_length=1000)
+    include_revisions: bool = True
+
+
 class ProjectUpdate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
 
