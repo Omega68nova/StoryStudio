@@ -109,6 +109,7 @@ class LibraryFavoritePreviewRequest(BaseModel):
 class LibraryFavoritePublishRequest(LibraryFavoritePreviewRequest):
     version: Literal["original", "latest", "both"] = "latest"
     dependency_tokens: list[str] = Field(default_factory=list, max_length=500)
+    dependency_versions: dict[str, Literal["original", "latest", "both"]] = Field(default_factory=dict)
     tags: list[str] = Field(default_factory=list, max_length=100)
 
 
