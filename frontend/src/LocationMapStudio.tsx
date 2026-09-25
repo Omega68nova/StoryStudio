@@ -515,12 +515,15 @@ export function LocationMapStudio({
     for (const entity of areaEntities) {
       const points = geometryPoints(entity);
       if (pointInPolygon(point, points)) {
+        const center = centroid(points);
         options.push({
           key: `area:${entity.id}`,
           kind: "area",
           targetId: entity.id,
           label: `Inside area · ${entity.name} (priority ${areaPriority(entity)})`,
           point,
+          offsetX: round(point.x - center.x),
+          offsetY: round(point.y - center.y),
         });
       }
       const border = closestBorderPoint(point, points);
@@ -531,6 +534,8 @@ export function LocationMapStudio({
           targetId: entity.id,
           label: `Area border · ${entity.name}`,
           point: border.point,
+          segmentIndex: border.segmentIndex,
+          segmentT: border.segmentT,
         });
       }
     }
@@ -567,6 +572,7 @@ export function LocationMapStudio({
       points: [first, second],
       options: [firstOptions, secondOptions],
       selections: [preferredEndpoint(firstOptions).key, preferredEndpoint(secondOptions).key],
+      kind: "route",
       travelMinutes: 0,
       modes: "walk",
       bidirectional: true,
@@ -588,6 +594,10 @@ export function LocationMapStudio({
           coordinate_space_id: layerId,
           binding_kind: choice.kind,
           binding_target_id: choice.targetId ?? null,
+          binding_offset_x: choice.offsetX ?? null,
+          binding_offset_y: choice.offsetY ?? null,
+          binding_segment_index: choice.segmentIndex ?? null,
+          binding_segment_t: choice.segmentT ?? null,
           name: `${target?.name ?? currentLayer?.name ?? "Map"} route ${side}`,
           kind: "waypoint",
           x: choice.point.x,
@@ -601,7 +611,7 @@ export function LocationMapStudio({
     const connection = await api<{ id: string }>(`/projects/${projectId}/spatial/connections`, {
       method: "PUT",
       body: JSON.stringify({
-        kind: "route",
+        kind: routeDialog.kind,
         source_anchor_id: sourceAnchor.id,
         target_anchor_id: targetAnchor.id,
         travel_minutes: Math.max(0, Math.round(routeDialog.travelMinutes)),
@@ -654,7 +664,7 @@ export function LocationMapStudio({
       method: "PUT",
       body: JSON.stringify({
         id: connection.id,
-        kind: connection.kind,
+        kind: connectionDraft.kind,
         source_anchor_id: connection.source_anchor_id,
         target_anchor_id: connection.target_anchor_id,
         travel_minutes: Math.max(0, Math.round(connectionDraft.travelMinutes)),
