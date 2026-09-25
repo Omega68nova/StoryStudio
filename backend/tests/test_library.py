@@ -379,3 +379,54 @@ def test_favorite_rejects_nested_dependency_without_parent(tmp_path: Path) -> No
             source_key="battery",
             dependency_tokens=["effect:restore"],
         )
+
+
+def test_favorite_both_keeps_latest_current_when_latest_already_exists(tmp_path: Path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    world = WorldEngine(db, data_provider=data)
+    library = GlobalLibraryService(data, world=world)
+    project = db.create_project("Favorite current revision")
+
+    create = world.normalize_mutations(project["id"], None, [{
+        "tool": "createEntity",
+        "arguments": {
+            "entity_id": "relic",
+            "kind": "item",
+            "name": "Plain Relic",
+            "aliases": [],
+            "tags": [],
+            "state": {"description": "Before awakening."},
+        },
+    }], provenance="author")
+    world.commit_root(project["id"], create, provenance="author", summary="Create relic")
+    update = world.normalize_mutations(project["id"], None, [{
+        "tool": "updateEntity",
+        "arguments": {
+            "entity_id": "relic",
+            "name": "Awakened Relic",
+            "patch": {"description": "After awakening."},
+        },
+    }], provenance="author")
+    world.commit_root(project["id"], update, provenance="author", summary="Awaken relic")
+
+    first = library.favorite_resource_tree(
+        project["id"],
+        source_kind="item",
+        source_key="relic",
+        version="latest",
+    )
+    latest_revision_id = first["resource"]["current_revision_id"]
+
+    second = library.favorite_resource_tree(
+        project["id"],
+        source_kind="item",
+        source_key="relic",
+        version="both",
+    )
+    assert second["resource"]["current_revision_id"] == latest_revision_id
+    current = data.library.revision(second["resource"]["current_revision_id"])
+    assert current is not None
+    assert current["snapshot"]["source_variant"] == "latest"
+    assert current["snapshot"]["payload"]["name"] == "Awakened Relic"
