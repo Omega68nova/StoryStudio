@@ -4,7 +4,12 @@ import {
   Button,
   ButtonGroup,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControlLabel,
+  Menu,
   MenuItem,
   Paper,
   Switch,
@@ -31,6 +36,7 @@ type SpatialLocation = {
   occupancy?: string;
   boundary_access?: string;
   spatial_kind?: string;
+  priority_layer?: number;
   x?: number | null;
   y?: number | null;
   discovered?: boolean;
@@ -38,6 +44,9 @@ type SpatialLocation = {
 type SpatialAnchor = {
   id: string;
   location_id: string;
+  coordinate_space_id?: string | null;
+  binding_kind?: "coordinate" | "area" | "area_border" | "spot";
+  binding_target_id?: string | null;
   name: string;
   kind: string;
   x?: number | null;
@@ -51,8 +60,15 @@ type SpatialConnection = {
   source_anchor_id: string;
   target_anchor_id: string;
   travel_minutes: number;
+  modes?: string[];
   bidirectional?: boolean;
-  lock?: { locked?: boolean };
+  requirements?: Record<string, unknown> | null;
+  lock?: { locked?: boolean; minigame_key?: string | null; difficulty?: number; success_behavior?: string } | null;
+  hidden?: boolean;
+  discovered?: boolean;
+  enabled?: boolean;
+  source_location_id?: string;
+  target_location_id?: string;
 };
 type SpatialBarrier = {
   id: string;
@@ -91,6 +107,34 @@ type DragLocation = {
   footprint: Point[];
 };
 type VertexDrag = { locationId: string; index: number };
+type VertexMenuState = { mouseX: number; mouseY: number; locationId: string; index: number } | null;
+type EndpointKind = "coordinate" | "area" | "area_border" | "spot";
+type EndpointChoice = {
+  key: string;
+  kind: EndpointKind;
+  label: string;
+  targetId?: string | null;
+  point: Point;
+};
+type RouteDialogState = {
+  points: [Point, Point];
+  options: [EndpointChoice[], EndpointChoice[]];
+  selections: [string, string];
+  travelMinutes: number;
+  modes: string;
+  bidirectional: boolean;
+} | null;
+type ConnectionDraft = {
+  travelMinutes: number;
+  modes: string;
+  bidirectional: boolean;
+  hidden: boolean;
+  discovered: boolean;
+  enabled: boolean;
+  locked: boolean;
+  minigameKey: string;
+  difficulty: number;
+};
 
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 const round = (value: number) => Math.round(value * 10) / 10;
@@ -102,6 +146,41 @@ const centroid = (points: Point[]): Point => {
   };
 };
 const distance = (left: Point, right: Point) => Math.hypot(left.x - right.x, left.y - right.y);
+const pointInPolygon = (point: Point, polygon: Point[]) => {
+  if (polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i], b = polygon[j];
+    const intersects = ((a.y > point.y) !== (b.y > point.y))
+      && point.x < ((b.x - a.x) * (point.y - a.y)) / ((b.y - a.y) || Number.EPSILON) + a.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+};
+const closestPointOnSegment = (point: Point, a: Point, b: Point): Point => {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (!lengthSq) return a;
+  const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq));
+  return { x: round(a.x + t * dx), y: round(a.y + t * dy) };
+};
+const closestBorderPoint = (point: Point, points: Point[]): { point: Point; distance: number } | null => {
+  if (points.length < 2) return null;
+  let best: { point: Point; distance: number } | null = null;
+  for (let index = 0; index < points.length; index++) {
+    const candidate = closestPointOnSegment(point, points[index], points[(index + 1) % points.length]);
+    const candidateDistance = distance(point, candidate);
+    if (!best || candidateDistance < best.distance) best = { point: candidate, distance: candidateDistance };
+  }
+  return best;
+};
+const areaPriority = (entity?: WorldEntity | null) => Number(entity?.state.priority_layer ?? 0);
+const compareAreaPriority = (left: WorldEntity, right: WorldEntity) => {
+  const priority = areaPriority(left) - areaPriority(right);
+  if (priority) return priority;
+  if (left.name !== right.name) return left.name < right.name ? -1 : 1;
+  return left.id === right.id ? 0 : left.id < right.id ? -1 : 1;
+};
 const geometryPoints = (entity?: WorldEntity | null): Point[] => {
   const raw = entity?.state.footprint as Geometry | null | undefined;
   return Array.isArray(raw?.points)
@@ -129,6 +208,7 @@ const locationDraft = (entity: WorldEntity): EnvironmentLocation => {
     occupancy: state.occupancy === "child_required" ? "child_required" : "direct_allowed",
     boundary_access: state.boundary_access === "connection_required" ? "connection_required" : "free",
     spatial_kind: state.spatial_kind === "area" ? "area" : "spot",
+    priority_layer: typeof state.priority_layer === "number" ? state.priority_layer : 0,
     minutes_per_unit: typeof state.minutes_per_unit === "number" ? state.minutes_per_unit : 1,
     base_visibility_units: typeof state.base_visibility_units === "number" ? state.base_visibility_units : null,
     encounter_rate: typeof state.encounter_rate === "number" ? state.encounter_rate : 0,
@@ -152,7 +232,9 @@ export function LocationMapStudio({
   const [layerId, setLayerId] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [routeStartId, setRouteStartId] = useState<string | null>(null);
+  const [routePoints, setRoutePoints] = useState<Point[]>([]);
+  const [routeDialog, setRouteDialog] = useState<RouteDialogState>(null);
+  const [vertexMenu, setVertexMenu] = useState<VertexMenuState>(null);
   const [areaDraft, setAreaDraft] = useState<Point[]>([]);
   const [zoom, setZoom] = useState(1);
   const [dragLocation, setDragLocation] = useState<DragLocation | null>(null);
@@ -162,6 +244,7 @@ export function LocationMapStudio({
   const [editorDraft, setEditorDraft] = useState<EnvironmentLocation | null>(null);
   const [backgrounds, setBackgrounds] = useState<BackgroundRecord[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
+  const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
 
   const load = useCallback(async () => {
     const [nextMap, nextWorld, nextSettings] = await Promise.all([
