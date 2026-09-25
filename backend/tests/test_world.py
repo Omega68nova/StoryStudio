@@ -109,7 +109,7 @@ def test_location_archive_can_cleanup_spatial_paths_atomically(tmp_path: Path) -
             "travel_minutes": 2, "modes": ["walk"], "bidirectional": True,
         }},
         {"tool": "setRelationship", "arguments": {
-            "relationship_id": "legacy-road", "source_id": a, "target_id": b,
+            "id": "legacy-road", "source_id": a, "target_id": b,
             "relation": "route", "travel_minutes": 2, "modes": ["walk"], "bidirectional": True,
         }},
     ], provenance="author")
