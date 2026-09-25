@@ -1915,13 +1915,29 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 }
 .global-library-row {
   display: grid;
-  grid-template-columns: minmax(220px, 2fr) minmax(120px, .8fr) 80px 80px 80px 80px 84px;
+  grid-template-columns: 42px minmax(220px, 2fr) minmax(120px, .8fr) 70px 70px 70px 70px minmax(250px, auto);
   gap: 10px;
   align-items: center;
   min-height: 48px;
   padding: 8px 12px;
   border-top: 1px solid #e7dfd3;
   font-size: 10px;
+}
+.global-library-batchbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.global-library-batchbar b {
+  margin-right: auto;
+  font-size: 11px;
+}
+.global-library-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  justify-content: flex-end;
 }
 .global-library-row.header {
   min-height: 34px;
@@ -1969,7 +1985,7 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
     overflow-x: auto;
   }
   .global-library-row {
-    min-width: 760px;
+    min-width: 980px;
   }
 }
 

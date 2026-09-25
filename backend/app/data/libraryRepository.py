@@ -148,6 +148,59 @@ class LibraryRepository(BaseRepository):
                 )
         return self.resource(resource_id) or {}
 
+    def set_marked_many(self, resource_ids: list[str], marked: bool) -> list[str]:
+        if not resource_ids:
+            return []
+        unique_ids = list(dict.fromkeys(resource_ids))
+        placeholders = ",".join("?" for _ in unique_ids)
+        now = utc_now()
+        with self.db._lock, self.db.connect() as connection:
+            existing = {
+                row["id"]
+                for row in connection.execute(
+                    f"SELECT id FROM library_resources WHERE id IN ({placeholders})",
+                    tuple(unique_ids),
+                ).fetchall()
+            }
+            missing = [resource_id for resource_id in unique_ids if resource_id not in existing]
+            if missing:
+                raise ValueError(f"Unknown library resource: {missing[0]}")
+            connection.execute(
+                f"UPDATE library_resources SET marked=?,updated_at=? WHERE id IN ({placeholders})",
+                (int(marked), now, *unique_ids),
+            )
+        return unique_ids
+
+    def export_resources(self, resource_ids: list[str], *, include_revisions: bool = True) -> list[dict[str, Any]]:
+        unique_ids = list(dict.fromkeys(resource_ids))
+        result: list[dict[str, Any]] = []
+        for resource_id in unique_ids:
+            resource = self.resource(resource_id)
+            if not resource:
+                raise ValueError(f"Unknown library resource: {resource_id}")
+            exported = {
+                "id": resource["id"],
+                "resource_kind": resource["resource_kind"],
+                "name": resource["name"],
+                "description": resource["description"],
+                "marked": bool(resource["marked"]),
+                "current_revision_id": resource.get("current_revision_id"),
+                "tags": list(resource.get("tags") or []),
+                "children": [
+                    {
+                        "child_resource_id": child["child_resource_id"],
+                        "relation_kind": child["relation_kind"],
+                        "position": child["position"],
+                        "required": bool(child["required"]),
+                    }
+                    for child in resource.get("children") or []
+                ],
+            }
+            if include_revisions:
+                exported["revisions"] = self.revisions(resource_id)
+            result.append(exported)
+        return result
+
     def set_current_revision(self, resource_id: str, revision_id: str) -> None:
         row = self.db.fetch_one(
             "SELECT 1 FROM library_resource_revisions WHERE id=? AND resource_id=?",

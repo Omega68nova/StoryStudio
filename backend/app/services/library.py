@@ -199,6 +199,87 @@ class GlobalLibraryService:
         }
 
 
+    def create_named_preset(
+        self,
+        *,
+        name: str,
+        description: str,
+        resource_ids: list[str],
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        unique_ids = list(dict.fromkeys(resource_ids))
+        if not unique_ids:
+            raise ValueError("A preset requires at least one library resource")
+        children = []
+        for resource_id in unique_ids:
+            resource = self.data.library.resource(resource_id)
+            if not resource:
+                raise ValueError(f"Unknown library resource: {resource_id}")
+            children.append({
+                "child_resource_id": resource_id,
+                "relation_kind": "preset_member",
+                "required": True,
+            })
+        preset = self.data.library.create_resource(
+            resource_kind="bundle",
+            name=name,
+            description=description,
+            marked=True,
+            tags=tags or [],
+        )
+        self.data.library.set_children(preset["id"], children)
+        snapshot = {
+            "schema_version": 1,
+            "resource_kind": "bundle",
+            "preset_kind": "named_preset",
+            "members": unique_ids,
+        }
+        self.data.library.add_revision(
+            preset["id"],
+            snapshot,
+            source_kind="bundle",
+            source_key=preset["id"],
+            note="Created named preset",
+        )
+        return self.data.library.resource(preset["id"]) or preset
+
+    def export_library_resources(
+        self,
+        resource_ids: list[str],
+        *,
+        include_revisions: bool = True,
+    ) -> dict[str, Any]:
+        roots = list(dict.fromkeys(resource_ids))
+        if not roots:
+            raise ValueError("At least one library resource is required")
+        ordered: list[str] = []
+        seen: set[str] = set()
+        queue = list(roots)
+        while queue:
+            resource_id = queue.pop(0)
+            if resource_id in seen:
+                continue
+            resource = self.data.library.resource(resource_id)
+            if not resource:
+                raise ValueError(f"Unknown library resource: {resource_id}")
+            seen.add(resource_id)
+            ordered.append(resource_id)
+            queue.extend(
+                child["child_resource_id"]
+                for child in resource.get("children") or []
+                if child["child_resource_id"] not in seen
+            )
+        resources = self.data.library.export_resources(
+            ordered,
+            include_revisions=include_revisions,
+        )
+        return {
+            "schema": "storystudio.global_library.export",
+            "schema_version": 1,
+            "root_resource_ids": roots,
+            "resources": resources,
+        }
+
     # ------------------------------------------------------------------
     # Favorite/reusable resource trees
     # ------------------------------------------------------------------
@@ -280,18 +361,22 @@ class GlobalLibraryService:
             if not row:
                 raise ValueError("Outfit not found")
             entity = self.data.db.fetch_one(
-                "SELECT project_id,name FROM world_entities WHERE id=?",
+                "SELECT project_id FROM world_entities WHERE id=?",
                 (row["entity_id"],),
             )
             if not entity or entity["project_id"] != project_id:
                 raise ValueError("Outfit does not belong to this project")
+            owner_name = ""
+            if self.world is not None:
+                owner = self.world.projection(project_id, head_node_id).get("entities", {}).get(row["entity_id"])
+                owner_name = str((owner or {}).get("name") or "")
             snapshot = dict(row)
             if "equipment_json" in snapshot:
                 snapshot["equipment"] = json.loads(snapshot.pop("equipment_json") or "[]")
             return {
                 "name": row["name"],
                 "description": str(row.get("description") or ""),
-                "tags": [str(entity.get("name") or "")],
+                "tags": [owner_name] if owner_name else [],
                 "original": snapshot,
                 "latest": snapshot,
                 "original_available": False,
