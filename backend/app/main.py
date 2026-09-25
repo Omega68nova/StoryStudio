@@ -1894,11 +1894,12 @@ async def delete_environment_location(project_id: str, location_id: str) -> None
 
     occupants = [
         item["name"] for item in projection.get("entities", {}).values()
-        if item.get("kind") == "character"
+        if item.get("kind") in {"character", "item"}
+        and not item.get("state", {}).get("archived")
         and str(item.get("state", {}).get("current_location_id") or "") == location_id
     ]
     if occupants:
-        raise HTTPException(422, "Move characters out of this location first: " + ", ".join(sorted(occupants)[:6]))
+        raise HTTPException(422, "Move characters/items out of this location first: " + ", ".join(sorted(occupants)[:6]))
 
     anchors = projection.get("map_anchors", {})
     doomed_anchor_ids = {
