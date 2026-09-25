@@ -893,9 +893,12 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 
 /* Location Map v2 authoring surface */
 .location-map-v2 {
-  min-height: calc(100vh - 83px);
+  height: calc(100vh - 83px);
+  min-height: 620px;
+  max-height: 1000px;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
   background: #f3efe7;
 }
 .location-map-header {
@@ -934,6 +937,37 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   color: #9b9184;
   font-weight: 400;
 }
+.location-map-quick-settings {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid #ded4c4;
+  border-radius: 8px;
+  background: #f5efe5;
+}
+.location-map-quick-settings .MuiTextField-root {
+  min-width: 150px;
+}
+.location-map-quick-settings .MuiFormControlLabel-root {
+  margin-right: 2px;
+}
+.location-map-quick-settings .MuiFormControlLabel-label {
+  font-size: 11px;
+}
+.location-map-quick-label {
+  color: #715a3d;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.location-map-quick-hint {
+  color: #7d7265;
+  font-size: 11px;
+}
 .location-map-toolbar {
   align-items: stretch;
   flex-wrap: wrap;
@@ -955,7 +989,8 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 }
 .location-map-canvas {
   min-width: 0;
-  min-height: 640px;
+  min-height: 0;
+  height: 100%;
   position: relative;
   overflow: hidden;
   touch-action: none;
@@ -976,8 +1011,12 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 .location-map-canvas.tool-drag {
   cursor: grab;
 }
-.location-map-canvas.tool-drag:active {
+.location-map-canvas.tool-drag:active,
+.location-map-canvas.tool-select .location-map-node:active {
   cursor: grabbing;
+}
+.location-map-canvas.tool-select .location-map-node {
+  cursor: grab;
 }
 .location-map-world {
   position: absolute;
@@ -1393,6 +1432,9 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 }
 .location-map-validation {
   margin-top: auto;
+  max-height: 160px;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 .location-map-validation h4 {
   font-size: 12px;
@@ -1408,7 +1450,9 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 }
 @media (max-width: 820px) {
   .location-map-v2 {
+    height: auto;
     min-height: 0;
+    max-height: none;
   }
   .location-map-body {
     grid-template-columns: 1fr;
