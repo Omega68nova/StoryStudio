@@ -1084,6 +1084,7 @@ export function LocationMapStudio({
     <div className="location-map-body">
       <div
         className={`location-map-canvas tool-${tool}`}
+        onClickCapture={openShiftHitMenu}
         onClick={canvasClick}
         onWheel={event => {
           event.preventDefault();
@@ -1144,21 +1145,33 @@ export function LocationMapStudio({
               className={`location-map-barrier${item.hidden ? " hidden" : ""}`}
             /> : null)}
             {map.connections.map(item => {
-              const source = anchors.get(item.source_anchor_id);
-              const target = anchors.get(item.target_anchor_id);
-              if (!source || !target || source.x == null || source.y == null || target.x == null || target.y == null) return null;
-              return <line
-                key={item.id}
-                x1={source.x}
-                y1={source.y}
-                x2={target.x}
-                y2={target.y}
-                className={`location-map-connection ${item.kind}${selectedId === item.id ? " selected" : ""}`}
-                onClick={event => {
-                  event.stopPropagation();
-                  setSelectedId(item.id);
-                }}
-              />;
+              const source = resolvedAnchorPoint(anchors.get(item.source_anchor_id));
+              const target = resolvedAnchorPoint(anchors.get(item.target_anchor_id));
+              if (!source || !target) return null;
+              return <g key={item.id}>
+                <line
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  className="location-map-connection-hitbox"
+                  onClick={event => {
+                    event.stopPropagation();
+                    setSelectedId(item.id);
+                  }}
+                />
+                <line
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  className={`location-map-connection ${item.kind}${selectedId === item.id ? " selected" : ""}`}
+                  onClick={event => {
+                    event.stopPropagation();
+                    setSelectedId(item.id);
+                  }}
+                />
+              </g>;
             })}
             {areaDraft.length > 1 && <polyline
               points={areaDraft.map(point => `${point.x},${point.y}`).join(" ")}
@@ -1204,12 +1217,15 @@ export function LocationMapStudio({
           })}
 
           {map.anchors.map((item, index) => {
-            const x = Number(item.x ?? 8 + (index * 8) % 80);
-            const y = Number(item.y ?? 12 + (index * 7) % 75);
+            if ((item.binding_kind ?? "coordinate") !== "coordinate") return null;
+            const point = resolvedAnchorPoint(item) ?? {
+              x: Number(item.x ?? 8 + (index * 8) % 80),
+              y: Number(item.y ?? 12 + (index * 7) % 75),
+            };
             return <button
               key={item.id}
               className={`location-map-anchor ${item.kind}${selectedId === item.id ? " selected" : ""}`}
-              style={{ left: `${x}%`, top: `${y}%` }}
+              style={{ left: `${point.x}%`, top: `${point.y}%` }}
               title={item.name}
               onClick={event => {
                 if (tool === "route") return;
@@ -1399,6 +1415,17 @@ export function LocationMapStudio({
             </div>)}
           </div>
           <div className="location-map-inspector-form">
+            <TextField
+              select
+              size="small"
+              label="Connection type"
+              value={connectionDraft.kind}
+              onChange={event => setConnectionDraft({ ...connectionDraft, kind: event.target.value as SpatialConnection["kind"] })}
+            >
+              <MenuItem value="route">Route / shortcut</MenuItem>
+              <MenuItem value="door">Door</MenuItem>
+              <MenuItem value="portal">Portal</MenuItem>
+            </TextField>
             <TextField size="small" type="number" label="Travel minutes" value={connectionDraft.travelMinutes} onChange={event => setConnectionDraft({ ...connectionDraft, travelMinutes: Number(event.target.value) })} />
             <TextField size="small" label="Travel modes" helperText="Comma separated, e.g. walk, fly" value={connectionDraft.modes} onChange={event => setConnectionDraft({ ...connectionDraft, modes: event.target.value })} />
             <div className="location-map-switches">
@@ -1452,6 +1479,26 @@ export function LocationMapStudio({
     </div>
 
     <Menu
+      open={Boolean(hitMenu)}
+      onClose={() => setHitMenu(null)}
+      anchorReference="anchorPosition"
+      anchorPosition={hitMenu ? { top: hitMenu.mouseY, left: hitMenu.mouseX } : undefined}
+    >
+      {hitMenu?.candidates.map(candidate => <MenuItem
+        key={candidate.id}
+        onClick={() => {
+          setSelectedId(candidate.id);
+          setHitMenu(null);
+        }}
+      >
+        <span className="location-map-hit-choice">
+          <b>{candidate.label}</b>
+          <small>{candidate.detail}</small>
+        </span>
+      </MenuItem>)}
+    </Menu>
+
+    <Menu
       open={Boolean(vertexMenu)}
       onClose={() => setVertexMenu(null)}
       anchorReference="anchorPosition"
@@ -1489,6 +1536,17 @@ export function LocationMapStudio({
             </TextField>
           </section>)}
           {routeDialog && <div className="location-map-route-dialog-settings">
+            <TextField
+              select
+              size="small"
+              label="Connection type"
+              value={routeDialog.kind}
+              onChange={event => setRouteDialog({ ...routeDialog, kind: event.target.value as SpatialConnection["kind"] })}
+            >
+              <MenuItem value="route">Route / shortcut</MenuItem>
+              <MenuItem value="door">Door</MenuItem>
+              <MenuItem value="portal">Portal</MenuItem>
+            </TextField>
             <TextField size="small" type="number" label="Travel minutes" value={routeDialog.travelMinutes} onChange={event => setRouteDialog({ ...routeDialog, travelMinutes: Number(event.target.value) })} />
             <TextField size="small" label="Modes" value={routeDialog.modes} onChange={event => setRouteDialog({ ...routeDialog, modes: event.target.value })} />
             <FormControlLabel control={<Switch checked={routeDialog.bidirectional} onChange={event => setRouteDialog({ ...routeDialog, bidirectional: event.target.checked })} />} label="Bidirectional" />
