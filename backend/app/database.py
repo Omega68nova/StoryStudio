@@ -114,6 +114,22 @@ class Database:
                     ("042_canonical_rules", utc_now()),
                 )
                 applied.add("042_canonical_rules")
+            # Migration 043 only adds stat_definitions.icon. A database may
+            # already contain that column if the ALTER TABLE succeeded on an
+            # earlier startup but the migration-version insert did not.
+            if "043_stat_icons" not in applied:
+                stat_columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(stat_definitions)"
+                    ).fetchall()
+                }
+                if "icon" in stat_columns:
+                    connection.execute(
+                        "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                        ("043_stat_icons", utc_now()),
+                    )
+                    applied.add("043_stat_icons")
             for path in sorted(migration_dir.glob("*.sql")):
                 if path.stem in applied:
                     continue
