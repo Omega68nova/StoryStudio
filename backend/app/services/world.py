@@ -478,6 +478,24 @@ class WorldEngine:
                         coordinate_space_id = owner.get("state", {}).get("parent_location_id") or owner["id"]
                         arguments["coordinate_space_id"] = coordinate_space_id
                     self._entity(projection, coordinate_space_id, "location")
+                    binding_kind = str(arguments.get("binding_kind") or "coordinate")
+                    binding_target_id = arguments.get("binding_target_id")
+                    if binding_kind == "coordinate":
+                        arguments["binding_target_id"] = None
+                    else:
+                        if not binding_target_id:
+                            raise WorldValidationError("Bound map anchors require a binding_target_id")
+                        target = self._entity(projection, binding_target_id, "location")
+                        target_kind = target.get("state", {}).get("spatial_kind", "spot")
+                        if binding_kind in {"area", "area_border"} and target_kind != "area":
+                            raise WorldValidationError("Area endpoint bindings require an area target")
+                        if binding_kind == "spot" and target_kind == "area":
+                            raise WorldValidationError("Spot endpoint bindings require a spot target")
+                        target_space = target.get("state", {}).get("parent_location_id") or target["id"]
+                        if str(target_space) != str(coordinate_space_id):
+                            raise WorldValidationError("Endpoint binding target must exist in the anchor coordinate space")
+                        if str(binding_target_id) != str(owner["id"]):
+                            raise WorldValidationError("Bound map anchor owner must match its binding target")
                     arguments = MapAnchor.model_validate(arguments).model_dump(mode="json")
                 except ValueError as exc:
                     raise WorldValidationError(f"Invalid map anchor: {exc}") from exc
