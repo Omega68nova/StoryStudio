@@ -1928,3 +1928,123 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
     min-width: 760px;
   }
 }
+
+
+/* Phase 7B favorite/reusable resource tree controls */
+.resource-favorite-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+}
+.resource-favorite-row > .environment-resource-button {
+  min-width: 0;
+  width: 100%;
+}
+.resource-favorite-row > span,
+.resource-favorite-row > .MuiIconButton-root {
+  align-self: center;
+}
+.character-outfit-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.favorite-library-dialog {
+  display: grid;
+  gap: 14px;
+  padding-top: 10px !important;
+}
+.favorite-library-dialog > p {
+  margin: 0;
+  color: #766b5f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.favorite-library-error {
+  padding: 9px 10px;
+  border: 1px solid #c98b82;
+  border-radius: 5px;
+  background: #f7e9e6;
+  color: #7a342b !important;
+}
+.favorite-library-version-note {
+  color: #887c6e;
+  line-height: 1.4;
+}
+.favorite-library-dependencies {
+  display: grid;
+  gap: 4px;
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  padding: 8px;
+  border: 1px solid #ded4c5;
+  border-radius: 6px;
+  background: rgba(249, 246, 240, .72);
+}
+.favorite-library-dependencies > header {
+  position: sticky;
+  top: -8px;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin: -8px -8px 3px;
+  padding: 9px 10px;
+  border-bottom: 1px solid #ded4c5;
+  background: #f4eee4;
+}
+.favorite-library-dependencies > header > div {
+  display: grid;
+  gap: 1px;
+}
+.favorite-library-dependencies > header small {
+  color: #857969;
+  font-size: 9px;
+}
+.favorite-library-dependency {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 180px);
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid rgba(220, 210, 195, .55);
+}
+.favorite-library-dependency:last-child {
+  border-bottom: 0;
+}
+.favorite-library-dependency .MuiFormControlLabel-root {
+  min-width: 0;
+  margin-right: 0;
+}
+.favorite-library-dependency .MuiFormControlLabel-label {
+  min-width: 0;
+}
+.favorite-library-dependency .MuiFormControlLabel-label > span {
+  display: grid;
+  gap: 1px;
+}
+.favorite-library-dependency .MuiFormControlLabel-label b,
+.favorite-library-dependency .MuiFormControlLabel-label small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.favorite-library-dependency .MuiFormControlLabel-label b {
+  font-size: 11px;
+}
+.favorite-library-dependency .MuiFormControlLabel-label small {
+  color: #887c6e;
+  font-size: 9px;
+  text-transform: capitalize;
+}
+.favorite-library-dependency.parent-missing {
+  opacity: .55;
+}
+@media (max-width: 680px) {
+  .favorite-library-dependency {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+}
