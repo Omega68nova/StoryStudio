@@ -494,6 +494,8 @@ class GlobalLibraryService:
         source_key: str,
         source_story_node_id: str | None = None,
     ) -> dict[str, Any]:
+        if source_story_node_id is None:
+            source_story_node_id = (self.data.db.get_project(project_id) or {}).get("active_node_id")
         versions = self._source_versions(project_id, source_kind, source_key, source_story_node_id)
         root_token = self._token(source_kind, source_key)
         dependencies: list[dict[str, Any]] = []
@@ -620,6 +622,8 @@ class GlobalLibraryService:
         dependency_versions: dict[str, str] | None = None,
         tags: list[str] | None = None,
     ) -> dict[str, Any]:
+        if source_story_node_id is None:
+            source_story_node_id = (self.data.db.get_project(project_id) or {}).get("active_node_id")
         preview = self.favorite_preview(
             project_id,
             source_kind=source_kind,
