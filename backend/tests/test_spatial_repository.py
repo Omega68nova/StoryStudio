@@ -122,7 +122,21 @@ def test_spatial_repository_materializes_endpoint_bindings(tmp_path):
             "bound": {
                 "id": "bound", "location_id": "a", "coordinate_space_id": "root",
                 "binding_kind": "area_border", "binding_target_id": "a",
-                "name": "A border", "kind": "waypoint", "x": 20, "y": 35,
+                "binding_segment_index": 0, "binding_segment_t": 0.5,
+                "name": "A border", "kind": "waypoint", "x": 25, "y": 30,
+                "discovered": True, "enabled": True,
+            },
+            "inside": {
+                "id": "inside", "location_id": "a", "coordinate_space_id": "root",
+                "binding_kind": "area", "binding_target_id": "a",
+                "binding_offset_x": 2, "binding_offset_y": -1,
+                "name": "A interior", "kind": "waypoint", "x": 27, "y": 34,
+                "discovered": True, "enabled": True,
+            },
+            "spot": {
+                "id": "spot", "location_id": "b", "coordinate_space_id": "root",
+                "binding_kind": "spot", "binding_target_id": "b",
+                "name": "B spot", "kind": "waypoint", "x": 70, "y": 60,
                 "discovered": True, "enabled": True,
             },
         },
@@ -137,6 +151,25 @@ def test_spatial_repository_materializes_endpoint_bindings(tmp_path):
     anchor = next(item for item in local["anchors"] if item["id"] == "bound")
     assert anchor["binding_kind"] == "area_border"
     assert anchor["binding_target_id"] == "a"
+    assert anchor["binding_segment_index"] == 0
+    assert anchor["binding_segment_t"] == 0.5
+    assert (anchor["x"], anchor["y"]) == (25.0, 30.0)
+
+    inside = next(item for item in local["anchors"] if item["id"] == "inside")
+    assert (inside["x"], inside["y"]) == (27.0, 34.0)
+    spot = next(item for item in local["anchors"] if item["id"] == "spot")
+    assert (spot["x"], spot["y"]) == (70.0, 60.0)
+
+    projection["entities"]["a"] = _location("a", "A", "root", 40, 50, area=True)
+    projection["entities"]["b"] = _location("b", "B", "root", 80, 75)
+    repository.synchronize(project_id, projection, force=True)
+    moved = repository.local_map(project_id, "root", administrative=True, include_geometry=True)
+    moved_border = next(item for item in moved["anchors"] if item["id"] == "bound")
+    moved_inside = next(item for item in moved["anchors"] if item["id"] == "inside")
+    moved_spot = next(item for item in moved["anchors"] if item["id"] == "spot")
+    assert (moved_border["x"], moved_border["y"]) == (40.0, 45.0)
+    assert (moved_inside["x"], moved_inside["y"]) == (42.0, 49.0)
+    assert (moved_spot["x"], moved_spot["y"]) == (80.0, 75.0)
 
 
 def test_spatial_repository_replaces_active_branch_atomically(tmp_path):
