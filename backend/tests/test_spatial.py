@@ -85,6 +85,63 @@ def test_open_map_resolves_scaled_free_travel() -> None:
     assert result["travel_minutes"] == 10
 
 
+def test_bound_anchor_positions_follow_spots_and_area_walls() -> None:
+    world = location("world", "World", topology="open")
+    area = location(
+        "area", "Area", "world", spatial_kind="area",
+        footprint={
+            "location_id": "world", "kind": "polygon",
+            "points": [
+                {"x": 10, "y": 10}, {"x": 30, "y": 10},
+                {"x": 30, "y": 30}, {"x": 10, "y": 30},
+            ],
+        },
+    )
+    spot = location(
+        "spot", "Spot", "world", spatial_kind="spot", x=60, y=70,
+        footprint={"location_id": "world", "kind": "point", "points": [{"x": 60, "y": 70}]},
+    )
+    view = projection(world, area, spot)
+    view["map_anchors"] = {
+        "inside": {
+            "id": "inside", "location_id": "area", "coordinate_space_id": "world",
+            "binding_kind": "area", "binding_target_id": "area",
+            "binding_offset_x": 3, "binding_offset_y": -2,
+            "name": "Inside", "kind": "waypoint", "x": 23, "y": 18,
+        },
+        "wall": {
+            "id": "wall", "location_id": "area", "coordinate_space_id": "world",
+            "binding_kind": "area_border", "binding_target_id": "area",
+            "binding_segment_index": 1, "binding_segment_t": 0.25,
+            "name": "Wall", "kind": "waypoint", "x": 30, "y": 15,
+        },
+        "spot-anchor": {
+            "id": "spot-anchor", "location_id": "spot", "coordinate_space_id": "world",
+            "binding_kind": "spot", "binding_target_id": "spot",
+            "name": "Spot", "kind": "waypoint", "x": 60, "y": 70,
+        },
+    }
+    service = SpatialService(view)
+    inside = service._anchor("inside")
+    wall = service._anchor("wall")
+    spot_anchor = service._anchor("spot-anchor")
+    assert (inside.x, inside.y) == (23, 18)
+    assert (wall.x, wall.y) == (30, 15)
+    assert (spot_anchor.x, spot_anchor.y) == (60, 70)
+
+    area["state"]["footprint"]["points"] = [
+        {"x": 20, "y": 20}, {"x": 40, "y": 20},
+        {"x": 40, "y": 40}, {"x": 20, "y": 40},
+    ]
+    spot["state"]["footprint"]["points"][0] = {"x": 65, "y": 75}
+    moved_inside = service._anchor("inside")
+    moved_wall = service._anchor("wall")
+    moved_spot = service._anchor("spot-anchor")
+    assert (moved_inside.x, moved_inside.y) == (33, 28)
+    assert (moved_wall.x, moved_wall.y) == (40, 25)
+    assert (moved_spot.x, moved_spot.y) == (65, 75)
+
+
 def test_route_validation_uses_endpoint_coordinate_space() -> None:
     world = location("world", "World", topology="closed", occupancy="direct_allowed")
     area = location("area", "Area", "world", spatial_kind="area")
