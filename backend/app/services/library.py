@@ -606,10 +606,12 @@ class GlobalLibraryService:
         if version in {"latest", "both"}:
             requested.append(("latest", versions["latest"]))
 
-        known_snapshots = [
-            item.get("snapshot")
-            for item in self.data.library.revisions(resource["id"])
-        ]
+        revisions = self.data.library.revisions(resource["id"])
+        revision_by_snapshot = {
+            json.dumps(item.get("snapshot"), sort_keys=True, separators=(",", ":")): item["id"]
+            for item in revisions
+        }
+        selected_revision_ids: dict[str, str] = {}
         for label, payload in requested:
             snapshot = {
                 "schema_version": 1,
@@ -617,18 +619,26 @@ class GlobalLibraryService:
                 "source_variant": label,
                 "payload": payload,
             }
-            if snapshot in known_snapshots:
-                continue
-            self.data.library.add_revision(
-                resource["id"],
-                snapshot,
-                source_project_id=project_id,
-                source_story_node_id=head_node_id,
-                source_kind=source_kind,
-                source_key=source_key,
-                note=f"Favorited {label} version",
-            )
-            known_snapshots.append(snapshot)
+            signature = json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+            revision_id = revision_by_snapshot.get(signature)
+            if not revision_id:
+                created = self.data.library.add_revision(
+                    resource["id"],
+                    snapshot,
+                    source_project_id=project_id,
+                    source_story_node_id=head_node_id,
+                    source_kind=source_kind,
+                    source_key=source_key,
+                    note=f"Favorited {label} version",
+                )
+                revision_id = created["id"]
+                revision_by_snapshot[signature] = revision_id
+            selected_revision_ids[label] = revision_id
+
+        desired_current = "latest" if version in {"latest", "both"} else "original"
+        current_revision_id = selected_revision_ids.get(desired_current)
+        if current_revision_id:
+            self.data.library.set_current_revision(resource["id"], current_revision_id)
         return self.data.library.resource(resource["id"]) or resource
 
     def favorite_resource_tree(
