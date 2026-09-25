@@ -1,4 +1,0 @@
-        session, stage, approved = planning.stage_for_generation(
-            session_id,
-            stage_number,
-        )

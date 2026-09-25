@@ -1,7 +1,0 @@
-        committed = self.planning.approve_stage(
-            session_id,
-            stage_number,
-            draft,
-            resolutions,
-            sync_legacy_state=False,
-        )

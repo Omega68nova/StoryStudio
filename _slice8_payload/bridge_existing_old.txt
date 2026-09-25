@@ -1,2 +1,0 @@
-        if existing:
-            return self.sync_session(existing["id"], session_id)

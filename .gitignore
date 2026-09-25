@@ -4,7 +4,6 @@ __pycache__/
 *.py[cod]
 node_modules/
 frontend/dist/
-data/
 .env
 *.log
 public/sounds/*

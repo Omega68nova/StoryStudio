@@ -1,7 +1,0 @@
-        imported = self.sync_session(plan["id"], session_id)
-        self.db.execute(
-            "UPDATE generation_plans SET legacy_import_complete=1 "
-            "WHERE id=?",
-            (plan["id"],),
-        )
-        return self.batch.get_plan(plan["id"])

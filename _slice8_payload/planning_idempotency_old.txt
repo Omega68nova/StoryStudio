@@ -1,1 +1,0 @@
-        if finalize and stage["status"] == "approved":

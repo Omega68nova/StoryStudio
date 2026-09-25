@@ -1,1 +1,0 @@
-        if sync_legacy_state and finalize and stage["status"] == "approved":
