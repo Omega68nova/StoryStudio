@@ -199,6 +199,66 @@ class GlobalLibraryService:
         }
 
 
+    def create_named_preset(
+        self,
+        *,
+        name: str,
+        description: str,
+        resource_ids: list[str],
+        tags: list[str] | None = None,
+    ) -> dict[str, Any]:
+        unique_ids = list(dict.fromkeys(resource_ids))
+        if not unique_ids:
+            raise ValueError("A preset requires at least one library resource")
+        children = []
+        for resource_id in unique_ids:
+            resource = self.data.library.resource(resource_id)
+            if not resource:
+                raise ValueError(f"Unknown library resource: {resource_id}")
+            children.append({
+                "child_resource_id": resource_id,
+                "relation_kind": "preset_member",
+                "required": True,
+            })
+        preset = self.data.library.create_resource(
+            resource_kind="bundle",
+            name=name,
+            description=description,
+            marked=True,
+            tags=tags or [],
+        )
+        self.data.library.set_children(preset["id"], children)
+        snapshot = {
+            "schema_version": 1,
+            "resource_kind": "bundle",
+            "preset_kind": "named_preset",
+            "members": unique_ids,
+        }
+        self.data.library.add_revision(
+            preset["id"],
+            snapshot,
+            source_kind="bundle",
+            source_key=preset["id"],
+            note="Created named preset",
+        )
+        return self.data.library.resource(preset["id"]) or preset
+
+    def export_library_resources(
+        self,
+        resource_ids: list[str],
+        *,
+        include_revisions: bool = True,
+    ) -> dict[str, Any]:
+        resources = self.data.library.export_resources(
+            resource_ids,
+            include_revisions=include_revisions,
+        )
+        return {
+            "schema": "storystudio.global_library.export",
+            "schema_version": 1,
+            "resources": resources,
+        }
+
     # ------------------------------------------------------------------
     # Favorite/reusable resource trees
     # ------------------------------------------------------------------
