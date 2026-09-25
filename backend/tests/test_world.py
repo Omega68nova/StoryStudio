@@ -3,7 +3,7 @@ import sqlite3
 
 import pytest
 
-from app.database import Database
+from app.database import Database, new_id, utc_now
 from app.services.planning import PlanningService
 from app.services.planningWorkspace import PlanningWorkspaceService
 from app.services.story_planner import normalize_native_tool_calls, parse_json_object
@@ -19,6 +19,42 @@ def create(engine: WorldEngine, project_id: str, **entity):
     mutations = engine.normalize_mutations(project_id, None, [{"tool": "createEntity", "arguments": entity}], provenance="author")
     engine.commit_root(project_id, mutations, provenance="author", summary="fixture")
     return mutations[0].arguments["entity_id"]
+
+
+def test_canonical_rule_cleanup_uses_transaction_project_for_world_events(tmp_path: Path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    project = db.create_project("Legacy effects")
+    now = utc_now()
+    transaction_id = new_id()
+    db.execute(
+        "INSERT INTO world_transactions(id,project_id,story_node_id,parent_node_id,branch_sequence,elapsed_minutes,display_time,provenance,status,summary,created_at) VALUES(?,?,NULL,NULL,0,0,NULL,'legacy','committed','legacy effects',?)",
+        (transaction_id, project["id"], now),
+    )
+    db.execute(
+        "INSERT INTO world_events(id,transaction_id,entity_id,event_type,ordinal,payload_json,created_at) VALUES(?,?,NULL,'effect.applied',0,'{}',?)",
+        (new_id(), transaction_id, now),
+    )
+    db.execute(
+        "INSERT INTO world_events(id,transaction_id,entity_id,event_type,ordinal,payload_json,created_at) VALUES(?,?,NULL,'entity.updated',1,?,?)",
+        (new_id(), transaction_id, '{"patch":{"active_effects":[{"id":"legacy"}]}}', now),
+    )
+    db.execute(
+        "CREATE TABLE stat_definitions_legacy_v2(id TEXT,project_id TEXT,stat_key TEXT,label TEXT,scope TEXT,default_value REAL,minimum REAL,maximum REAL,integer_only INTEGER,visibility TEXT,created_at TEXT,updated_at TEXT)"
+    )
+
+    with db.connect() as connection:
+        db._migrate_canonical_rules(connection)
+
+    assert not db.fetch_one("SELECT id FROM world_events WHERE event_type='effect.applied'")
+    payload = db.fetch_one("SELECT payload_json FROM world_events WHERE event_type='entity.updated'")["payload_json"]
+    assert "active_effects" not in payload
+    warnings = db.fetch_all(
+        "SELECT warning_kind,project_id FROM rule_migration_warnings WHERE project_id=?",
+        (project["id"],),
+    )
+    kinds = {row["warning_kind"] for row in warnings}
+    assert {"discarded_active_effects", "discarded_embedded_effects"} <= kinds
 
 
 def test_stat_icon_migration_recovers_if_column_already_exists_without_version(tmp_path: Path) -> None:

@@ -217,7 +217,9 @@ class Database:
                 self._migrate_legacy_ability(connection, dict(row), now)
 
         discarded = connection.execute(
-            "SELECT project_id,COUNT(*) count FROM world_events WHERE event_type='effect.applied' GROUP BY project_id"
+            "SELECT t.project_id,COUNT(*) count "
+            "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
+            "WHERE e.event_type='effect.applied' GROUP BY t.project_id"
         ).fetchall()
         for row in discarded:
             connection.execute(
@@ -229,7 +231,13 @@ class Database:
             )
         connection.execute("DELETE FROM world_events WHERE event_type='effect.applied'")
         embedded = connection.execute(
-            "SELECT project_id,COALESCE(SUM(COALESCE(json_array_length(json_extract(payload_json,'$.entity.active_effects')),0)+COALESCE(json_array_length(json_extract(payload_json,'$.patch.active_effects')),0)),0) count FROM world_events GROUP BY project_id"
+            "SELECT t.project_id,"
+            "COALESCE(SUM("
+            "COALESCE(json_array_length(json_extract(e.payload_json,'$.entity.active_effects')),0)+"
+            "COALESCE(json_array_length(json_extract(e.payload_json,'$.patch.active_effects')),0)"
+            "),0) count "
+            "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "
+            "GROUP BY t.project_id"
         ).fetchall()
         connection.execute("DROP TRIGGER IF EXISTS world_events_no_update")
         connection.execute(
@@ -328,7 +336,16 @@ class Database:
                 ).fetchone():
                     tail = f"_{suffix}"
                     effect_key, suffix = base[:64-len(tail)] + tail, suffix + 1
-                duration = max(0, int(effect.get("duration_value") or 0))
+                try:
+                    duration = max(0, int(effect.get("duration_value") or 0))
+                except (TypeError, ValueError):
+                    duration = 0
+                    connection.execute(
+                        "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (new_id(), project_id, "normalized_invalid_effect_duration",
+                         f"Reset invalid duration on migrated effect from ability {ability_key}.",
+                         json.dumps({"ability_key": ability_key, "position": position, "duration_value": effect.get("duration_value")}), now),
+                    )
                 duration_type = effect.get("duration_type")
                 clock = "story_minutes" if duration_type == "minutes" else "world_actions"
                 connection.execute(
@@ -337,9 +354,19 @@ class Database:
                      "Migrated from an inline ability effect.", target_stat_key, operation,
                      clock, duration, now, now),
                 )
+                try:
+                    effect_amount = float(effect.get("amount") or 0)
+                except (TypeError, ValueError):
+                    effect_amount = 0.0
+                    connection.execute(
+                        "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (new_id(), project_id, "normalized_invalid_effect_amount",
+                         f"Reset invalid amount on migrated effect from ability {ability_key}.",
+                         json.dumps({"ability_key": ability_key, "position": position, "amount": effect.get("amount")}), now),
+                    )
                 connection.execute(
                     "INSERT INTO effect_formula_nodes(id,project_id,effect_key,parent_id,position,node_kind,constant_value) VALUES(?,?,?,?,0,'constant',?)",
-                    (new_id(), project_id, effect_key, None, float(effect.get("amount") or 0)),
+                    (new_id(), project_id, effect_key, None, effect_amount),
                 )
                 connection.execute(
                     "INSERT INTO ability_actions(id,project_id,ability_key,position,action_kind,target,effect_key) VALUES(?,?,?,?, 'apply_effect',?,?)",
@@ -352,12 +379,22 @@ class Database:
                 "advance_time": "advance_time", "play_noise": "play_noise",
             }.get(operation)
             if action_kind:
+                try:
+                    action_minutes = int(effect.get("minutes") or effect.get("amount") or 0)
+                except (TypeError, ValueError):
+                    action_minutes = 0
+                    connection.execute(
+                        "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (new_id(), project_id, "normalized_invalid_action_minutes",
+                         f"Reset invalid minutes on migrated action from ability {ability_key}.",
+                         json.dumps({"ability_key": ability_key, "position": position, "minutes": effect.get("minutes"), "amount": effect.get("amount")}), now),
+                    )
                 connection.execute(
                     "INSERT INTO ability_actions(id,project_id,ability_key,position,action_kind,target,destination_id,entity_kind,entity_name,state_json,fact_id,relation,minutes,noise_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (new_id(), project_id, ability_key, position, action_kind, effect.get("target") or "target",
                      effect.get("destination_id"), effect.get("entity_kind"), effect.get("name"),
                      json.dumps(effect.get("state") or {}), effect.get("fact_id"), effect.get("relation"),
-                     int(effect.get("minutes") or effect.get("amount") or 0), effect.get("noise_id")),
+                     action_minutes, effect.get("noise_id")),
                 )
         for position, skill_id in enumerate(profile.get("bullethell_skill_ids", []) if isinstance(profile, dict) else []):
             connection.execute(
