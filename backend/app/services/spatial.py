@@ -153,10 +153,20 @@ class SpatialService:
             raise SpatialValidationError(str(exc)) from exc
         source_location, target_location = str(source.location_id), str(target.location_id)
         if connection.kind == "route" and not raw.get("legacy_migration"):
-            source_parent = self.locations()[source_location].get("state", {}).get("parent_location_id")
-            target_parent = self.locations()[target_location].get("state", {}).get("parent_location_id")
-            if source_location != target_location and source_parent != target_parent:
-                raise SpatialValidationError("Routes must remain within one map or connect sibling locations")
+            source_owner = self.locations()[source_location]
+            target_owner = self.locations()[target_location]
+            source_space = str(
+                source.coordinate_space_id
+                or source_owner.get("state", {}).get("parent_location_id")
+                or source_location
+            )
+            target_space = str(
+                target.coordinate_space_id
+                or target_owner.get("state", {}).get("parent_location_id")
+                or target_location
+            )
+            if source_space != target_space:
+                raise SpatialValidationError("Routes must keep both endpoints in the same map coordinate space")
         elif connection.kind == "door":
             source_parent = self.locations()[source_location].get("state", {}).get("parent_location_id")
             target_parent = self.locations()[target_location].get("state", {}).get("parent_location_id")
