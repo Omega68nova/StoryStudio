@@ -90,7 +90,7 @@ class LibraryStatPackSave(BaseModel):
 
 class LibraryStatPackApply(BaseModel):
     revision_id: str | None = None
-    conflict_policy: Literal["error", "skip", "replace"] = "error"
+    conflict_policy: Literal["error", "skip"] = "error"
     source_story_node_id: str | None = None
 
 
