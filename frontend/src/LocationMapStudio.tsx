@@ -787,6 +787,13 @@ export function LocationMapStudio({
     if (event.target !== event.currentTarget && (event.target as HTMLElement).closest("button")) return;
     const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
     if (tool === "spot") void createSpot(point);
+    if (tool === "route") {
+      if (routePoints.length === 0) setRoutePoints([point]);
+      else {
+        beginRouteDialog(routePoints[0], point);
+        setRoutePoints([]);
+      }
+    }
     if (tool === "area") {
       if (areaDraft.length >= 3 && distance(point, areaDraft[0]) < 2.5) {
         void finishArea(true);
@@ -799,10 +806,35 @@ export function LocationMapStudio({
   function changeTool(next: Tool) {
     setTool(next);
     setAreaDraft([]);
-    setRouteStartId(null);
+    setRoutePoints([]);
+    setRouteDialog(null);
     setDragLocation(null);
     setVertexDrag(null);
   }
+
+  const areaContents = useMemo(() => {
+    const result: Record<string, SpatialLocation[]> = {};
+    if (!map || !world) return result;
+    const areas = map.locations
+      .map(item => ({ item, entity: world.entities[item.id] }))
+      .filter((entry): entry is { item: SpatialLocation; entity: WorldEntity } =>
+        Boolean(entry.entity && entry.entity.state.spatial_kind === "area" && geometryPoints(entry.entity).length >= 3)
+      );
+    areas.forEach(({ item }) => { result[item.id] = []; });
+    for (const item of map.locations) {
+      const entity = world.entities[item.id];
+      if (!entity) continue;
+      const points = geometryPoints(entity);
+      const point = points.length ? centroid(points) : { x: Number(item.x ?? entity.state.x ?? 0), y: Number(item.y ?? entity.state.y ?? 0) };
+      const owners = areas
+        .filter(({ item: area, entity: areaEntity }) => area.id !== item.id && pointInPolygon(point, geometryPoints(areaEntity)))
+        .sort((a, b) => compareAreaPriority(a.entity, b.entity));
+      const winner = owners[0]?.item.id;
+      if (winner) result[winner]?.push(item);
+    }
+    Object.values(result).forEach(items => items.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.id < b.id ? -1 : 1));
+    return result;
+  }, [map, world]);
 
   if (!map) return <p>Loading location map…</p>;
   if (!map.enabled) {
@@ -853,7 +885,7 @@ export function LocationMapStudio({
         {tool === "area" && areaDraft.length >= 2 && <Button size="small" onClick={() => void finishArea(false)}>
           Finish as wall
         </Button>}
-        {tool === "area" && areaDraft.length >= 3 && <Button size="small" variant="outlined" onClick={() => void finishArea(true)}>
+        {tool === "area" && areaDraft.length >= 2 && <Button size="small" variant="outlined" onClick={() => void finishArea(true)}>
           Close as area
         </Button>}
         {tool === "area" && areaDraft.length > 0 && <Button size="small" onClick={() => setAreaDraft([])}>Cancel drawing</Button>}
