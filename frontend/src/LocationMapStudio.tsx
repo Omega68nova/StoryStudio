@@ -22,6 +22,7 @@ import type {
   EnvironmentLocation,
   EnvironmentSettings,
   MediaAsset,
+  WorkflowPreset,
   WorldEntity,
   WorldProjection,
 } from "./types";
@@ -264,15 +265,18 @@ const locationDraft = (entity: WorldEntity): EnvironmentLocation => {
 export function LocationMapStudio({
   projectId,
   revision,
+  workflows,
   fail,
 }: {
   projectId: string;
   revision: number;
+  workflows: WorkflowPreset[];
   fail: (message: string) => void;
 }) {
   const [map, setMap] = useState<SpatialMap | null>(null);
   const [world, setWorld] = useState<WorldProjection | null>(null);
   const [environmentSettings, setEnvironmentSettings] = useState<EnvironmentSettings | null>(null);
+  const [environmentSettingsOpen, setEnvironmentSettingsOpen] = useState(false);
   const [layerId, setLayerId] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -454,6 +458,27 @@ export function LocationMapStudio({
       x: clamp(round(((clientX - rect.left) / rect.width) * 100 / zoom)),
       y: clamp(round(((clientY - rect.top) / rect.height) * 100 / zoom)),
     };
+  }
+
+  async function saveEnvironmentSettings(patch: Partial<EnvironmentSettings>) {
+    if (!environmentSettings) return;
+    try {
+      const next = await api<EnvironmentSettings>(`/projects/${projectId}/environment/settings`, {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: patch.enabled ?? environmentSettings.enabled,
+          ai_create_locations: patch.ai_create_locations ?? environmentSettings.ai_create_locations,
+          ai_propose_weather: patch.ai_propose_weather ?? environmentSettings.ai_propose_weather,
+          auto_generate_backgrounds: patch.auto_generate_backgrounds ?? environmentSettings.auto_generate_backgrounds,
+          background_workflow_id: patch.background_workflow_id !== undefined ? patch.background_workflow_id : environmentSettings.background_workflow_id,
+          initial_weather_id: patch.initial_weather_id ?? environmentSettings.initial_weather_id,
+          perception_stat_key: patch.perception_stat_key !== undefined ? patch.perception_stat_key : (environmentSettings.perception_stat_key ?? null),
+        }),
+      });
+      setEnvironmentSettings(next);
+    } catch (cause) {
+      fail(String(cause));
+    }
   }
 
   async function migrate() {
@@ -1200,8 +1225,8 @@ export function LocationMapStudio({
     <header className="location-map-header">
       <div className="location-map-heading">
         <div>
-          <p className="eyebrow">SPATIAL AUTHORING</p>
-          <h2>{currentLayer?.name ?? "Location Map"}</h2>
+          <p className="eyebrow">ENVIRONMENT & MAP</p>
+          <h2>{currentLayer?.name ?? "Environment & Map"}</h2>
         </div>
         <Chip size="small" label={`${map.topology ?? "closed"} layer`} />
       </div>
@@ -1260,6 +1285,7 @@ export function LocationMapStudio({
           >{item.label}</Button>)}
         </ButtonGroup>
         <span className="location-map-toolbar-spacer" />
+        <Button size="small" variant="outlined" onClick={() => setEnvironmentSettingsOpen(true)}>Environment settings</Button>
         {tool === "area" && areaDraft.length >= 2 && <Button size="small" onClick={() => void finishArea(false)}>
           Finish as wall
         </Button>}
@@ -1793,6 +1819,54 @@ export function LocationMapStudio({
         Remove point
       </MenuItem>
     </Menu>
+
+    <Dialog open={environmentSettingsOpen} onClose={() => setEnvironmentSettingsOpen(false)} fullWidth maxWidth="sm">
+      <DialogTitle>Environment settings</DialogTitle>
+      <DialogContent className="location-map-environment-dialog">
+        {environmentSettings && <>
+          <p className="location-map-route-dialog-intro">Project-wide environment behavior now lives alongside the map. Weather/time catalog editing is still in the transitional Environment settings tab for this first Slice A pass.</p>
+          <div className="location-map-switches">
+            <FormControlLabel control={<Switch checked={environmentSettings.enabled} onChange={event => void saveEnvironmentSettings({ enabled: event.target.checked })} />} label="Environment enabled" />
+            <FormControlLabel control={<Switch checked={environmentSettings.ai_create_locations} onChange={event => void saveEnvironmentSettings({ ai_create_locations: event.target.checked })} />} label="AI may create locations" />
+            <FormControlLabel control={<Switch checked={environmentSettings.ai_propose_weather} onChange={event => void saveEnvironmentSettings({ ai_propose_weather: event.target.checked })} />} label="AI may propose weather" />
+            <FormControlLabel control={<Switch checked={environmentSettings.auto_generate_backgrounds} onChange={event => void saveEnvironmentSettings({ auto_generate_backgrounds: event.target.checked })} />} label="Automatic backgrounds" />
+          </div>
+          <TextField
+            select
+            fullWidth
+            size="small"
+            label="Initial weather"
+            value={environmentSettings.initial_weather_id}
+            onChange={event => void saveEnvironmentSettings({ initial_weather_id: event.target.value })}
+          >
+            {environmentSettings.weather.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+          </TextField>
+          <TextField
+            select
+            fullWidth
+            size="small"
+            label="Background workflow"
+            value={environmentSettings.background_workflow_id ?? ""}
+            onChange={event => void saveEnvironmentSettings({ background_workflow_id: event.target.value || null, auto_generate_backgrounds: event.target.value ? environmentSettings.auto_generate_backgrounds : false })}
+          >
+            <MenuItem value="">None</MenuItem>
+            {workflows.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+          </TextField>
+          <TextField
+            fullWidth
+            size="small"
+            label="Perception stat key"
+            helperText="Optional character stat used to scale map discovery."
+            value={environmentSettings.perception_stat_key ?? ""}
+            onChange={event => setEnvironmentSettings({ ...environmentSettings, perception_stat_key: event.target.value })}
+            onBlur={event => void saveEnvironmentSettings({ perception_stat_key: event.target.value.trim() || null })}
+          />
+        </>}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setEnvironmentSettingsOpen(false)}>Close</Button>
+      </DialogActions>
+    </Dialog>
 
     <Dialog open={Boolean(routeDialog)} onClose={() => { setRouteDialog(null); setRoutePoints([]); }} fullWidth maxWidth="sm">
       <DialogTitle>Configure route endpoints</DialogTitle>
