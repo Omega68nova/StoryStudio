@@ -2574,7 +2574,6 @@ async def get_rules(project_id: str) -> dict[str, Any]:
 def _validate_stat_bound_references(
     project_id: str,
     request: StatDefinitionCreate,
-    *,
 ) -> None:
     definitions = {item.stat_key: item for item in data.rules.stats(project_id)}
     for field in ("minimum_stat_key", "maximum_stat_key"):
