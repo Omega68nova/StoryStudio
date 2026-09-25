@@ -832,6 +832,124 @@ export function LocationMapStudio({
     await loadBackgrounds(selectedLocation.id);
   }
 
+  function renderedGeometryPoints(entity?: WorldEntity | null): Point[] {
+    if (!entity) return [];
+    const points = geometryPoints(entity).map(point => ({ ...point }));
+    if (dragLocation?.id === entity.id) {
+      return points.map(point => ({
+        x: clamp(round(point.x + dragOffset.x)),
+        y: clamp(round(point.y + dragOffset.y)),
+      }));
+    }
+    if (vertexDrag?.locationId === entity.id && vertexPreview && points[vertexDrag.index]) {
+      points[vertexDrag.index] = vertexPreview;
+    }
+    return points;
+  }
+
+  function resolvedAnchorPoint(anchor?: SpatialAnchor | null): Point | null {
+    if (!anchor) return null;
+    const fallback = anchor.x != null && anchor.y != null ? { x: Number(anchor.x), y: Number(anchor.y) } : null;
+    if (!anchor.binding_target_id || !anchor.binding_kind || anchor.binding_kind === "coordinate" || !world) return fallback;
+    const target = world.entities[anchor.binding_target_id];
+    if (!target) return fallback;
+    const points = renderedGeometryPoints(target);
+
+    if (anchor.binding_kind === "spot") {
+      if (points.length) return points[0];
+      if (typeof target.state.x === "number" && typeof target.state.y === "number") {
+        const offset = dragLocation?.id === target.id ? dragOffset : { x: 0, y: 0 };
+        return { x: round(target.state.x + offset.x), y: round(target.state.y + offset.y) };
+      }
+      return fallback;
+    }
+
+    if (anchor.binding_kind === "area" && points.length) {
+      const center = centroid(points);
+      if (typeof anchor.binding_offset_x === "number" && typeof anchor.binding_offset_y === "number") {
+        return {
+          x: round(center.x + anchor.binding_offset_x),
+          y: round(center.y + anchor.binding_offset_y),
+        };
+      }
+      return fallback;
+    }
+
+    if (anchor.binding_kind === "area_border" && points.length >= 2) {
+      const index = anchor.binding_segment_index;
+      const ratio = anchor.binding_segment_t;
+      if (typeof index === "number" && typeof ratio === "number") {
+        const left = points[index % points.length];
+        const right = points[(index + 1) % points.length];
+        return {
+          x: round(left.x + (right.x - left.x) * ratio),
+          y: round(left.y + (right.y - left.y) * ratio),
+        };
+      }
+      if (fallback) return closestBorderPoint(fallback, points)?.point ?? fallback;
+    }
+    return fallback;
+  }
+
+  function hitCandidates(point: Point): HitCandidate[] {
+    if (!map || !world) return [];
+    const candidates: HitCandidate[] = [];
+    for (const item of map.locations) {
+      const entity = world.entities[item.id];
+      if (!entity) continue;
+      const points = renderedGeometryPoints(entity);
+      if (entity.state.spatial_kind === "area") {
+        const border = closestBorderPoint(point, points);
+        if (pointInPolygon(point, points) || (border && border.distance <= 1.8)) {
+          candidates.push({ id: item.id, label: item.name, detail: "area" });
+        }
+      } else {
+        const spot = points[0] ?? { x: Number(item.x ?? entity.state.x ?? 0), y: Number(item.y ?? entity.state.y ?? 0) };
+        if (distance(point, spot) <= 2.7) candidates.push({ id: item.id, label: item.name, detail: "spot" });
+      }
+    }
+    for (const anchor of map.anchors) {
+      if ((anchor.binding_kind ?? "coordinate") !== "coordinate") continue;
+      const anchorPoint = resolvedAnchorPoint(anchor);
+      if (anchorPoint && distance(point, anchorPoint) <= 2.2) {
+        candidates.push({ id: anchor.id, label: anchor.name, detail: "coordinate endpoint" });
+      }
+    }
+    for (const connection of map.connections) {
+      const source = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.source_anchor_id));
+      const target = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.target_anchor_id));
+      if (source && target && distanceToSegment(point, source, target) <= 1.4) {
+        const label = connection.kind === "route" ? "Route / shortcut" : connection.kind === "portal" ? "Portal" : "Door";
+        candidates.push({ id: connection.id, label, detail: "connection" });
+      }
+    }
+    for (const barrier of map.barriers) {
+      const points = barrier.geometry?.points ?? [];
+      if (points.some((segmentStart, index) =>
+        index < points.length - 1 && distanceToSegment(point, segmentStart, points[index + 1]) <= 1.4
+      )) {
+        candidates.push({ id: barrier.id, label: barrier.name, detail: "barrier" });
+      }
+    }
+    return candidates;
+  }
+
+  function openShiftHitMenu(event: MouseEvent<HTMLDivElement>) {
+    if (!event.shiftKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
+    const candidates = hitCandidates(point);
+    if (candidates.length === 1) {
+      setSelectedId(candidates[0].id);
+      setHitMenu(null);
+      return;
+    }
+    if (candidates.length > 1) {
+      setHitMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, candidates });
+    }
+  }
+
   function canvasClick(event: MouseEvent<HTMLDivElement>) {
     if (tool !== "route" && event.target !== event.currentTarget && (event.target as HTMLElement).closest("button")) return;
     const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
