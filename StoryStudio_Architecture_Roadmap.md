@@ -1401,7 +1401,7 @@ Phase 6 — UI/world configuration cleanup
     IN PROGRESS — Slice 2 complete
 
 Phase 7 — Canonical storage refactor
-    IN PROGRESS — typed entity contract slice complete
+    IN PROGRESS — typed entities, spatial storage, and canonical rules complete
 
 Phase 8 — Branch-aware context retrieval (RAG)
     FUTURE — depends on Phase 7 canonical records
@@ -1464,3 +1464,28 @@ fields and sparse historical shapes, and expose canonical references without
 changing persistence or HTTP payloads. Item gameplay semantics, relationship
 definitions, media slots, storage normalization, and planner adoption remain
 separate later slices.
+
+## Phase 7 canonical-rules slice status
+
+Stats, reusable effects, and abilities now use immutable project-local keys
+and normalized repository tables. Stat definitions declare compatible owner
+kinds and support transitive stat-derived bounds. Global effects own their
+target stat, bounded expression tree, timing clock, evaluation mode, and
+stacking policy. Abilities reference those effects and keep movement, noise,
+knowledge, relationship, time, creation, and removal as separate typed
+actions.
+
+Runtime rule behavior is extracted from `WorldEngine` into `RulesRuntime` and
+`RuleEventProjector`. `WorldEngine` remains the branch-aware coordinator: it
+orders mutations, validates the complete projection, and commits transactions,
+but it no longer evaluates formulas, resolves ability costs, advances active
+effects, performs passive cascades, or owns rule-specific projection shapes.
+Canonical repository validation is shared by HTTP editing, planning
+publication, and deep cloning, while dependency-aware publication preserves
+dynamic stat bounds and cross-ability references.
+
+The Rules screen uses structured stat, formula, effect, requirement, cost,
+action, trigger, and minigame editors. Legacy inline requirement/cost/effect
+JSON columns are removed by migration 042. Marker-only statuses and temporary
+legacy instances are intentionally discarded with visible migration warnings;
+permanent `stat.changed` history is retained.

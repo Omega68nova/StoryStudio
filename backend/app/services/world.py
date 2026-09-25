@@ -15,6 +15,7 @@ from app.domain.adapters import (
 )
 from app.domain.operations import DomainOperationError
 from app.domain.world import Character, TypedWorldEntity
+from app.services.rule_events import RuleEventProjector
 from app.services.rules import RulesRuntime, RulesRuntimeError
 
 
@@ -194,7 +195,6 @@ class WorldEngine:
                 "elapsed_minutes": transaction["elapsed_minutes"], "provenance": transaction["provenance"],
             })
             projection["branch_sequence"] = transaction["branch_sequence"]
-            self._expire_effects(projection)
         self.repo.store_projection(
             cache_key=cache_key,
             project_id=project_id,
@@ -246,25 +246,8 @@ class WorldEngine:
                 projection["display_time"] = payload["display_time"]
         elif event_type == "plot_beat.updated" and entity_id in entities:
             entities[entity_id].setdefault("state", {}).update({key: value for key, value in payload.items() if key != "entity_id"})
-        elif event_type == "stat.changed":
-            container = entities.get(payload.get("entity_id")) or relations.get(payload.get("relation_id"))
-            if container is not None:
-                container.setdefault("stats", {})[payload["stat_key"]] = payload["value"]
-        elif event_type == "effect.instance_applied":
-            for replaced in payload.get("replace_instance_ids", []):
-                projection.setdefault("active_effects", {}).pop(replaced, None)
-            projection.setdefault("active_effects", {})[payload["id"]] = copy.deepcopy(payload)
-        elif event_type == "effect.instance_updated":
-            instance = projection.setdefault("active_effects", {}).get(payload["id"])
-            if instance: instance.update(copy.deepcopy(payload))
-        elif event_type == "effect.instance_removed":
-            projection.setdefault("active_effects", {}).pop(payload["id"], None)
-        elif event_type == "story.action_committed":
-            projection["world_action_count"] = int(projection.get("world_action_count", 0)) + 1
-            actor_id = payload.get("actor_id")
-            if actor_id:
-                counts = projection.setdefault("target_action_counts", {})
-                counts[actor_id] = int(counts.get(actor_id, 0)) + 1
+        elif RuleEventProjector.apply(projection, event_type, payload, entity_id):
+            pass
         elif event_type == "theme.selected":
             projection["current_theme_id"] = payload.get("theme_id")
         elif event_type == "environment.scene_set":
@@ -272,19 +255,6 @@ class WorldEngine:
             projection["player_action"] = payload.get("player_action", "standing")
             if payload.get("weather_id"):
                 projection["current_weather_id"] = payload["weather_id"]
-        elif event_type == "inventory.adjusted" and entity_id in entities:
-            inventory = list(entities[entity_id].setdefault("state", {}).get("inventory", []))
-            found = False
-            for entry in inventory:
-                if entry.get("item_id") == payload["item_id"]:
-                    entry["quantity"] = payload["quantity"]
-                    found = True
-                    break
-            if not found and payload["quantity"] > 0:
-                inventory.append({"item_id": payload["item_id"], "quantity": payload["quantity"]})
-            entities[entity_id]["state"]["inventory"] = [entry for entry in inventory if int(entry.get("quantity", 0)) > 0]
-            if int(payload["quantity"]) <= 0:
-                entities[entity_id]["state"]["equipment"] = [item for item in entities[entity_id]["state"].get("equipment", []) if str(item) != str(payload["item_id"])]
         elif event_type == "world.root_set":
             previous = projection.get("root_location_id")
             projection["root_location_id"] = payload["root_location_id"]
@@ -313,11 +283,6 @@ class WorldEngine:
             projection.get(payload.get("collection"), {}).pop(payload.get("id"), None)
         elif event_type == "travel.itinerary_set":
             projection["travel_itineraries"][payload["id"]] = copy.deepcopy(payload)
-
-    @staticmethod
-    def _expire_effects(projection: dict[str, Any]) -> None:
-        # Canonical instances expire through explicit events so replay remains deterministic.
-        return
 
     def normalize_mutations(
         self, project_id: str, head_node_id: str | None, raw: Iterable[dict[str, Any]], *, provenance: str = "ai",
@@ -650,7 +615,7 @@ class WorldEngine:
                     raise WorldValidationError("Story time cannot move backward")
                 arguments["minutes"] = minutes
                 try: arguments["scheduled_effects"] = self.rules_runtime.due_effects(project_id, projection, "story_minutes", int(projection.get("elapsed_minutes", 0)) + minutes)
-                except RulesRuntimeError as exc: raise WorldValidationError(str(exc)) from exc
+                except (DomainOperationError, RulesRuntimeError) as exc: raise WorldValidationError(str(exc)) from exc
             elif tool == "setSceneEnvironment":
                 settings = self.db.fetch_one("SELECT enabled,initial_weather_id FROM project_environment_settings WHERE project_id=?", (project_id,)) or {"enabled": 0}
                 if not settings["enabled"]:
@@ -688,7 +653,7 @@ class WorldEngine:
                     raise WorldValidationError("Unsupported plot-beat status")
             elif tool == "adjustStat":
                 try: arguments = self.rules_runtime.adjust_stat(project_id, projection, arguments)
-                except RulesRuntimeError as exc: raise WorldValidationError(str(exc)) from exc
+                except (DomainOperationError, RulesRuntimeError) as exc: raise WorldValidationError(str(exc)) from exc
             elif tool == "useAbility":
                 try:
                     arguments = self.rules_runtime.normalize_ability(project_id, projection, arguments, provenance)
@@ -696,10 +661,10 @@ class WorldEngine:
                         *self.rules_runtime.due_effects(project_id, projection, "world_actions", int(projection.get("world_action_count", 0)) + 1),
                         *self.rules_runtime.due_effects(project_id, projection, "target_actions", int(projection.get("target_action_counts", {}).get(arguments["actor_id"], 0)) + 1, target_id=str(arguments["actor_id"])),
                     ]
-                except RulesRuntimeError as exc: raise WorldValidationError(str(exc)) from exc
+                except (DomainOperationError, RulesRuntimeError) as exc: raise WorldValidationError(str(exc)) from exc
             elif tool == "applyEffect":
                 try: arguments = self.rules_runtime.direct_effect(project_id, projection, arguments)
-                except RulesRuntimeError as exc: raise WorldValidationError(str(exc)) from exc
+                except (DomainOperationError, RulesRuntimeError) as exc: raise WorldValidationError(str(exc)) from exc
             elif tool == "removeEffect":
                 instance_id = str(arguments.get("active_instance_id") or "")
                 if instance_id not in projection.get("active_effects", {}): raise WorldValidationError("Active effect instance not found")
@@ -743,10 +708,52 @@ class WorldEngine:
             mutation = NormalizedMutation(tool, arguments, major, reason)
             base_events = self._base_mutation_events(mutation)
             try:
-                passive = self.rules_runtime.passive_cascade(project_id, projection, base_events)
+                elapsed = sum(
+                    int(payload.get("minutes", 0))
+                    for event_type, _entity_id, payload in base_events
+                    if event_type == "time.advanced"
+                )
+                scheduled_time = (
+                    self.rules_runtime.due_effects(
+                        project_id,
+                        projection,
+                        "story_minutes",
+                        int(projection.get("elapsed_minutes", 0)) + elapsed,
+                    )
+                    if elapsed > 0 and tool != "advanceTime"
+                    else []
+                )
+                scheduled_events = [
+                    (
+                        item["event_type"],
+                        item.get("entity_id"),
+                        {key: value for key, value in item.items() if key != "event_type"},
+                    )
+                    for item in scheduled_time
+                ]
+                rule_base_events = [*base_events, *scheduled_events]
+                passive = self.rules_runtime.passive_cascade(project_id, projection, rule_base_events)
+                derived = [
+                    *scheduled_time,
+                    *passive,
+                    *self.rules_runtime.dependent_clamps(
+                        project_id,
+                        projection,
+                        [
+                            *rule_base_events,
+                            *[
+                                (
+                                    item["event_type"],
+                                    item.get("entity_id"),
+                                    {key: value for key, value in item.items() if key != "event_type"},
+                                )
+                                for item in passive
+                            ],
+                        ],
+                    ),
+                ]
             except (DomainOperationError, RulesRuntimeError) as exc:
                 raise WorldValidationError(str(exc)) from exc
-            derived = [*passive, *self.rules_runtime.dependent_clamps(project_id, projection, [*base_events, *[(item["event_type"], item.get("entity_id"), {key: value for key, value in item.items() if key != "event_type"}) for item in passive]])]
             if derived:
                 mutation.arguments["_derived_events"] = derived
             normalized.append(mutation)
@@ -834,6 +841,9 @@ class WorldEngine:
     @staticmethod
     def _base_mutation_events(mutation: NormalizedMutation) -> list[tuple[str, str | None, dict[str, Any]]]:
         tool, args = mutation.tool, mutation.arguments
+        rule_events = RuleEventProjector.mutation_events(tool, args)
+        if rule_events is not None:
+            return rule_events
         if tool == "createEntity":
             entity = {
                 "id": args["entity_id"], "kind": args["kind"], "name": args["name"],
@@ -899,44 +909,10 @@ class WorldEngine:
             return rows
         if tool == "updatePlotBeat":
             return [("plot_beat.updated", args["entity_id"], args)]
-        if tool == "adjustStat":
-            return [("stat.changed", args.get("entity_id"), args)]
         if tool == "selectTheme":
             return [("theme.selected", None, args)]
         if tool == "playNoise":
             return [("noise.played", None, args)]
-        if tool == "useAbility":
-            rows: list[tuple[str, str | None, dict[str, Any]]] = [("ability.used", args["actor_id"], args)]
-            rows.extend(("stat.changed", cost.get("entity_id"), cost) for cost in args.get("costs", []))
-            rows.extend(("inventory.adjusted", change.get("entity_id"), change) for change in args.get("inventory_changes", []))
-            for effect in args.get("effects", []):
-                payload = {**effect, "ability_key": args["ability_key"]}
-                event_type = str(payload.pop("event_type", "stat.changed"))
-                if event_type == "stat.changed" and (
-                    "expires_sequence" in effect or "expires_elapsed_minutes" in effect
-                ):
-                    event_type = "effect.applied"
-                if event_type == "entity.created":
-                    entity = {key: payload[key] for key in (
-                        "entity_id", "kind", "name", "aliases", "tags", "state"
-                    ) if key in payload}
-                    entity["id"] = entity.pop("entity_id")
-                    payload = {"entity": entity, "ability_key": args["ability_key"]}
-                rows.append((event_type, effect.get("entity_id"), payload))
-            rows.extend((str(item["event_type"]), item.get("entity_id"), {key: value for key, value in item.items() if key != "event_type"}) for item in args.get("scheduled_effects", []))
-            rows.append(("story.action_committed", args["actor_id"], {"actor_id": args["actor_id"]}))
-            return rows
-        if tool == "applyEffect":
-            event_type = str(args.get("event_type", "stat.changed"))
-            return [(event_type, args.get("entity_id"), {key: value for key, value in args.items() if key != "event_type"})]
-        if tool == "removeEffect":
-            return [("effect.instance_removed", None, args)]
-        if tool == "cloneEffectInstance":
-            return [("effect.instance_applied", None, args)]
-        if tool == "storyAction":
-            rows = [("story.action_committed", args.get("actor_id"), {"actor_id": args.get("actor_id")})]
-            rows.extend((str(item["event_type"]), item.get("entity_id"), {key: value for key, value in item.items() if key != "event_type"}) for item in args.get("scheduled_effects", []))
-            return rows
         if tool == "adjustInventory":
             return [("inventory.adjusted", args["character_id"], args)]
         if tool == "setSceneEnvironment":
@@ -983,7 +959,7 @@ class WorldEngine:
                 base_events = self._base_mutation_events(action)
                 passive = self.rules_runtime.passive_cascade(project_id, projected, base_events)
                 action.arguments["_derived_events"] = [*passive, *self.rules_runtime.dependent_clamps(project_id, projected, [*base_events, *[(row["event_type"], row.get("entity_id"), {key: value for key, value in row.items() if key != "event_type"}) for row in passive]])]
-            except RulesRuntimeError as exc:
+            except (DomainOperationError, RulesRuntimeError) as exc:
                 raise WorldValidationError(str(exc)) from exc
             mutations = [*mutations, action]
         assistant_id = new_id()

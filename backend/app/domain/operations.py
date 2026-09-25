@@ -134,7 +134,7 @@ class TargetResolver:
 
 
 StatLookup = Callable[..., Stat]
-EffectiveStats = Callable[[Character], dict[str, float]]
+EffectiveStats = Callable[[Any], dict[str, float]]
 
 
 class RequirementEvaluator:
@@ -168,7 +168,7 @@ class RequirementEvaluator:
             if isinstance(target, Location): return False
             scope = "relationship" if isinstance(target, Relationship) else "character"
             definition = stat_lookup(str(node.stat_key), scope)
-            stats = effective_stats(target) if isinstance(target, Character) else target.stats
+            stats = effective_stats(target)
             return self._compare(stats.get(str(node.stat_key), definition.default_value), str(node.comparison), node.value)
         if kind == "has_tag": return str(node.tag) in set(getattr(target, "tags", []))
         if kind == "has_item" and isinstance(target, Character): return any(str(x.item_id) == str(node.item_id) and x.quantity > 0 for x in target.state.inventory)
@@ -231,9 +231,11 @@ class EffectExecutor:
 
     def normalize(self, *, projection: dict[str, Any], actor: Character, primary_target: ResolvedTarget, ability: Ability, next_sequence: int, elapsed_minutes: int, stat_lookup: StatLookup, effective_stats: EffectiveStats, id_factory: Callable[[], str] | None = None) -> EffectExecution:
         working: dict[tuple[str, str, str], float] = {}
+        actor_values = effective_stats(actor)
         def base(target: ResolvedTarget, definition: Stat) -> float:
             key = (target.scope, target.id, definition.stat_key)
-            working.setdefault(key, float(target.container.stats.get(definition.stat_key, definition.default_value)))
+            initial = actor_values.get(definition.stat_key, definition.default_value) if target.id == actor.id else target.container.stats.get(definition.stat_key, definition.default_value)
+            working.setdefault(key, float(initial))
             return working[key]
         actor_target = self.targets._entity(projection, str(actor.id), "character")
         costs: list[dict[str, Any]] = []
@@ -244,16 +246,13 @@ class EffectExecutor:
             definition = stat_lookup(key, "character")
             current = base(actor_target, definition)
             if cost < 0: raise DomainOperationError("Ability costs cannot be negative")
-            if float(effective_stats(actor).get(key, current)) < cost: raise DomainOperationError(f"{actor.name} lacks enough {definition.label}")
+            if current < cost: raise DomainOperationError(f"{actor.name} lacks enough {definition.label}")
             value = self._bounded_value(
                 definition,
                 current,
                 "subtract",
                 cost,
-                values={
-                    key: float(value)
-                    for key, value in actor_target.container.stats.items()
-                },
+                values={**actor_values, key: current},
                 stat_lookup=stat_lookup,
             )
             working[("character", str(actor.id), key)] = float(value)
@@ -307,7 +306,7 @@ class FormulaEvaluator:
 
 class StatAdjustmentExecutor:
     def __init__(self, target_resolver: TargetResolver | None = None) -> None: self.targets = target_resolver or TargetResolver()
-    def normalize(self, *, projection: dict[str, Any], entity_id: Any = None, relation_id: Any = None, stat_key: str, operation: str, amount: Any, stat_lookup: StatLookup) -> dict[str, Any]:
+    def normalize(self, *, projection: dict[str, Any], entity_id: Any = None, relation_id: Any = None, stat_key: str, operation: str, amount: Any, stat_lookup: StatLookup, effective_values: Callable[[ResolvedTarget], dict[str, float]] | None = None) -> dict[str, Any]:
         target = self.targets.resolve_stat_target(projection, entity_id=entity_id, relation_id=relation_id)
         definition = stat_lookup(stat_key, target.scope)
         current, numeric = float(target.container.stats.get(definition.stat_key, definition.default_value)), float(amount)
@@ -317,9 +316,8 @@ class StatAdjustmentExecutor:
             current,
             operation,
             numeric,
-            values={
-                key: float(value)
-                for key, value in target.container.stats.items()
+            values=effective_values(target) if effective_values else {
+                key: float(value) for key, value in target.container.stats.items()
             },
             stat_lookup=stat_lookup,
         )

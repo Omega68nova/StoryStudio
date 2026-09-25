@@ -3,8 +3,10 @@ from pathlib import Path
 
 import pytest
 from PIL import Image
+from pydantic import ValidationError
 
 from app.database import Database, new_id, utc_now
+from app.domain.world import Ability, EffectDefinition, Stat
 from app.services.media import MediaValidationError, content_hash, validate_audio, validate_image
 from app.services.npc import NpcDirector
 from app.services.world import WorldEngine, WorldValidationError
@@ -21,27 +23,28 @@ def entity(world, project_id, name, state):
     return mutation[0].arguments["entity_id"]
 
 
-def add_rules(db, project_id):
-    now = utc_now()
+def add_rules(world, project_id):
     for key, default in (("hp", 100), ("mana", 20)):
-        db.execute("INSERT INTO stat_definitions(id, project_id, stat_key, label, scope, default_value, minimum, maximum, integer_only, visibility, created_at, updated_at) VALUES (?, ?, ?, ?, 'character', ?, 0, 100, 1, 'public', ?, ?)", (new_id(), project_id, key, key.upper(), default, now, now))
-    db.execute("INSERT INTO ability_definitions(id, project_id, ability_key, name, description, target_type, requirements_json, costs_json, effects_json, created_at, updated_at) VALUES (?, ?, 'ward', 'Ward', '', 'self', '{}', '{\"mana\":5}', '[{\"target\":\"actor\",\"stat_key\":\"hp\",\"operation\":\"add\",\"amount\":10,\"duration_type\":\"turns\",\"duration_value\":1}]', ?, ?)", (new_id(), project_id, now, now))
+        world.data.rules.save_stat(Stat(project_id=project_id, stat_key=key, label=key.upper(), compatible_owner_kinds=["character"], default_value=default, minimum=0, maximum=100))
+    world.data.rules.save_effect(EffectDefinition(project_id=project_id, effect_key="ward_heal", name="Ward healing", target_stat_key="hp", operation="add", formula={"kind": "constant", "value": 10}, duration=1, tick_interval=0))
+    world.data.rules.save_ability(Ability(project_id=project_id, ability_key="ward", name="Ward", target_type="self", costs=[{"kind": "stat", "stat_key": "mana", "amount": 5}], actions=[{"kind": "apply_effect", "target": "actor", "effect_key": "ward_heal"}]))
 
 
 def test_stats_ability_cost_temporary_effect_and_player_guard(tmp_path: Path) -> None:
-    db, project, world = setup(tmp_path); add_rules(db, project["id"])
+    db, project, world = setup(tmp_path); add_rules(world, project["id"])
     hero = entity(world, project["id"], "Hero", {"player_controlled": True, "abilities": ["ward"]})
     user = db.create_story_node(project["id"], None, "user", "Ward", pov_character_id=hero)
     with pytest.raises(WorldValidationError, match="explicit player"):
         world.normalize_mutations(project["id"], user["id"], [{"tool": "useAbility", "arguments": {"actor_id": hero, "ability_key": "ward"}}], provenance="ai")
     use = world.normalize_mutations(project["id"], user["id"], [{"tool": "useAbility", "arguments": {"actor_id": hero, "ability_key": "ward"}}], provenance="player")
     reply, _ = world.commit_story_turn(project["id"], user["id"], "A ward rises.", use, pov_character_id=hero, narration_mode="third_limited")
-    current = world.projection(project["id"], reply["id"])["entities"][hero]
+    projected = world.projection(project["id"], reply["id"])
+    current = projected["entities"][hero]
     assert current["stats"]["mana"] == 15 and world.effective_stats(project["id"], current)["hp"] == 100
-    assert current["active_effects"]
+    assert projected["active_effects"]
     next_user = db.create_story_node(project["id"], reply["id"], "user", "Wait")
     later, _ = world.commit_story_turn(project["id"], next_user["id"], "Time passes.", [], pov_character_id=hero, narration_mode="third_limited")
-    assert not world.projection(project["id"], later["id"])["entities"][hero].get("active_effects")
+    assert not world.projection(project["id"], later["id"])["active_effects"]
 
 
 @pytest.mark.asyncio
@@ -84,20 +87,20 @@ def test_ai_theme_must_be_enabled(tmp_path: Path) -> None:
 
 
 def test_relationship_ability_uses_relation_event_key_and_validates_operation(tmp_path: Path) -> None:
-    db, project, world = setup(tmp_path); now = utc_now()
-    db.execute("INSERT INTO stat_definitions(id, project_id, stat_key, label, scope, default_value, minimum, maximum, integer_only, visibility, created_at, updated_at) VALUES (?, ?, 'favorability', 'Favorability', 'relationship', 0, -100, 100, 1, 'public', ?, ?)", (new_id(), project["id"], now, now))
+    _, project, world = setup(tmp_path)
+    world.data.rules.save_stat(Stat(project_id=project["id"], stat_key="favorability", label="Favorability", compatible_owner_kinds=["relationship"], default_value=0, minimum=-100, maximum=100))
     actor = entity(world, project["id"], "Mira", {"abilities": ["charm"]}); target = entity(world, project["id"], "Ren", {})
     relation_id = f"{actor}:affection:{target}"
     relation = world.normalize_mutations(project["id"], None, [{"tool": "setRelationship", "arguments": {"id": relation_id, "source_id": actor, "target_id": target, "relation": "affection"}}], provenance="author")
     world.commit_root(project["id"], relation, provenance="author", summary="relation")
-    db.execute("INSERT INTO ability_definitions(id, project_id, ability_key, name, description, target_type, requirements_json, costs_json, effects_json, created_at, updated_at) VALUES (?, ?, 'charm', 'Charm', '', 'relationship', '{}', '{}', '[{\"stat_key\":\"favorability\",\"operation\":\"add\",\"amount\":5}]', ?, ?)", (new_id(), project["id"], now, now))
+    world.data.rules.save_effect(EffectDefinition(project_id=project["id"], effect_key="charm_favor", name="Charm favor", target_stat_key="favorability", operation="add", formula={"kind": "constant", "value": 5}))
+    world.data.rules.save_ability(Ability(project_id=project["id"], ability_key="charm", name="Charm", target_type="relationship", actions=[{"kind": "apply_effect", "target": "target", "effect_key": "charm_favor"}]))
     use = world.normalize_mutations(project["id"], None, [{"tool": "useAbility", "arguments": {"actor_id": actor, "target_id": relation_id, "ability_key": "charm"}}], provenance="author")
     assert use[0].arguments["effects"][0]["relation_id"] == relation_id
     world.commit_root(project["id"], use, provenance="author", summary="charm")
     assert world.projection(project["id"])["relations"][relation_id]["stats"]["favorability"] == 5
-    db.execute("UPDATE ability_definitions SET effects_json = '[{\"stat_key\":\"favorability\",\"operation\":\"unsupported\",\"amount\":2}]' WHERE project_id = ?", (project["id"],))
-    with pytest.raises(WorldValidationError, match="operation"):
-        world.normalize_mutations(project["id"], None, [{"tool": "useAbility", "arguments": {"actor_id": actor, "target_id": relation_id, "ability_key": "charm"}}], provenance="author")
+    with pytest.raises(ValidationError, match="operation"):
+        EffectDefinition(project_id=project["id"], effect_key="invalid", name="Invalid", target_stat_key="favorability", operation="unsupported", formula={"kind": "constant", "value": 2})
 
 
 def test_audio_hash_can_be_reused_by_multiple_theme_rows(tmp_path: Path) -> None:

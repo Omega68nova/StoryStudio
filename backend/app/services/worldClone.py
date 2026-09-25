@@ -98,12 +98,16 @@ class WorldCloneService:
                 "stats": copy.deepcopy(item.get("stats", {})),
             }})
         relationship_count = 0
+        relationship_id_map: dict[str, str] = {}
         if include_relationships:
             for relation in source.get("relations", {}).values():
                 if relation.get("source_id") in selected and relation.get("target_id") in selected:
                     relation_data = {k: v for k, v in relation.items() if k != "id"}
+                    cloned_relation_id = new_id()
+                    relationship_id_map[str(relation["id"])] = cloned_relation_id
                     raw.append({"tool": "setRelationship", "arguments": {
                         **self._remap(relation_data, id_map),
+                        "id": cloned_relation_id,
                         "source_id": id_map[relation["source_id"]], "target_id": id_map[relation["target_id"]],
                     }})
                     relationship_count += 1
@@ -117,6 +121,33 @@ class WorldCloneService:
             raw.append({"tool": "upsertEncounterRule", "arguments": {"id": spatial_id_map[encounter_id], **self._remap({key: value for key, value in encounter.items() if key != "id"}, all_ids)}})
         if source.get("root_location_id") in selected and not target.get("root_location_id"):
             raw.append({"tool": "setWorldRoot", "arguments": {"root_location_id": id_map[source["root_location_id"]], "adopt_top_level": False, "reparent_previous": False}})
+        source_rules = target_rules = self.world.data.rules
+        source_stats = source_rules.stats(source_project_id) if include_rules else []
+        if include_rules:
+            source_stats = source_rules.dependency_ordered_stats(
+                source_stats,
+                {item.stat_key for item in target_rules.stats(target_project_id)},
+            )
+        source_effects = source_rules.effects(source_project_id) if include_rules else []
+        source_abilities = source_rules.abilities(source_project_id) if include_rules else []
+        rule_id_map = {**all_ids, **relationship_id_map}
+        def same_rule(left: Any, right: Any) -> bool:
+            excluded = {"project_id", "created_at", "updated_at"}
+            return left.model_dump(mode="json", exclude=excluded) == right.model_dump(mode="json", exclude=excluded)
+        def cloned_rule(definition: Any) -> Any:
+            values = definition.model_dump(mode="json")
+            values.update(project_id=target_project_id, created_at=None, updated_at=None)
+            if hasattr(definition, "ability_key"):
+                values = self._remap(values, rule_id_map)
+            return type(definition).model_validate(values)
+        for definition, existing in [
+            *[(item, target_rules.stat(target_project_id, item.stat_key)) for item in source_stats],
+            *[(item, target_rules.effect(target_project_id, item.effect_key)) for item in source_effects],
+            *[(item, target_rules.ability(target_project_id, item.ability_key)) for item in source_abilities],
+        ]:
+            if existing and not same_rule(existing, cloned_rule(definition)):
+                key = getattr(definition, "stat_key", None) or getattr(definition, "effect_key", None) or definition.ability_key
+                raise WorldValidationError(f"Target project has a different rule named {key}")
         project = self.world.db.get_project(target_project_id) or {}
         mutations = self.world.normalize_mutations(target_project_id, project.get("active_node_id"), raw, provenance="clone")
         if project.get("active_node_id"):
@@ -125,21 +156,37 @@ class WorldCloneService:
             transaction = self.world.commit_root(target_project_id, mutations, provenance="clone", summary="Cloned world subgraph")
         cloned_stats = cloned_effects = cloned_abilities = 0
         if include_rules:
-            source_rules, target_rules = self.world.data.rules, self.world.data.rules
-            for definition in source_rules.stats(source_project_id):
-                if target_rules.stat(target_project_id, definition.stat_key): continue
-                target_rules.save_stat(definition.model_copy(update={"project_id": target_project_id})); cloned_stats += 1
-            for definition in source_rules.effects(source_project_id):
-                if target_rules.effect(target_project_id, definition.effect_key): continue
-                target_rules.save_effect(definition.model_copy(update={"project_id": target_project_id})); cloned_effects += 1
-            for definition in source_rules.abilities(source_project_id):
-                if target_rules.ability(target_project_id, definition.ability_key): continue
-                target_rules.save_ability(definition.model_copy(update={"project_id": target_project_id})); cloned_abilities += 1
+            for definition in source_stats:
+                candidate = cloned_rule(definition)
+                existing = target_rules.stat(target_project_id, definition.stat_key)
+                if existing:
+                    if not same_rule(existing, candidate): raise WorldValidationError(f"Target project has a different stat named {definition.stat_key}")
+                    continue
+                target_rules.save_stat(candidate); cloned_stats += 1
+            for definition in source_effects:
+                candidate = cloned_rule(definition)
+                existing = target_rules.effect(target_project_id, definition.effect_key)
+                if existing:
+                    if not same_rule(existing, candidate): raise WorldValidationError(f"Target project has a different effect named {definition.effect_key}")
+                    continue
+                target_rules.save_effect(candidate); cloned_effects += 1
+            for definition in source_abilities:
+                candidate = cloned_rule(definition)
+                existing = target_rules.ability(target_project_id, definition.ability_key)
+                if existing:
+                    if not same_rule(existing, candidate): raise WorldValidationError(f"Target project has a different ability named {definition.ability_key}")
+                    continue
+                target_rules.save_ability(
+                    candidate,
+                    available_ability_keys={item.ability_key for item in source_abilities},
+                ); cloned_abilities += 1
             active_mutations: list[NormalizedMutation] = []
             target_projection = self.world.projection(target_project_id, project.get("active_node_id"))
+            cloned_participants = {*selected, *relationship_id_map}
             for instance in source.get("active_effects", {}).values():
-                if instance.get("target_id") not in selected: continue
-                cloned = self._remap(instance, id_map)
+                participant_ids = {str(instance.get(key)) for key in ("actor_id", "source_id", "target_id") if instance.get(key)}
+                if not participant_ids <= cloned_participants: continue
+                cloned = self._remap(instance, rule_id_map)
                 cloned["id"] = new_id()
                 clock = cloned.get("clock")
                 source_progress = int(source.get("elapsed_minutes", 0)) if clock == "story_minutes" else int(source.get("world_action_count", 0)) if clock == "world_actions" else int(source.get("target_action_counts", {}).get(instance.get("target_id"), 0))

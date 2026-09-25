@@ -234,7 +234,7 @@ export function CharacterEditorForm({
         onSetStat={setStat}
         onUpdateDefinition={updateStatDefinition}
       />
-      {activeEffects.length > 0 && <section className="panel"><h3>Active effects</h3>{activeEffects.map(effect => <div className="rule-row" key={effect.id}><div><strong>{effect.effect_key}</strong><small>{effect.stacks} stack(s) · next {effect.clock} tick at {effect.next_tick}{effect.expires_at == null ? " · indefinite" : ` · expires at ${effect.expires_at}`}</small></div><Button size="small" color="error" onClick={() => void removeActiveEffect(effect.id)}>Remove</Button></div>)}</section>}
+      {activeEffects.length > 0 && <section className="panel"><h3>Active effects</h3>{activeEffects.map(effect => { const source = entities.find(item => item.id === effect.source_id); return <div className="rule-row" key={effect.id}><div><strong>{effect.effect_key}</strong><small>{effect.stacks} stack(s){source ? ` · from ${source.name}` : ""} · next {effect.clock} tick at {effect.next_tick}{effect.expires_at == null ? " · indefinite" : ` · expires at ${effect.expires_at}`}</small></div><Button size="small" color="error" onClick={() => void removeActiveEffect(effect.id)}>Remove</Button></div>; })}</section>}
     </aside>
 
     <main className="character-editor-main">
@@ -502,8 +502,8 @@ export function CharacterEditorForm({
             >
               <MenuItem value="">Select ability</MenuItem>
               {abilities
-                .filter(item => !array(state.abilities).includes(item.ability_key))
-                .map(item => <MenuItem key={item.id} value={item.ability_key}>{item.name}</MenuItem>)}
+                .filter(item => item.compatible_owner_kinds.includes("character") && !array(state.abilities).includes(item.ability_key))
+                .map(item => <MenuItem key={item.ability_key} value={item.ability_key}>{item.name}</MenuItem>)}
             </TextField>
             <Button
               disabled={!abilityCandidate}
@@ -1016,7 +1016,7 @@ function AbilityList({
         return <div className="character-linked-card" key={key}>
           <ResourceIcon
             name={ability?.name ?? key}
-            url={ability?.icon_url ?? undefined}
+            url={ability?.icon ?? undefined}
           />
           <span>
             <b>{ability?.name ?? key}</b>

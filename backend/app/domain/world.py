@@ -950,16 +950,24 @@ class AbilityCost(DomainModel):
 
     @model_validator(mode="after")
     def validate_shape(self) -> "AbilityCost":
-        if self.kind == AbilityCostKind.STAT and not self.stat_key:
-            raise ValueError("stat cost needs stat_key")
-        if self.kind == AbilityCostKind.CONSUME_FUEL and not self.item_id:
-            raise ValueError("fuel cost needs item_id")
+        if self.kind == AbilityCostKind.STAT:
+            if not self.stat_key:
+                raise ValueError("stat cost needs stat_key")
+            if self.item_id:
+                raise ValueError("stat cost cannot contain item_id")
+        elif self.kind == AbilityCostKind.CONSUME_FUEL:
+            if not self.item_id:
+                raise ValueError("fuel cost needs item_id")
+            if self.stat_key:
+                raise ValueError("fuel cost cannot contain stat_key")
+        elif self.stat_key or self.item_id:
+            raise ValueError("consume_source cost cannot contain stat_key or item_id")
         return self
 
 
 class AbilityAction(DomainModel):
     kind: AbilityActionKind
-    target: str = EffectTarget.TARGET
+    target: EffectTarget = EffectTarget.TARGET
     effect_key: str | None = None
     destination_id: DomainId | None = None
     entity_kind: EntityKind | None = None
@@ -985,6 +993,32 @@ class AbilityAction(DomainModel):
         }
         if self.kind in required and not required[self.kind]:
             raise ValueError(f"{self.kind} action is missing its required reference")
+        fields_by_kind = {
+            AbilityActionKind.APPLY_EFFECT: {"effect_key", "duration_override", "tick_override"},
+            AbilityActionKind.MOVE: {"destination_id"},
+            AbilityActionKind.CREATE: {"entity_kind", "entity_name", "state"},
+            AbilityActionKind.REMOVE: set(),
+            AbilityActionKind.REVEAL_KNOWLEDGE: {"fact_id"},
+            AbilityActionKind.CHANGE_RELATIONSHIP: {"relation"},
+            AbilityActionKind.ADVANCE_TIME: {"minutes"},
+            AbilityActionKind.PLAY_NOISE: {"noise_id"},
+        }
+        populated = {
+            "effect_key": self.effect_key,
+            "destination_id": self.destination_id,
+            "entity_kind": self.entity_kind,
+            "entity_name": self.entity_name,
+            "state": self.state or None,
+            "fact_id": self.fact_id,
+            "relation": self.relation,
+            "minutes": self.minutes,
+            "noise_id": self.noise_id,
+            "duration_override": self.duration_override,
+            "tick_override": self.tick_override,
+        }
+        invalid = sorted(key for key, value in populated.items() if value is not None and key not in fields_by_kind[self.kind])
+        if invalid:
+            raise ValueError(f"{self.kind} action contains incompatible field(s): {', '.join(invalid)}")
         return self
 
 

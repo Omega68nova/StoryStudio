@@ -5,9 +5,6 @@ from pathlib import Path
 import pytest
 
 from app.database import Database
-from app.domain.adapters import ability_from_record, entity_from_projection, stat_from_record
-from app.domain.operations import DomainOperationError, EffectExecutor, RequirementEvaluator, TargetResolver
-from app.domain.world import Character
 from app.managers.batchGenerationManager import BatchGenerationManager
 from app.managers.soundManager import SoundManager
 from app.services.ai_world_tools import AIAliasResolver
@@ -33,61 +30,6 @@ def _projection() -> dict:
         "current_weather_id": "rain",
         "elapsed_minutes": 0,
     }
-
-
-def _stat(key: str):
-    return stat_from_record({"id": f"stat-{key}", "project_id": "project", "stat_key": key, "label": key.title(), "scope": "character", "default_value": 0, "minimum": 0, "maximum": 100, "integer_only": 1, "visibility": "public"})
-
-
-def _ability(requirements: dict, effects: list[dict], target_type: str = "self"):
-    import json
-    return ability_from_record({"id": "ability", "project_id": "project", "ability_key": "war_cry", "name": "War Cry", "target_type": target_type, "requirements_json": json.dumps(requirements), "costs_json": "{}", "effects_json": json.dumps(effects), "minigame_profile_json": "{}"})
-
-
-def test_recursive_requirements_and_semantic_targets_expand_to_ids() -> None:
-    projection = _projection()
-    actor = entity_from_projection(projection["entities"]["hero"])
-    assert isinstance(actor, Character)
-    ability = _ability(
-        {"kind": "and", "children": [
-            {"kind": "has_tag", "tag": "brave"},
-            {"kind": "has_item", "item_id": "key"},
-            {"kind": "weather", "weather_id": "rain"},
-            {"kind": "not", "child": {"kind": "compare", "stat_key": "hp", "comparison": "lt", "value": 2}},
-        ]},
-        [{"target": "allies", "stat_key": "hp", "operation": "add", "amount": 3}],
-    )
-    primary = TargetResolver().resolve_ability_target(projection, actor, ability, None)
-    RequirementEvaluator().ensure_satisfied(actor, ability, projection=projection, primary_target=primary, stat_lookup=lambda key, _scope: _stat(key), effective_stats=lambda value: {**value.stats})
-    result = EffectExecutor().normalize(projection=projection, actor=actor, primary_target=primary, ability=ability, next_sequence=4, elapsed_minutes=0, stat_lookup=lambda key, _scope: _stat(key), effective_stats=lambda value: {**value.stats})
-    assert {effect["entity_id"] for effect in result.effects} == {"hero", "ally"}
-
-
-def test_failed_expression_rejects_ability() -> None:
-    projection = _projection()
-    actor = entity_from_projection(projection["entities"]["hero"])
-    ability = _ability({"kind": "weather", "weather_id": "sun"}, [])
-    primary = TargetResolver().resolve_ability_target(projection, actor, ability, None)
-    with pytest.raises(DomainOperationError, match="requirements"):
-        RequirementEvaluator().ensure_satisfied(actor, ability, projection=projection, primary_target=primary, stat_lookup=lambda key, _scope: _stat(key), effective_stats=lambda value: {**value.stats})
-
-
-def test_non_stat_effects_normalize_to_native_events() -> None:
-    projection = _projection()
-    actor = entity_from_projection(projection["entities"]["hero"])
-    ability = _ability({}, [
-        {"target": "actor", "operation": "apply_status", "status": "inspired", "duration_type": "turns", "duration_value": 2},
-        {"operation": "advance_time", "minutes": 5},
-        {"operation": "create", "entity_kind": "item", "name": "Token", "state": {"description": "Created by the ability"}},
-        {"operation": "play_noise", "noise_id": "noise-1"},
-    ])
-    primary = TargetResolver().resolve_ability_target(projection, actor, ability, None)
-    result = EffectExecutor().normalize(projection=projection, actor=actor, primary_target=primary, ability=ability, next_sequence=4, elapsed_minutes=10, stat_lookup=lambda key, _scope: _stat(key), effective_stats=lambda value: {**value.stats}, id_factory=lambda: "created-item")
-    assert [item["event_type"] for item in result.effects] == [
-        "effect.applied", "time.advanced", "entity.created", "noise.played",
-    ]
-    assert result.effects[0]["expires_sequence"] == 6
-    assert result.effects[2]["entity_id"] == "created-item"
 
 
 def test_ai_aliases_are_ephemeral_and_ambiguous_names_are_not_resolved() -> None:

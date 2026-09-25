@@ -59,3 +59,19 @@ def test_planning_task_metadata_is_outside_the_studio_component() -> None:
     assert "const STAGE_NAMES" not in studio
     assert "function emptyStage" not in studio
     assert "Start eight-stage workshop" not in studio
+
+
+def test_world_engine_delegates_canonical_rule_behavior() -> None:
+    world = (APP / "services" / "world.py").read_text(encoding="utf-8")
+    runtime = (APP / "services" / "rules.py").read_text(encoding="utf-8")
+    events = (APP / "services" / "rule_events.py").read_text(encoding="utf-8")
+
+    assert "RulesRuntime(" in world
+    assert "RuleEventProjector.apply(" in world
+    assert "RuleEventProjector.mutation_events(" in world
+    assert "class FormulaEvaluator" not in world
+    assert "def normalize_effect(" not in world
+    assert "def passive_cascade(" not in world
+    assert "def normalize_effect(" in runtime
+    assert "def passive_cascade(" in runtime
+    assert 'event_type == "effect.instance_applied"' in events

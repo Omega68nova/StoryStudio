@@ -258,6 +258,15 @@ class Database:
             self._insert_legacy_requirement(connection, project_id, ability_key, requirements)
         costs = _safe_json(record.get("costs_json"), {})
         for position, (stat_key, amount) in enumerate(costs.items() if isinstance(costs, dict) else []):
+            if not connection.execute(
+                "SELECT 1 FROM stat_definitions WHERE project_id=? AND stat_key=?",
+                (project_id, stat_key),
+            ).fetchone():
+                connection.execute(
+                    "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (new_id(), project_id, "discarded_invalid_ability_cost", f"Discarded unknown stat cost '{stat_key}' from ability {ability_key}.", json.dumps({"ability_key": ability_key, "stat_key": stat_key, "position": position}), now),
+                )
+                continue
             connection.execute(
                 "INSERT INTO ability_costs(id,project_id,ability_key,position,cost_kind,stat_key,amount) VALUES(?,?,?,?, 'stat',?,?)",
                 (new_id(), project_id, ability_key, position, stat_key, amount),
@@ -276,6 +285,16 @@ class Database:
                 )
                 continue
             if operation in {"add", "subtract", "set", "multiply"}:
+                target_stat_key = effect.get("stat_key")
+                if not connection.execute(
+                    "SELECT 1 FROM stat_definitions WHERE project_id=? AND stat_key=?",
+                    (project_id, target_stat_key),
+                ).fetchone():
+                    connection.execute(
+                        "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
+                        (new_id(), project_id, "discarded_invalid_stat_effect", f"Discarded effect with unknown target stat from ability {ability_key}.", json.dumps({"ability_key": ability_key, "stat_key": target_stat_key, "position": position}), now),
+                    )
+                    continue
                 base = re.sub(r"[^a-z0-9_]", "_", f"{ability_key}_effect_{position + 1}".lower())[:64]
                 effect_key, suffix = base, 2
                 while connection.execute(
@@ -289,7 +308,7 @@ class Database:
                 connection.execute(
                     "INSERT INTO effect_definitions(project_id,effect_key,name,description,target_stat_key,operation,clock,duration,tick_interval,evaluation_mode,stacking_policy,max_stacks,visibility,enabled,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,0,'snapshot','replace',1,'public',1,?,?)",
                     (project_id, effect_key, effect.get("name") or effect_key.replace("_", " ").title(),
-                     "Migrated from an inline ability effect.", effect.get("stat_key"), operation,
+                     "Migrated from an inline ability effect.", target_stat_key, operation,
                      clock, duration, now, now),
                 )
                 connection.execute(
@@ -340,13 +359,6 @@ class Database:
             for index, child in enumerate(children):
                 if isinstance(child, dict): write(child, node_id, index)
         write(root_value, None, 0)
-
-
-def _safe_json(raw: Any, fallback: Any) -> Any:
-    try:
-        return json.loads(raw) if isinstance(raw, str) else (raw if raw is not None else fallback)
-    except (TypeError, json.JSONDecodeError):
-        return fallback
 
     def relocate(self, destination: Path) -> None:
         if self._environment_locked:
@@ -541,6 +553,12 @@ def _safe_json(raw: Any, fallback: Any) -> Any:
             "UPDATE generation_jobs SET payload_json = ?, status = ?, error = NULL, updated_at = ? WHERE id = ?",
             (json.dumps(payload), status, utc_now(), job_id),
         )
+
+def _safe_json(raw: Any, fallback: Any) -> Any:
+    try:
+        return json.loads(raw) if isinstance(raw, str) else (raw if raw is not None else fallback)
+    except (TypeError, json.JSONDecodeError):
+        return fallback
 
 
 def decode_json_fields(row: dict[str, Any] | None, *fields: str) -> dict[str, Any] | None:

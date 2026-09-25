@@ -42,6 +42,10 @@ class RulesRuntime:
         if kind and entity.get("kind") != kind: raise RulesRuntimeError(f"Entity '{entity.get('name')}' is not a {kind}")
         return entity
 
+    @staticmethod
+    def owns_ability(entity: dict[str, Any], ability_key: str) -> bool:
+        return ability_key in {str(key) for key in entity.get("state", {}).get("abilities", [])}
+
     def stat(self, project_id: str, key: str, owner_kind: str):
         definition = self.data.rules.stat(project_id, key)
         if not definition or owner_kind not in map(str, definition.compatible_owner_kinds):
@@ -52,11 +56,31 @@ class RulesRuntime:
         definitions = {item.stat_key: item for item in self.data.rules.stats(project_id) if owner_kind in map(str, item.compatible_owner_kinds)}
         raw = {key: float(container.get("stats", {}).get(key, definition.default_value)) for key, definition in definitions.items()}
         values: dict[str, float] = {}
-        for key, definition in definitions.items():
-            try: bounds = resolve_stat_bounds(definition, raw, lambda candidate: definitions[candidate])
-            except (KeyError, ValueError) as exc: raise RulesRuntimeError(str(exc)) from exc
+        visiting: set[str] = set()
+
+        def resolve(key: str) -> float:
+            if key in values:
+                return values[key]
+            if key in visiting:
+                raise RulesRuntimeError(f"Stat bound dependency cycle at {key}")
+            definition = definitions.get(key)
+            if definition is None:
+                raise RulesRuntimeError(f"Unknown or incompatible {owner_kind} stat: {key}")
+            visiting.add(key)
+            for dependency in (definition.minimum_stat_key, definition.maximum_stat_key):
+                if dependency:
+                    resolve(dependency)
+            try:
+                bounds = resolve_stat_bounds(definition, values, lambda candidate: definitions[candidate])
+            except (KeyError, ValueError) as exc:
+                raise RulesRuntimeError(str(exc)) from exc
             value = max(float(bounds.minimum), min(float(bounds.maximum), raw[key]))
             values[key] = int(round(value)) if definition.integer_only else value
+            visiting.remove(key)
+            return values[key]
+
+        for key in definitions:
+            resolve(key)
         return values
 
     def adjust_stat(self, project_id: str, projection: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
@@ -65,11 +89,12 @@ class RulesRuntime:
                 projection=projection, entity_id=arguments.get("entity_id"), relation_id=arguments.get("relation_id"),
                 stat_key=str(arguments.get("stat_key", "")), operation=str(arguments.get("operation", "add")), amount=arguments.get("amount", 0),
                 stat_lookup=lambda key, owner="character": self.stat(project_id, key, owner),
+                effective_values=lambda target: self.effective_stats(project_id, target.container.model_dump(mode="json"), target.scope),
             )
         except DomainOperationError as exc: raise RulesRuntimeError(str(exc)) from exc
 
     def participant(self, project_id: str, raw: dict[str, Any]) -> dict[str, Any]:
-        owner_kind = "relationship" if "source_id" in raw else str(raw.get("kind") or "character")
+        owner_kind = str(raw.get("kind")) if raw.get("kind") else "relationship"
         return {**raw, "stats": self.effective_stats(project_id, raw, owner_kind)}
 
     def normalize_effect(self, project_id: str, projection: dict[str, Any], definition: Any, target: Any, participants: dict[str, Any], duration_override: int | None = None, tick_override: int | None = None) -> dict[str, Any]:
@@ -101,10 +126,16 @@ class RulesRuntime:
     @staticmethod
     def normalize_action(action: Any, target: Any, actor: Character) -> dict[str, Any]:
         kind = str(action.kind); common = {"operation": kind}
-        if kind == "move": return {**common, "event_type": "character.moved", "entity_id": target.id, "character_id": target.id, "destination_id": str(action.destination_id)}
+        if kind == "move":
+            if not isinstance(target.container, Character): raise DomainOperationError("Movement actions require a character target")
+            return {**common, "event_type": "character.moved", "entity_id": target.id, "character_id": target.id, "destination_id": str(action.destination_id)}
         if kind == "remove": return {**common, "event_type": "relationship.removed", "relationship_id": target.id} if target.scope == "relationship" else {**common, "event_type": "entity.updated", "entity_id": target.id, "patch": {"archived": True}}
-        if kind == "reveal_knowledge": return {**common, "event_type": "knowledge.revealed", "entity_id": str(action.fact_id), "fact_id": str(action.fact_id), "character_ids": [target.id], "faction_ids": []}
-        if kind == "change_relationship": return {**common, "event_type": "relationship.set", "source_id": str(actor.id), "target_id": target.id, "relation": action.relation}
+        if kind == "reveal_knowledge":
+            if not isinstance(target.container, Character): raise DomainOperationError("Knowledge actions require a character target")
+            return {**common, "event_type": "knowledge.revealed", "entity_id": str(action.fact_id), "fact_id": str(action.fact_id), "character_ids": [target.id], "faction_ids": []}
+        if kind == "change_relationship":
+            if not isinstance(target.container, Character): raise DomainOperationError("Relationship actions require a character target")
+            return {**common, "event_type": "relationship.set", "source_id": str(actor.id), "target_id": target.id, "relation": action.relation}
         if kind == "advance_time": return {**common, "event_type": "time.advanced", "minutes": int(action.minutes or 0)}
         if kind == "play_noise": return {**common, "event_type": "noise.played", "noise_id": str(action.noise_id)}
         if kind == "create": return {**common, "event_type": "entity.created", "entity_id": new_id(), "kind": action.entity_kind, "name": action.entity_name, "state": action.state, "aliases": [], "tags": []}
@@ -122,12 +153,20 @@ class RulesRuntime:
         if source_item_id:
             if "item" not in map(str, ability.compatible_owner_kinds): raise RulesRuntimeError("This ability cannot be supplied by an item")
             source_raw = self.entity(projection, source_item_id, "item")
+            if not self.owns_ability(source_raw, ability.ability_key):
+                raise RulesRuntimeError(f"{source_raw['name']} does not provide {ability.name}")
             inventory = {str(entry.get("item_id")): int(entry.get("quantity", 0)) for entry in actor_raw.get("state", {}).get("inventory", [])}
             if inventory.get(str(source_item_id), 0) <= 0 and str(source_item_id) not in set(map(str, actor_raw.get("state", {}).get("equipment", []))): raise RulesRuntimeError("The source item must be held or equipped")
         elif "character" not in map(str, ability.compatible_owner_kinds): raise RulesRuntimeError("This ability requires a source item")
-        elif ability.ability_key not in actor.state.abilities and ability.name not in actor.state.abilities: raise RulesRuntimeError(f"{actor.name} does not know {ability.name}")
+        elif not self.owns_ability(actor_raw, ability.ability_key): raise RulesRuntimeError(f"{actor.name} does not know {ability.name}")
+        inventory_quantities = {str(entry.get("item_id")): int(entry.get("quantity", 0)) for entry in actor_raw.get("state", {}).get("inventory", [])}
+        equipped_ids = set(map(str, actor_raw.get("state", {}).get("equipment", [])))
         lookup = lambda key, owner="character": self.stat(project_id, key, owner)
-        effective = lambda character: self.effective_stats(project_id, projection["entities"].get(str(character.id), actor_raw), "character")
+        effective = lambda value: self.effective_stats(
+            project_id,
+            projection["relations"].get(str(value.id)) or projection["entities"].get(str(value.id), actor_raw),
+            "relationship" if str(value.id) in projection["relations"] else str(getattr(value, "kind", "character")),
+        )
         targets = TargetResolver()
         try:
             phases = self.data.environment.phases(project_id, enabled_only=True); total = sum(int(item["duration_minutes"]) for item in phases)
@@ -144,11 +183,12 @@ class RulesRuntime:
                 kind = str(cost.kind)
                 if kind == "stat": continue
                 item_id = str(source_item_id) if kind == "consume_source" else str(cost.item_id)
-                current = next((int(entry.get("quantity", 0)) for entry in actor_raw.get("state", {}).get("inventory", []) if str(entry.get("item_id")) == item_id), 0)
-                if kind == "consume_source" and item_id in set(map(str, actor_raw.get("state", {}).get("equipment", []))): current = max(current, 1)
+                current = inventory_quantities.get(item_id, 0)
+                if kind == "consume_source" and item_id in equipped_ids: current = max(current, 1)
                 quantity = int(cost.amount)
                 if current < quantity: raise DomainOperationError("Ability item cost is unavailable")
                 inventory_changes.append({"character_id": str(actor.id), "entity_id": str(actor.id), "item_id": item_id, "previous_quantity": current, "quantity": current - quantity, "delta": -quantity})
+                inventory_quantities[item_id] = current - quantity
             effects: list[dict[str, Any]] = []
             participants = {"actor": self.participant(project_id, actor_raw), "source": self.participant(project_id, source_raw)}
             proposed_names = {str(entity.get("name", "")).casefold() for entity in projection["entities"].values() if not entity.get("state", {}).get("archived")}
@@ -202,18 +242,24 @@ class RulesRuntime:
 
     def dependent_clamps(self, project_id: str, projection: dict[str, Any], events: list[Event]) -> list[dict[str, Any]]:
         working, derived = copy.deepcopy(projection), []
-        for event_type, entity_id, payload in events:
+        queue = list(events)
+        definitions = self.data.rules.stats(project_id)
+        while queue:
+            event_type, entity_id, payload = queue.pop(0)
             self.apply_event(working, event_type, payload, entity_id)
             if event_type != "stat.changed": continue
             container = working["relations"].get(payload.get("relation_id")) or working["entities"].get(payload.get("entity_id"))
             if not container: continue
             kind = "relationship" if payload.get("relation_id") else str(container.get("kind"))
-            for definition in self.data.rules.stats(project_id):
+            for definition in definitions:
                 if kind not in map(str, definition.compatible_owner_kinds) or payload.get("stat_key") not in {definition.minimum_stat_key, definition.maximum_stat_key}: continue
                 raw = float(container.get("stats", {}).get(definition.stat_key, definition.default_value)); effective = self.effective_stats(project_id, container, kind).get(definition.stat_key, raw)
                 if float(effective) == raw: continue
                 row = {"event_type": "stat.changed", "relation_id" if kind == "relationship" else "entity_id": container["id"], "stat_key": definition.stat_key, "previous_value": raw, "value": effective, "derived": True, "reason": f"clamped after {payload.get('stat_key')} changed"}
-                derived.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id"))
+                derived.append(row)
+                queue.append(("stat.changed", row.get("entity_id"), {key: value for key, value in row.items() if key != "event_type"}))
+                if len(derived) > 64:
+                    raise RulesRuntimeError("Stat bound propagation exceeds 64 derived changes")
         return derived
 
     def passive_cascade(self, project_id: str, projection: dict[str, Any], events: list[Event]) -> list[dict[str, Any]]:
@@ -223,7 +269,7 @@ class RulesRuntime:
             self.apply_event(working, event_type, payload, entity_id)
             hook = "damage" if event_type == "stat.changed" and payload.get("operation") == "subtract" else hooks.get(event_type)
             if hook: queue.append((hook, entity_id or payload.get("entity_id"), payload, 1, ()))
-        definitions = self.data.rules.abilities(project_id); by_key = {item.ability_key: item for item in definitions}; by_name = {item.name: item for item in definitions}
+        definitions = self.data.rules.abilities(project_id); by_key = {item.ability_key: item for item in definitions}
         while queue:
             hook, owner_id, payload, depth, ancestry = queue.pop(0)
             if depth > 8: raise RulesRuntimeError("Passive ability cascade exceeds depth 8")
@@ -231,13 +277,13 @@ class RulesRuntime:
             for owner_raw in [item for item in owners if item and item.get("kind") == "character"]:
                 sources: list[tuple[Any, dict[str, Any]]] = []
                 for key in owner_raw.get("state", {}).get("abilities", []):
-                    ability = by_key.get(str(key)) or by_name.get(str(key))
-                    if ability and str(ability.ability_kind) == "passive" and "character" in map(str, ability.compatible_owner_kinds): sources.append((ability, owner_raw))
+                    ability = by_key.get(str(key))
+                    if ability and ability.enabled and str(ability.ability_kind) == "passive" and "character" in map(str, ability.compatible_owner_kinds): sources.append((ability, owner_raw))
                 for item_id in owner_raw.get("state", {}).get("equipment", []):
                     item_raw = working["entities"].get(str(item_id))
                     for key in (item_raw or {}).get("state", {}).get("abilities", []):
-                        ability = by_key.get(str(key)) or by_name.get(str(key))
-                        if ability and str(ability.ability_kind) == "passive" and "item" in map(str, ability.compatible_owner_kinds): sources.append((ability, item_raw))
+                        ability = by_key.get(str(key))
+                        if ability and ability.enabled and str(ability.ability_kind) == "passive" and "item" in map(str, ability.compatible_owner_kinds): sources.append((ability, item_raw))
                 actor = entity_from_projection(owner_raw)
                 if not isinstance(actor, Character): continue
                 for ability, source_raw in sources:
@@ -246,20 +292,42 @@ class RulesRuntime:
                     if marker in ancestry: raise RulesRuntimeError(f"Recursive passive loop detected at {ability.ability_key}")
                     primary_id = str(payload.get("target_id") or payload.get("entity_id") or owner_raw["id"])
                     resolver = TargetResolver()
-                    try: primary = resolver.resolve_ability_target(working, actor, ability, primary_id if str(ability.target_type) != "self" else None)
-                    except DomainOperationError: primary = resolver.resolve_ability_target(working, actor, ability, None)
+                    try:
+                        primary = resolver.resolve_ability_target(working, actor, ability, primary_id if str(ability.target_type) != "self" else None)
+                    except DomainOperationError:
+                        continue
                     lookup = lambda key, owner="character": self.stat(project_id, key, owner)
-                    effective = lambda character: self.effective_stats(project_id, working["entities"][str(character.id)], "character")
-                    RequirementEvaluator().ensure_satisfied(actor, ability, projection=working, primary_target=primary, stat_lookup=lookup, effective_stats=effective)
-                    cost_result = EffectExecutor().normalize(projection=working, actor=actor, primary_target=primary, ability=ability, next_sequence=int(working.get("branch_sequence", 0)) + 1, elapsed_minutes=int(working.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective)
-                    for cost in cost_result.costs:
-                        row = {"event_type": "stat.changed", **cost, "passive_ability_key": ability.ability_key}; emitted.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id")); queue.append(("stat_changed", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                    effective = lambda value: self.effective_stats(
+                        project_id,
+                        working["relations"].get(str(value.id)) or working["entities"][str(value.id)],
+                        "relationship" if str(value.id) in working["relations"] else str(getattr(value, "kind", "character")),
+                    )
+                    try:
+                        RequirementEvaluator().ensure_satisfied(actor, ability, projection=working, primary_target=primary, stat_lookup=lookup, effective_stats=effective)
+                        cost_result = EffectExecutor().normalize(projection=working, actor=actor, primary_target=primary, ability=ability, next_sequence=int(working.get("branch_sequence", 0)) + 1, elapsed_minutes=int(working.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective)
+                    except DomainOperationError:
+                        continue
+                    inventory_quantities = {str(entry.get("item_id")): int(entry.get("quantity", 0)) for entry in owner_raw.get("state", {}).get("inventory", [])}
+                    equipped_ids = set(map(str, owner_raw.get("state", {}).get("equipment", [])))
+                    inventory_rows: list[dict[str, Any]] = []
+                    affordable = True
                     for cost in ability.costs:
                         if str(cost.kind) == "stat": continue
-                        item_id = str(source_raw["id"]) if str(cost.kind) == "consume_source" else str(cost.item_id); current = next((int(entry.get("quantity", 0)) for entry in owner_raw.get("state", {}).get("inventory", []) if str(entry.get("item_id")) == item_id), 0)
-                        if str(cost.kind) == "consume_source" and item_id in set(map(str, owner_raw.get("state", {}).get("equipment", []))): current = max(current, 1)
-                        if current < int(cost.amount): raise RulesRuntimeError(f"Passive ability {ability.name} lacks its item cost")
-                        row = {"event_type": "inventory.adjusted", "entity_id": owner_raw["id"], "character_id": owner_raw["id"], "item_id": item_id, "previous_quantity": current, "quantity": current - int(cost.amount), "delta": -int(cost.amount), "passive_ability_key": ability.ability_key}; emitted.append(row); self.apply_event(working, "inventory.adjusted", row, owner_raw["id"])
+                        item_id = str(source_raw["id"]) if str(cost.kind) == "consume_source" else str(cost.item_id); current = inventory_quantities.get(item_id, 0)
+                        if str(cost.kind) == "consume_source" and item_id in equipped_ids: current = max(current, 1)
+                        if current < int(cost.amount):
+                            affordable = False
+                            break
+                        inventory_rows.append({"event_type": "inventory.adjusted", "entity_id": owner_raw["id"], "character_id": owner_raw["id"], "item_id": item_id, "previous_quantity": current, "quantity": current - int(cost.amount), "delta": -int(cost.amount), "passive_ability_key": ability.ability_key})
+                        inventory_quantities[item_id] = current - int(cost.amount)
+                    if not affordable:
+                        continue
+                    for cost in cost_result.costs:
+                        row = {"event_type": "stat.changed", **cost, "passive_ability_key": ability.ability_key}; emitted.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id")); queue.append(("stat_changed", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                        if len(emitted) > 64: raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
+                    for row in inventory_rows:
+                        emitted.append(row); self.apply_event(working, "inventory.adjusted", row, owner_raw["id"])
+                        if len(emitted) > 64: raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
                     participants = {"actor": self.participant(project_id, owner_raw), "source": self.participant(project_id, source_raw)}
                     for action in ability.actions:
                         targets = resolver.resolve_effect_targets(working, actor, primary, ability, action)

@@ -1,5 +1,10 @@
 # Phase 5 completion — typed world and extracted domain ownership
 
+> Historical handoff: the inline ability/effect storage described below was
+> superseded by the Phase 7 canonical-rules slice. Current rules use normalized
+> stat, effect, formula, ability, cost, action, and trigger records; see
+> `PHASE7_RULES_REWORK.md`.
+
 Phase 5 now includes the planned typed foundations, runtime adoption, and the
 previously deferred semantic extensions. The central rule remains the base
 idea of the refactor: domain behavior lives in focused modules while

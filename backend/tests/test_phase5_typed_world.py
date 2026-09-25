@@ -98,7 +98,6 @@ def test_full_character_round_trip_preserves_extension_state() -> None:
             "custom_plugin_state": {"rank": 7},
         },
         "stats": {"stamina": 72},
-        "active_effects": [],
         "plugin_top_level": {"source": "example"},
     }
 
@@ -317,11 +316,10 @@ def test_weather_record_round_trip_preserves_json_and_extra_columns() -> None:
 
 def test_stat_and_ability_records_round_trip_semantically() -> None:
     stat_row = {
-        "id": "stat-1",
         "project_id": "project-1",
         "stat_key": "stamina",
         "label": "Stamina",
-        "scope": "character",
+        "compatible_owner_kinds": ["character", "item"],
         "default_value": 100.0,
         "minimum": 0.0,
         "maximum": 100.0,
@@ -331,16 +329,18 @@ def test_stat_and_ability_records_round_trip_semantically() -> None:
         "updated_at": "updated",
     }
     ability_row = {
-        "id": "ability-1",
         "project_id": "project-1",
         "ability_key": "power_strike",
         "name": "Power Strike",
         "description": "Spend stamina to strike.",
+        "ability_kind": "active",
+        "compatible_owner_kinds": ["character"],
         "target_type": "character",
-        "requirements_json": '{"min_stats":{"stamina":10},"plugin_gate":"ready"}',
-        "costs_json": '{"stamina":10}',
-        "effects_json": '[{"target":"target","stat_key":"hp","operation":"subtract","amount":12,"plugin_effect":"impact"}]',
-        "minigame_profile_json": '{"timed_attack":{"line_count":2,"damage_per_line":6}}',
+        "requirements": {"kind": "compare", "stat_key": "stamina", "comparison": "gte", "value": 10},
+        "costs": [{"kind": "stat", "stat_key": "stamina", "amount": 10}],
+        "actions": [{"kind": "apply_effect", "target": "target", "effect_key": "power_strike_damage"}],
+        "timed_attack_line_count": 2,
+        "timed_attack_damage_per_line": 6,
         "created_at": "created",
         "updated_at": "updated",
     }
@@ -353,58 +353,13 @@ def test_stat_and_ability_records_round_trip_semantically() -> None:
     assert restored_stat == stat_row
     assert stat.reference.kind == DomainKind.STAT
     assert ability.reference.kind == DomainKind.ABILITY
-    for field in (
-        "requirements_json",
-        "costs_json",
-        "effects_json",
-        "minigame_profile_json",
-    ):
-        assert json.loads(restored_ability.pop(field)) == json.loads(
-            ability_row[field]
-        )
-    expected_ability = dict(ability_row)
-    for field in (
-        "requirements_json",
-        "costs_json",
-        "effects_json",
-        "minigame_profile_json",
-    ):
-        expected_ability.pop(field)
-    assert restored_ability == expected_ability
+    assert restored_ability == ability_row
 
 
-@pytest.mark.parametrize(
-    ("adapter", "field"),
-    [
-        (weather_from_record, "tags_json"),
-        (ability_from_record, "requirements_json"),
-        (ability_from_record, "effects_json"),
-    ],
-)
-def test_record_adapters_reject_malformed_json(adapter, field: str) -> None:
-    if adapter is weather_from_record:
-        row = {
-            "id": "weather-1",
-            "project_id": "project-1",
-            "name": "Rain",
-            "tags_json": "{broken",
-            "image_tags_json": "[]",
-        }
-    else:
-        row = {
-            "id": "ability-1",
-            "project_id": "project-1",
-            "ability_key": "strike",
-            "name": "Strike",
-            "requirements_json": "{}",
-            "costs_json": "{}",
-            "effects_json": "[]",
-            "minigame_profile_json": "{}",
-        }
-        row[field] = "{broken"
-
-    with pytest.raises(DomainAdapterError, match=field):
-        adapter(row)
+def test_weather_record_adapter_rejects_malformed_json() -> None:
+    row = {"id": "weather-1", "project_id": "project-1", "name": "Rain", "tags_json": "{broken", "image_tags_json": "[]"}
+    with pytest.raises(DomainAdapterError, match="tags_json"):
+        weather_from_record(row)
 
 
 def test_domain_models_reject_invalid_identity_kind_and_known_fields() -> None:

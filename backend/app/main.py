@@ -2583,8 +2583,9 @@ def _validate_stat_bound_references(
             continue
         referenced = definitions.get(key)
         if not referenced: raise HTTPException(422, f"{field} references an unknown stat: {key}")
-        if not set(request.compatible_owner_kinds).intersection(map(str, referenced.compatible_owner_kinds)):
-            raise HTTPException(422, f"{field} has no compatible owner kind in common with {request.stat_key}")
+        missing_owners = set(request.compatible_owner_kinds).difference(map(str, referenced.compatible_owner_kinds))
+        if missing_owners:
+            raise HTTPException(422, f"{field} is incompatible with owner kinds: {', '.join(sorted(missing_owners))}")
     graph = {key: [candidate for candidate in (item.minimum_stat_key, item.maximum_stat_key) if candidate] for key, item in definitions.items()}
     graph[request.stat_key] = [candidate for candidate in (request.minimum_stat_key, request.maximum_stat_key) if candidate]
     visiting: set[str] = set(); visited: set[str] = set()
@@ -2660,6 +2661,46 @@ def _validate_formula_stats(project_id: str, node: Any) -> None:
     for child in node.children: _validate_formula_stats(project_id, child)
 
 
+def _validate_requirement_references(project_id: str, node: RequirementExpression) -> None:
+    if node.stat_key and not data.rules.stat(project_id, node.stat_key):
+        raise HTTPException(422, f"Requirement references unknown stat: {node.stat_key}")
+    if node.ability_key and not data.rules.ability(project_id, node.ability_key):
+        raise HTTPException(422, f"Requirement references unknown ability: {node.ability_key}")
+    for child in node.children:
+        _validate_requirement_references(project_id, child)
+    if node.child:
+        _validate_requirement_references(project_id, node.child)
+
+
+def _validate_ability_references(project_id: str, request: AbilityDefinitionCreate) -> RequirementExpression:
+    requirements = RequirementExpression.model_validate(request.requirements)
+    _validate_requirement_references(project_id, requirements)
+    projection = scheduler.world.projection(project_id)
+    entities = projection.get("entities", {})
+    for cost in request.costs:
+        if cost.stat_key:
+            definition = data.rules.stat(project_id, cost.stat_key)
+            if not definition:
+                raise HTTPException(422, f"Unknown stat in ability: {cost.stat_key}")
+            if "character" not in map(str, definition.compatible_owner_kinds):
+                raise HTTPException(422, f"Ability cost stat is not character-compatible: {cost.stat_key}")
+        if cost.item_id and entities.get(str(cost.item_id), {}).get("kind") != "item":
+            raise HTTPException(422, f"Unknown fuel item in ability: {cost.item_id}")
+    for trigger in request.passive_triggers:
+        if trigger.stat_key and not data.rules.stat(project_id, trigger.stat_key):
+            raise HTTPException(422, f"Passive trigger references unknown stat: {trigger.stat_key}")
+    for action in request.actions:
+        if action.effect_key and not data.rules.effect(project_id, action.effect_key):
+            raise HTTPException(422, f"Unknown effect in ability: {action.effect_key}")
+        if action.destination_id and entities.get(str(action.destination_id), {}).get("kind") != "location":
+            raise HTTPException(422, f"Unknown destination in ability: {action.destination_id}")
+        if action.fact_id and entities.get(str(action.fact_id), {}).get("kind") != "fact":
+            raise HTTPException(422, f"Unknown fact in ability: {action.fact_id}")
+        if action.noise_id and not data.sound.noise_variant(project_id, str(action.noise_id), playable_only=False):
+            raise HTTPException(422, f"Unknown noise in ability: {action.noise_id}")
+    return requirements
+
+
 @app.post("/api/projects/{project_id}/abilities", status_code=201)
 async def create_ability(project_id: str, request: AbilityDefinitionCreate) -> dict[str, Any]:
     require_project(project_id)
@@ -2670,11 +2711,8 @@ async def create_ability(project_id: str, request: AbilityDefinitionCreate) -> d
         config = next(row for row in scheduler.minigames.configs(project_id) if row["game_key"] == "timed_attack")
         if not (config["min_attack_lines"] <= request.timed_attack_line_count <= config["max_attack_lines"] and config["min_attack_damage"] <= request.timed_attack_damage_per_line <= config["max_attack_damage"]):
             raise HTTPException(422, "Timed-attack ability profile is outside the project minigame ranges")
-    for cost in request.costs:
-        if cost.stat_key and not data.rules.stat(project_id, cost.stat_key): raise HTTPException(422, f"Unknown stat in ability: {cost.stat_key}")
-    for action in request.actions:
-        if action.effect_key and not data.rules.effect(project_id, action.effect_key): raise HTTPException(422, f"Unknown effect in ability: {action.effect_key}")
-    try: result = data.rules.save_ability(Ability.model_validate({"project_id": project_id, **request.model_dump(), "requirements": RequirementExpression.model_validate(request.requirements)}))
+    requirements = _validate_ability_references(project_id, request)
+    try: result = data.rules.save_ability(Ability.model_validate({"project_id": project_id, **request.model_dump(), "requirements": requirements}))
     except Exception as exc: raise HTTPException(422, str(exc)) from exc
     return result.model_dump(mode="json")
 
@@ -2717,6 +2755,7 @@ async def delete_stat(project_id: str, stat_key: str) -> None:
 @app.delete("/api/projects/{project_id}/effects/{effect_key}", status_code=204)
 async def delete_effect(project_id: str, effect_key: str) -> None:
     require_idle_project(project_id)
+    if not data.rules.effect(project_id, effect_key): raise HTTPException(404, "Effect definition not found")
     if db.fetch_one("SELECT 1 FROM ability_actions WHERE project_id=? AND effect_key=?", (project_id, effect_key)): raise HTTPException(409, "Effect is referenced by an ability")
     if any(item.get("effect_key") == effect_key for item in scheduler.world.projection(project_id).get("active_effects", {}).values()): raise HTTPException(409, "Effect has active instances")
     db.execute("DELETE FROM effect_definitions WHERE project_id=? AND effect_key=?", (project_id, effect_key))
@@ -2745,6 +2784,7 @@ async def remove_active_effect(project_id: str, instance_id: str) -> dict[str, A
 @app.delete("/api/projects/{project_id}/abilities/{ability_key}", status_code=204)
 async def delete_ability(project_id: str, ability_key: str) -> None:
     require_idle_project(project_id)
+    if not data.rules.ability(project_id, ability_key): raise HTTPException(404, "Ability definition not found")
     if db.fetch_one("SELECT 1 FROM ability_requirement_nodes WHERE project_id=? AND required_ability_key=?", (project_id, ability_key)): raise HTTPException(409, "Ability is referenced by another ability requirement")
     if db.fetch_one(
         "SELECT 1 FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id "

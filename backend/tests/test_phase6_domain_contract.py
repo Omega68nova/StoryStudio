@@ -170,69 +170,13 @@ def test_world_effective_stats_use_dynamic_bounds(tmp_path: Path) -> None:
     db = Database(tmp_path / "data")
     db.initialize()
     project = db.create_project("Dynamic bounds")
-    now = "now"
-    db.execute(
-        "INSERT INTO stat_definitions("
-        "id,project_id,stat_key,label,description,scope,default_value,"
-        "minimum,maximum,minimum_stat_key,maximum_stat_key,color,"
-        "minimum_color,maximum_color,display_style,integer_only,visibility,"
-        "created_at,updated_at"
-        ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            "max-hp",
-            project["id"],
-            "max_hp",
-            "Maximum Health",
-            "",
-            "character",
-            100,
-            1,
-            999,
-            None,
-            None,
-            None,
-            None,
-            None,
-            "compact",
-            1,
-            "public",
-            now,
-            now,
-        ),
-    )
-    db.execute(
-        "INSERT INTO stat_definitions("
-        "id,project_id,stat_key,label,description,scope,default_value,"
-        "minimum,maximum,minimum_stat_key,maximum_stat_key,color,"
-        "minimum_color,maximum_color,display_style,integer_only,visibility,"
-        "created_at,updated_at"
-        ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (
-            "hp",
-            project["id"],
-            "hp",
-            "Health",
-            "",
-            "character",
-            100,
-            0,
-            100,
-            None,
-            "max_hp",
-            None,
-            None,
-            None,
-            "bar",
-            1,
-            "public",
-            now,
-            now,
-        ),
-    )
+    world = WorldEngine(db)
+    world.data.rules.save_stat(Stat(project_id=project["id"], stat_key="max_hp", label="Maximum Health", compatible_owner_kinds=["character"], default_value=100, minimum=1, maximum=999))
+    world.data.rules.save_stat(Stat(project_id=project["id"], stat_key="hp", label="Health", compatible_owner_kinds=["character"], default_value=100, minimum=0, maximum=100, maximum_stat_key="max_hp", display_style="bar"))
 
-    values = WorldEngine(db).effective_stats(
+    values = world.effective_stats(
         project["id"],
-        {"stats": {"hp": 140, "max_hp": 75}, "active_effects": []},
+        {"stats": {"hp": 140, "max_hp": 75}},
     )
 
     assert values["max_hp"] == 75

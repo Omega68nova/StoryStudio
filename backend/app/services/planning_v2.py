@@ -576,10 +576,17 @@ def apply_weather(db: Database, project_id: str, owner_id: str, stage_number: in
 
 def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int, draft: dict[str, Any]) -> None:
     rules = DataProvider(db).rules
+    stat_models: list[tuple[Stat, dict[str, Any]]] = []
     for stat in draft.get("stats", []):
         key = str(stat.get("key") or stat.get("stat_key") or "").strip()
         if not key: raise WorldValidationError("Invalid stat definition")
         model = Stat.model_validate({"project_id": project_id, **stat, "stat_key": key, "label": stat.get("label") or key})
+        stat_models.append((model, stat))
+    source_by_key = {model.stat_key: source for model, source in stat_models}
+    available_stats = {item.stat_key for item in rules.stats(project_id)}.difference(source_by_key)
+    for model in rules.dependency_ordered_stats([item[0] for item in stat_models], available_stats):
+        stat = source_by_key[model.stat_key]
+        key = model.stat_key
         rules.save_stat(model, previous_key=key if rules.stat(project_id, key) else None)
         record_resource(db, owner_id, stage_number, key, "stat", key, stat)
     known_stats = {item.stat_key for item in rules.stats(project_id)}
@@ -590,6 +597,11 @@ def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int,
         if model.target_stat_key not in known_stats: raise WorldValidationError(f"Effect '{key}' targets an unavailable stat")
         rules.save_effect(model, previous_key=key if rules.effect(project_id, key) else None)
         record_resource(db, owner_id, stage_number, key, "effect", key, effect)
+    ability_keys = {
+        str(ability.get("key") or ability.get("ability_key") or "").strip()
+        for ability in draft.get("abilities", [])
+    }
+    ability_keys.discard("")
     for ability in draft.get("abilities", []):
         key = str(ability.get("key") or ability.get("ability_key") or "").strip()
         if not key: raise WorldValidationError(f"Ability '{ability.get('name') or 'Unnamed ability'}' requires a stable key")
@@ -598,7 +610,7 @@ def apply_rules(db: Database, project_id: str, owner_id: str, stage_number: int,
         if missing: raise WorldValidationError(f"Ability '{model.name}' references unavailable stat(s): {', '.join(missing)}")
         for action in model.actions:
             if action.effect_key and not rules.effect(project_id, action.effect_key): raise WorldValidationError(f"Ability '{model.name}' references unavailable effect '{action.effect_key}'")
-        rules.save_ability(model, previous_key=key if rules.ability(project_id, key) else None)
+        rules.save_ability(model, previous_key=key if rules.ability(project_id, key) else None, available_ability_keys=ability_keys)
         record_resource(db, owner_id, stage_number, key, "ability", key, ability)
 
 

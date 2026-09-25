@@ -4,6 +4,7 @@ import pytest
 
 from app.database import Database
 from app.database import new_id, utc_now
+from app.domain.world import Ability
 from app.services.minigames import HEX_EDGES, MANIFESTS, VIRTUAL_PLAYER_ID, MinigameService, hex_is_solved, replay_circled_teeth, score_timed_attack
 from app.services.world import WorldEngine, WorldValidationError
 
@@ -246,9 +247,7 @@ def test_circled_teeth_server_replays_insert_pullout_and_empty_inputs():
 
 def test_timed_attack_ability_profile_precedes_ai_values(tmp_path: Path):
     db, project, world, service = setup_world(tmp_path)
-    now = utc_now()
-    db.execute("INSERT INTO ability_definitions(id,project_id,ability_key,name,description,target_type,requirements_json,costs_json,effects_json,minigame_profile_json,created_at,updated_at) VALUES (?,?,?,?,?,'character','{}','{}','[]',?,?,?)",
-               (new_id(), project["id"], "rapid_slash", "Rapid Slash", "", '{"timed_attack":{"line_count":4,"damage_per_line":12}}', now, now))
+    world.data.rules.save_ability(Ability(project_id=project["id"], ability_key="rapid_slash", name="Rapid Slash", target_type="character", timed_attack_line_count=4, timed_attack_damage_per_line=12))
     mutation = world.normalize_mutations(project["id"], None, [{"tool": "updateEntity", "arguments": {"entity_id": "hero", "patch": {"abilities": ["rapid_slash"]}}}], provenance="test")
     world.commit_root(project["id"], mutation, provenance="test", summary="Learn attack")
     enable(service, project["id"], "timed_attack")
