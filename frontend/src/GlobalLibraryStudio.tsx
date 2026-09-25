@@ -46,6 +46,8 @@ export function GlobalLibraryStudio({
   const [packName, setPackName] = useState("");
   const [packDescription, setPackDescription] = useState("");
   const [packTags, setPackTags] = useState("");
+  const [applyResource, setApplyResource] = useState<LibraryResource | null>(null);
+  const [conflictPolicy, setConflictPolicy] = useState<"error" | "skip" | "replace">("error");
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
@@ -79,6 +81,24 @@ export function GlobalLibraryStudio({
       setPackTags("");
       await load();
       changed?.();
+    } catch (cause) {
+      fail(String(cause));
+    }
+  }
+
+  async function applyStatPack() {
+    if (!projectId || !applyResource) return;
+    try {
+      await api("/projects/" + projectId + "/library/stat-packs/" + applyResource.id + "/apply", {
+        method: "POST",
+        body: JSON.stringify({
+          conflict_policy: conflictPolicy,
+          source_story_node_id: sourceStoryNodeId || null,
+        }),
+      });
+      setApplyResource(null);
+      changed?.();
+      await load();
     } catch (cause) {
       fail(String(cause));
     }
@@ -121,7 +141,7 @@ export function GlobalLibraryStudio({
 
     <Paper className="panel global-library-table">
       <div className="global-library-row header">
-        <span>Name</span><span>Type</span><span>Revision</span><span>Children</span><span>Stories</span><span>Imports</span>
+        <span>Name</span><span>Type</span><span>Revision</span><span>Children</span><span>Stories</span><span>Imports</span><span>Action</span>
       </div>
       {resources.length === 0 && <div className="global-library-empty">No matching library resources.</div>}
       {resources.map(resource => <div className="global-library-row" key={resource.id}>
@@ -134,8 +154,32 @@ export function GlobalLibraryStudio({
         <span>{resource.child_count}</span>
         <span>{resource.referenced_story_count}</span>
         <span>{resource.import_count}</span>
+        <span>{projectId && resource.resource_kind === "stat_pack"
+          ? <Button size="small" onClick={() => { setConflictPolicy("error"); setApplyResource(resource); }}>Apply</Button>
+          : "—"}</span>
       </div>)}
     </Paper>
+
+    <Dialog open={Boolean(applyResource)} onClose={() => setApplyResource(null)} fullWidth maxWidth="xs">
+      <DialogTitle>Apply {applyResource?.name}</DialogTitle>
+      <DialogContent sx={{ display: "grid", gap: 2, pt: "12px !important" }}>
+        <TextField
+          select
+          label="If a stat key already exists"
+          value={conflictPolicy}
+          onChange={event => setConflictPolicy(event.target.value as "error" | "skip" | "replace")}
+        >
+          <MenuItem value="error">Stop and report conflict</MenuItem>
+          <MenuItem value="skip">Keep existing stat</MenuItem>
+          <MenuItem value="replace">Replace existing definition</MenuItem>
+        </TextField>
+        <small>The imported definitions become independent project-local rules. Future library revisions do not update this story automatically.</small>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setApplyResource(null)}>Cancel</Button>
+        <Button variant="contained" onClick={() => void applyStatPack()}>Apply pack</Button>
+      </DialogActions>
+    </Dialog>
 
     <Dialog open={saveStatsOpen} onClose={() => setSaveStatsOpen(false)} fullWidth maxWidth="sm">
       <DialogTitle>Save reusable stat pack</DialogTitle>
