@@ -979,7 +979,7 @@ export function LocationMapStudio({
       const source = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.source_anchor_id));
       const target = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.target_anchor_id));
       if (source && target && distanceToSegment(point, source, target) <= 1.4) {
-        const label = connection.kind === "route" ? "Route / shortcut" : connection.kind === "portal" ? "Portal" : "Door";
+        const label = connection.kind === "route" ? "Route / shortcut" : connection.kind === "portal" ? "Portal / teleporter" : "Door";
         candidates.push({ id: connection.id, label, detail: "connection" });
       }
     }
@@ -1622,7 +1622,7 @@ export function LocationMapStudio({
             >
               <MenuItem value="route">Route / shortcut</MenuItem>
               <MenuItem value="door">Door</MenuItem>
-              <MenuItem value="portal">Portal</MenuItem>
+              <MenuItem value="portal">Portal / teleporter</MenuItem>
             </TextField>
             <TextField size="small" type="number" label="Travel minutes" value={routeDialog.travelMinutes} onChange={event => setRouteDialog({ ...routeDialog, travelMinutes: Number(event.target.value) })} />
             <TextField size="small" label="Modes" value={routeDialog.modes} onChange={event => setRouteDialog({ ...routeDialog, modes: event.target.value })} />
