@@ -513,7 +513,7 @@ export function LocationMapStudio({
   }
 
   async function convertLocationKind(entity: WorldEntity, kind: "spot" | "area") {
-    const current = locationDraft(entity);
+    const current = editorDraft?.id === entity.id ? editorDraft : locationDraft(entity);
     if (current.spatial_kind === kind) return;
     const points = geometryPoints(entity);
     const center = points.length ? centroid(points) : fallbackLocationPoint(entity);
@@ -538,6 +538,12 @@ export function LocationMapStudio({
     await api(`/projects/${projectId}/environment/locations/${entity.id}`, { method: "DELETE" });
     setSelectedId(null);
     setEditorDraft(null);
+    await load();
+  }
+
+  async function deleteSpatialObject(kind: "anchor" | "barrier", id: string) {
+    await api(`/projects/${projectId}/spatial/${kind}/${id}`, { method: "DELETE" });
+    setSelectedId(null);
     await load();
   }
 
@@ -1400,6 +1406,17 @@ export function LocationMapStudio({
                 .filter(item => item.kind === "location" && item.id !== selectedLocation.id && !item.state.archived)
                 .map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
             </TextField>
+            <TextField
+              select
+              size="small"
+              label="Map representation"
+              helperText="Canonical backend type: spot or area."
+              value={editorDraft.spatial_kind}
+              onChange={event => void convertLocationKind(selectedLocation, event.target.value as "spot" | "area")}
+            >
+              <MenuItem value="spot">Spot</MenuItem>
+              <MenuItem value="area">Area</MenuItem>
+            </TextField>
             <div className="location-map-two-column">
               <TextField select size="small" label="Topology" value={editorDraft.topology} onChange={event => setEditorDraft({ ...editorDraft, topology: event.target.value as EnvironmentLocation["topology"] })}>
                 <MenuItem value="open">Open</MenuItem>
@@ -1433,6 +1450,7 @@ export function LocationMapStudio({
             <div className="location-map-switches">
               <FormControlLabel control={<Switch size="small" checked={editorDraft.enabled} onChange={event => setEditorDraft({ ...editorDraft, enabled: event.target.checked })} />} label="Enabled" />
               <FormControlLabel control={<Switch size="small" checked={editorDraft.discovered} onChange={event => setEditorDraft({ ...editorDraft, discovered: event.target.checked })} />} label="Discovered" />
+              <FormControlLabel control={<Switch size="small" checked={editorDraft.hidden} onChange={event => setEditorDraft({ ...editorDraft, hidden: event.target.checked })} />} label="Hidden" />
               <FormControlLabel control={<Switch size="small" checked={editorDraft.random_encounter} onChange={event => setEditorDraft({ ...editorDraft, random_encounter: event.target.checked })} />} label="Random encounter" />
             </div>
           </div>
@@ -1449,6 +1467,7 @@ export function LocationMapStudio({
               : <p className="location-map-content-empty">No child locations are configured inside this area.</p>}
           </section>}
           <div className="location-map-inspector-actions">
+            <Button color="error" onClick={() => void deleteLocation(selectedLocation)}>Delete location</Button>
             <Button onClick={() => setEditorDraft(locationDraft(selectedLocation))}>Reset</Button>
             <Button variant="contained" onClick={() => void saveLocation(editorDraft)}>Save</Button>
           </div>
@@ -1478,7 +1497,7 @@ export function LocationMapStudio({
             >
               <MenuItem value="route">Route / shortcut</MenuItem>
               <MenuItem value="door">Door</MenuItem>
-              <MenuItem value="portal">Portal</MenuItem>
+              <MenuItem value="portal">Portal / teleporter</MenuItem>
             </TextField>
             <TextField size="small" type="number" label="Travel minutes" value={connectionDraft.travelMinutes} onChange={event => setConnectionDraft({ ...connectionDraft, travelMinutes: Number(event.target.value) })} />
             <TextField size="small" label="Travel modes" helperText="Comma separated, e.g. walk, fly" value={connectionDraft.modes} onChange={event => setConnectionDraft({ ...connectionDraft, modes: event.target.value })} />
@@ -1500,7 +1519,7 @@ export function LocationMapStudio({
             <small>Endpoint bindings preserve whether each point is free, inside an area, on an area border, or attached to a spot.</small>
           </div>
           <div className="location-map-inspector-actions">
-            <Button color="error" onClick={() => void deleteConnection(selectedConnection)}>Delete route</Button>
+            <Button color="error" onClick={() => void deleteConnection(selectedConnection)}>Delete connection</Button>
             <Button variant="contained" onClick={() => void saveConnection(selectedConnection)}>Save route</Button>
           </div>
         </> : selectedSpatial ? <>
@@ -1511,6 +1530,10 @@ export function LocationMapStudio({
             {"kind" in selectedSpatial && <p><b>Type</b><span>{selectedSpatial.kind}</span></p>}
             {"blocked_modes" in selectedSpatial && <p><b>Blocks</b><span>{String((selectedSpatial as SpatialBarrier).blocked_modes ?? "walk")}</span></p>}
             {"binding_kind" in selectedSpatial && <p><b>Binding</b><span>{String((selectedSpatial as SpatialAnchor).binding_kind ?? "coordinate").replaceAll("_", " ")}</span></p>}
+          </div>
+          <div className="location-map-inspector-actions">
+            {"blocked_modes" in selectedSpatial && <Button color="error" onClick={() => void deleteSpatialObject("barrier", selectedSpatial.id)}>Delete barrier</Button>}
+            {"binding_kind" in selectedSpatial && <Button color="error" onClick={() => void deleteSpatialObject("anchor", selectedSpatial.id)}>Delete endpoint</Button>}
           </div>
         </> : <>
           <section className="location-map-inspector-heading">
