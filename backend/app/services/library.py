@@ -84,6 +84,20 @@ class GlobalLibraryService:
             "revision": revision,
         }
 
+    def stat_pack_snapshot(
+        self,
+        resource_id: str,
+        revision_id: str | None = None,
+    ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        resource, revision, snapshot = self.stat_pack_snapshot(resource_id, revision_id)
+        selected_revision_id = revision["id"]
+        stats = snapshot.get("stats")
+        if not isinstance(stats, list) or not stats:
+            raise ValueError("Stat pack has no stat definitions")
+        for raw in stats:
+            Stat.model_validate(raw)
+        return resource, revision, snapshot
+
     def apply_stat_pack(
         self,
         resource_id: str,
