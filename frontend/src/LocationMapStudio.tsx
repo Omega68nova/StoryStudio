@@ -835,6 +835,11 @@ export function LocationMapStudio({
     if (!dragLocation || !world) return;
     const entity = world.entities[dragLocation.id];
     if (!entity) return;
+    if (Math.abs(dragOffset.x) < .1 && Math.abs(dragOffset.y) < .1) {
+      setDragLocation(null);
+      setDragOffset({ x: 0, y: 0 });
+      return;
+    }
     const next = locationDraft(entity);
     next.x = clamp(round(dragLocation.x + dragOffset.x));
     next.y = clamp(round(dragLocation.y + dragOffset.y));
