@@ -527,7 +527,10 @@ export default function App() {
             projectId={project?.id}
             sourceStoryNodeId={leafId}
             fail={setError}
-            changed={() => void loadStatPacks()}
+            changed={() => {
+              setRevision(value => value + 1);
+              void loadStatPacks();
+            }}
           />
         )}
         {view === "settings" && (
