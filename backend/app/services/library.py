@@ -259,7 +259,8 @@ class GlobalLibraryService:
             if not entity or entity.get("kind") != source_kind:
                 raise ValueError(f"{source_kind.replace('_', ' ').title()} not found")
             latest = self._entity_snapshot(entity)
-            original = self._entity_original(project_id, source_key, head_node_id) or latest
+            original_record = self._entity_original(project_id, source_key, head_node_id)
+            original = original_record or latest
             state = latest.get("state", {})
             return {
                 "name": latest["name"],
@@ -267,8 +268,8 @@ class GlobalLibraryService:
                 "tags": list(latest.get("tags") or []),
                 "original": original,
                 "latest": latest,
-                "original_available": original is not None,
-                "has_changed": original != latest,
+                "original_available": original_record is not None,
+                "has_changed": original_record is not None and original != latest,
             }
 
         if source_kind == "outfit":
