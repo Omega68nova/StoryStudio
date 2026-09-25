@@ -1314,7 +1314,115 @@ retrieval database authoritative.
 
 ---
 
-# 21. Phase 8 — branch-aware context retrieval (RAG)
+# 21. Phase 7B — reusability, branch integrity, and global library
+
+Phase 7B is a prerequisite for the remaining Phase 7 polish and for Phase 8.
+Phase 8 will create and retrieve far more resources; reusable snapshots,
+provenance, dependency trees, and shared media must exist before AI generation
+starts producing them at scale.
+
+The governing rule is:
+
+> **Branches own runtime truth. The Global Library owns immutable reusable
+> revisions.**
+
+A library resource must never be the same mutable row as an entity, rule, or
+runtime state inside a story. Saving from a story publishes an immutable
+snapshot revision with provenance. Importing creates or updates project-local
+canonical records and records which library revision they came from. Library
+revisions never silently synchronize into existing stories.
+
+Expected implementation slices:
+
+## Phase 7B-A — revisioned global resource foundation
+
+- Add first-class global resources with stable library IDs and typed resource
+  kinds.
+- Store immutable numbered revisions containing versioned snapshots.
+- Record optional source project, story node/branch, source kind, and source
+  key for every published revision.
+- Allow resources to form dependency trees/bundles through explicit child
+  edges instead of embedding unrelated records into one opaque JSON blob.
+- Track project imports separately so usage counts and provenance remain
+  queryable without making the library authoritative over story state.
+- Add marked/unmarked resources, searchable tags, and a Global Library
+  workspace directly below Stories.
+- Keep import/update/compare explicit; no automatic synchronization.
+
+## Phase 7B-B — stat packs and rule bundles
+
+- Replace hardcoded story-creation stat presets with reusable `stat_pack`
+  resources.
+- A stat pack captures canonical definitions and their dependency ordering,
+  not transient per-character values.
+- Support saving selected or complete stat sets from a story as a new library
+  resource or a new revision.
+- Import stat packs with explicit conflict policy and project-local copies.
+- Extend the same resource-tree mechanism to effects, abilities, and mixed
+  rule packs, resolving immutable keys and dependencies explicitly.
+
+## Phase 7B-C — entity/resource trees
+
+- Save initial state and explicitly player-approved important updates for
+  characters, items, locations, factions, lore systems, outfits, and related
+  resources.
+- Allow tree publication such as character -> outfits, home, items, stats,
+  abilities/effects, relationships, and dependent rule definitions.
+- Provide dependency preview and selective include/exclude when publishing or
+  importing a tree.
+- Preserve exact source branch/story-node provenance for every published
+  revision so alternate branches can intentionally produce separate library
+  revisions.
+
+## Phase 7B-D — global shared media
+
+- Move image file identity to a content-addressed global media layer so one
+  physical file can serve many story/resource references.
+- Use SHA-256 (or equivalent content hash) for deduplication; references, not
+  copied files, attach media to characters, outfits, items, rules, locations,
+  and story illustrations.
+- Preserve semantic image kinds even when dimensions match:
+  `icon`, `portrait`, `full_body`, `background`, and `story_image`.
+- Preserve generation metadata (prompt, negative prompt, seed, workflow,
+  model/checkpoint, dimensions, transparency, source resource/outfit) and
+  searchable tags such as character name and appearance/location concepts.
+- Generated metadata is descriptive/searchable data, never canonical world
+  state.
+- Expose reference count, referenced story count, and zero-reference state in
+  the library. Zero-reference assets remain until explicitly cleaned up.
+
+## Phase 7B-E — shared media input/viewer
+
+- Every image input uses one reusable picker surface: generate, upload, choose
+  from library, view full screen, download, and remove reference.
+- Item/ability/effect icons use the canonical transparent 512x512 icon profile
+  but may explicitly use an emoji alternative.
+- Portraits and icons remain semantically distinct despite sharing 512x512
+  transparent dimensions.
+- Story illustrations, portraits, full bodies, backgrounds, and icons all use
+  one full-screen media viewer with original-file download.
+- Library media defaults to a thumbnail grid with optional table view and
+  filters for marked/all, kind, tags, referenced/unreferenced, and generation
+  source.
+
+## Phase 7B-F — compare, update, cleanup, and hardening
+
+- Compare a story-local resource with the library revision it originated from.
+- Explicitly update/re-import from a newer revision with dependency/conflict
+  preview.
+- Publish a new library revision from an important player-decided branch state
+  without automatically exporting transient simulation values.
+- Add orphan/unreferenced media cleanup with confirmation and marked-resource
+  protection.
+- Test branch isolation, provenance, import determinism, dependency cycles,
+  media deduplication/reference counts, and revision immutability.
+
+Phase 7B must be substantially complete before Phase 8 resource generation or
+RAG indexing treats global-library resources as reusable context.
+
+---
+
+# 22. Phase 8 — branch-aware context retrieval (RAG)
 
 Phase 8 adds retrieval-augmented context after the canonical storage model is
 stable. Its purpose is to reduce prompt size for mature stories without
@@ -1382,7 +1490,7 @@ Expected implementation slices:
 
 ---
 
-# 22. Current roadmap status
+# 23. Current roadmap status
 
 ```text
 Phase 3 — DataProvider / repositories
@@ -1403,8 +1511,11 @@ Phase 6 — UI/world configuration cleanup
 Phase 7 — Canonical storage refactor
     IN PROGRESS — typed entities, spatial storage, and canonical rules complete
 
+Phase 7B — Reusability / branch integrity / Global Library
+    IN PROGRESS — revisioned library foundation and reusable stat packs started
+
 Phase 8 — Branch-aware context retrieval (RAG)
-    FUTURE — depends on Phase 7 canonical records
+    FUTURE — depends on Phase 7 canonical records and Phase 7B reusable-resource/media foundations
 ```
 
 Phase 5A established lossless typed identity, entity, weather, rule,

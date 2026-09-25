@@ -1821,3 +1821,110 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
     grid-template-columns: 1fr;
   }
 }
+
+
+/* Phase 7B global reusable library */
+.global-library-nav.MuiButton-root {
+  margin: 8px 10px 4px;
+  justify-content: flex-start;
+  border: 1px solid #ddd1bf;
+  color: #6d5b44;
+  background: rgba(247, 242, 233, .76);
+  font-size: 10px;
+}
+.global-library-nav.MuiButton-root.active {
+  border-color: #bda57f;
+  background: #eee2cf;
+  color: #4d3b27;
+}
+.global-library-studio {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+.global-library-header {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 18px;
+}
+.global-library-header h2 {
+  margin: 2px 0 5px;
+  font: 500 24px Georgia, serif;
+}
+.global-library-header p:not(.eyebrow) {
+  max-width: 760px;
+  margin: 0;
+  color: #766b5f;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.global-library-toolbar {
+  display: grid;
+  grid-template-columns: auto minmax(150px, .35fr) minmax(240px, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+.global-library-table {
+  padding: 0;
+  overflow: hidden;
+}
+.global-library-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 2fr) minmax(120px, .8fr) 80px 80px 80px 80px 84px;
+  gap: 10px;
+  align-items: center;
+  min-height: 48px;
+  padding: 8px 12px;
+  border-top: 1px solid #e7dfd3;
+  font-size: 10px;
+}
+.global-library-row.header {
+  min-height: 34px;
+  border-top: 0;
+  background: #f2ebdf;
+  color: #7d6e5d;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.global-library-name {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+.global-library-name b,
+.global-library-name small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.global-library-name b {
+  font: 500 12px Georgia, serif;
+}
+.global-library-name small {
+  color: #887c6e;
+  font-size: 9px;
+}
+.global-library-empty {
+  padding: 36px 16px;
+  color: #8a7e70;
+  text-align: center;
+  font-size: 11px;
+}
+@media (max-width: 900px) {
+  .global-library-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .global-library-toolbar {
+    grid-template-columns: 1fr;
+  }
+  .global-library-table {
+    overflow-x: auto;
+  }
+  .global-library-row {
+    min-width: 760px;
+  }
+}

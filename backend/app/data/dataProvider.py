@@ -14,6 +14,7 @@ from app.data.storyRepository import StoryRepository
 from app.data.workflowRepository import WorkflowRepository
 from app.data.worldRepository import WorldRepository
 from app.data.lifecycleRepository import LifecycleRepository
+from app.data.libraryRepository import LibraryRepository
 from app.data.runtimeRepository import RuntimeRepository
 from app.data.batchGenerationRepository import BatchGenerationRepository
 from app.data.authRepository import AuthRepository
@@ -38,6 +39,7 @@ class DataProvider:
         self.world = WorldRepository(db)
         self.auth = AuthRepository(db)
         self.lifecycle = LifecycleRepository(db)
+        self.library = LibraryRepository(db)
         self.runtime = RuntimeRepository(db)
         self.batch_generation = BatchGenerationRepository(db)
         self.rules = RulesRepository(db)
