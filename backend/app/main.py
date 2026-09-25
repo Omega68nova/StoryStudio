@@ -53,6 +53,9 @@ from app.schemas import (
     LibraryStatPackApply,
     LibraryFavoritePreviewRequest,
     LibraryFavoritePublishRequest,
+    LibraryBatchMarkRequest,
+    LibraryPresetCreate,
+    LibraryExportRequest,
     ProjectMusicUpdate,
     MusicPlaybackUpdate,
     ReviewDecision,
@@ -635,6 +638,39 @@ async def update_library_children(resource_id: str, request: LibraryChildrenUpda
         data.library.set_children(resource_id, request.children)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/library/resources/mark")
+async def mark_library_resources(request: LibraryBatchMarkRequest) -> dict[str, Any]:
+    try:
+        resource_ids = data.library.set_marked_many(request.resource_ids, request.marked)
+        return {"resource_ids": resource_ids, "marked": request.marked}
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/library/presets", status_code=201)
+async def create_library_preset(request: LibraryPresetCreate) -> dict[str, Any]:
+    try:
+        return library_service.create_named_preset(
+            name=request.name,
+            description=request.description,
+            resource_ids=request.resource_ids,
+            tags=request.tags,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/library/export")
+async def export_library_resources(request: LibraryExportRequest) -> dict[str, Any]:
+    try:
+        return library_service.export_library_resources(
+            request.resource_ids,
+            include_revisions=request.include_revisions,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
 
 
 @app.post("/api/projects/{project_id}/library/favorite-preview")
