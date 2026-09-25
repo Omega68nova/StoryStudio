@@ -29,10 +29,12 @@ type LibraryResource = {
 
 export function GlobalLibraryStudio({
   projectId,
+  sourceStoryNodeId,
   fail,
   changed,
 }: {
   projectId?: string;
+  sourceStoryNodeId?: string | null;
   fail: (message: string) => void;
   changed?: () => void;
 }) {
@@ -68,6 +70,7 @@ export function GlobalLibraryStudio({
           stat_keys: null,
           marked: true,
           tags: packTags.split(",").map(item => item.trim()).filter(Boolean),
+          source_story_node_id: sourceStoryNodeId || null,
         }),
       });
       setSaveStatsOpen(false);
