@@ -89,8 +89,18 @@ class GlobalLibraryService:
         resource_id: str,
         revision_id: str | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-        resource, revision, snapshot = self.stat_pack_snapshot(resource_id, revision_id)
-        selected_revision_id = revision["id"]
+        resource = self.data.library.resource(resource_id)
+        if not resource or resource["resource_kind"] != "stat_pack":
+            raise ValueError("Stat pack not found")
+        selected_revision_id = revision_id or resource.get("current_revision_id")
+        if not selected_revision_id:
+            raise ValueError("Stat pack has no revision")
+        revision = self.data.library.revision(selected_revision_id)
+        if not revision or revision["resource_id"] != resource_id:
+            raise ValueError("Revision does not belong to this stat pack")
+        snapshot = revision["snapshot"]
+        if snapshot.get("resource_kind") != "stat_pack" or snapshot.get("schema_version") != 1:
+            raise ValueError("Unsupported stat-pack snapshot")
         stats = snapshot.get("stats")
         if not isinstance(stats, list) or not stats:
             raise ValueError("Stat pack has no stat definitions")
@@ -123,18 +133,8 @@ class GlobalLibraryService:
         conflict_policy: str = "error",
         source_story_node_id: str | None = None,
     ) -> dict[str, Any]:
-        resource = self.data.library.resource(resource_id)
-        if not resource or resource["resource_kind"] != "stat_pack":
-            raise ValueError("Stat pack not found")
-        selected_revision_id = revision_id or resource.get("current_revision_id")
-        if not selected_revision_id:
-            raise ValueError("Stat pack has no revision")
-        revision = self.data.library.revision(selected_revision_id)
-        if not revision or revision["resource_id"] != resource_id:
-            raise ValueError("Revision does not belong to this stat pack")
-        snapshot = revision["snapshot"]
-        if snapshot.get("resource_kind") != "stat_pack" or snapshot.get("schema_version") != 1:
-            raise ValueError("Unsupported stat-pack snapshot")
+        _resource, revision, snapshot = self.stat_pack_snapshot(resource_id, revision_id)
+        selected_revision_id = revision["id"]
         if conflict_policy not in {"error", "skip", "replace"}:
             raise ValueError("conflict_policy must be error, skip, or replace")
 
