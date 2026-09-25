@@ -1751,6 +1751,8 @@ def _route_anchor_rebind_mutations(projection: dict[str, Any], location_id: str,
         if isinstance(point, dict) and isinstance(point.get("x"), (int, float)) and isinstance(point.get("y"), (int, float))
     ]
     result: list[dict[str, Any]] = []
+    old_kind = str(old_state.get("spatial_kind") or "spot")
+    new_kind = str(request.spatial_kind or "spot")
 
     for raw in anchors.values():
         if str(raw.get("binding_target_id") or "") != location_id:
@@ -1758,6 +1760,34 @@ def _route_anchor_rebind_mutations(projection: dict[str, Any], location_id: str,
         kind = str(raw.get("binding_kind") or "coordinate")
         updated = dict(raw)
         changed = False
+
+        # Keep semantic route bindings valid when a location changes between
+        # spot and area representation.
+        if old_kind != new_kind:
+            if new_kind == "area" and kind == "spot":
+                updated["binding_kind"] = "area"
+                center_x = sum(point["x"] for point in next_points) / len(next_points) if next_points else float(request.x or 0)
+                center_y = sum(point["y"] for point in next_points) / len(next_points) if next_points else float(request.y or 0)
+                anchor_x = float(updated.get("x")) if isinstance(updated.get("x"), (int, float)) else center_x
+                anchor_y = float(updated.get("y")) if isinstance(updated.get("y"), (int, float)) else center_y
+                updated["binding_offset_x"] = anchor_x - center_x
+                updated["binding_offset_y"] = anchor_y - center_y
+                updated["binding_segment_index"] = None
+                updated["binding_segment_t"] = None
+                kind = "area"
+                changed = True
+            elif new_kind == "spot" and kind in {"area", "area_border"}:
+                updated["binding_kind"] = "spot"
+                updated["binding_offset_x"] = None
+                updated["binding_offset_y"] = None
+                updated["binding_segment_index"] = None
+                updated["binding_segment_t"] = None
+                if next_points:
+                    updated["x"], updated["y"] = next_points[0]["x"], next_points[0]["y"]
+                elif request.x is not None and request.y is not None:
+                    updated["x"], updated["y"] = float(request.x), float(request.y)
+                kind = "spot"
+                changed = True
 
         if kind == "area":
             if old_points and not isinstance(updated.get("binding_offset_x"), (int, float)):
@@ -1841,6 +1871,89 @@ async def update_environment_location(project_id: str, location_id: str, request
     await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
     await events.publish("environment", {"project_id": project_id, "action": "location_changed"})
     return scheduler.world.entity_card(project_id, location_id)
+
+
+@app.delete("/api/projects/{project_id}/environment/locations/{location_id}", status_code=204)
+async def delete_environment_location(project_id: str, location_id: str) -> None:
+    project = require_project(project_id)
+    projection = scheduler.world.projection(project_id)
+    location = projection.get("entities", {}).get(location_id)
+    if not location or location.get("kind") != "location" or location.get("state", {}).get("archived"):
+        raise HTTPException(404, "Location not found")
+    if projection.get("root_location_id") == location_id:
+        raise HTTPException(422, "The world root cannot be deleted")
+
+    children = [
+        item["name"] for item in projection.get("entities", {}).values()
+        if item.get("kind") == "location"
+        and not item.get("state", {}).get("archived")
+        and str(item.get("state", {}).get("parent_location_id") or "") == location_id
+    ]
+    if children:
+        raise HTTPException(422, "Move or delete child locations first: " + ", ".join(sorted(children)[:6]))
+
+    occupants = [
+        item["name"] for item in projection.get("entities", {}).values()
+        if item.get("kind") == "character"
+        and str(item.get("state", {}).get("current_location_id") or "") == location_id
+    ]
+    if occupants:
+        raise HTTPException(422, "Move characters out of this location first: " + ", ".join(sorted(occupants)[:6]))
+
+    anchors = projection.get("map_anchors", {})
+    doomed_anchor_ids = {
+        str(anchor_id) for anchor_id, anchor in anchors.items()
+        if str(anchor.get("location_id") or "") == location_id
+        or str(anchor.get("binding_target_id") or "") == location_id
+    }
+    doomed_connection_ids = {
+        str(connection_id) for connection_id, connection in projection.get("travel_connections", {}).items()
+        if str(connection.get("source_anchor_id") or "") in doomed_anchor_ids
+        or str(connection.get("target_anchor_id") or "") in doomed_anchor_ids
+    }
+    doomed_barrier_ids = {
+        str(barrier_id) for barrier_id, barrier in projection.get("map_barriers", {}).items()
+        if str(barrier.get("location_id") or "") == location_id
+    }
+    doomed_encounter_ids = {
+        str(rule_id) for rule_id, rule in projection.get("encounter_rules", {}).items()
+        if str(rule.get("location_id") or "") == location_id
+        or str(rule.get("connection_id") or "") in doomed_connection_ids
+    }
+
+    raw_mutations: list[dict[str, Any]] = []
+    raw_mutations.extend({"tool": "removeMapObject", "arguments": {"kind": "encounter", "id": value}} for value in sorted(doomed_encounter_ids))
+    raw_mutations.extend({"tool": "removeMapObject", "arguments": {"kind": "connection", "id": value}} for value in sorted(doomed_connection_ids))
+    raw_mutations.extend({"tool": "removeMapObject", "arguments": {"kind": "barrier", "id": value}} for value in sorted(doomed_barrier_ids))
+    raw_mutations.extend({"tool": "removeMapObject", "arguments": {"kind": "anchor", "id": value}} for value in sorted(doomed_anchor_ids))
+    raw_mutations.append({
+        "tool": "updateEntity",
+        "arguments": {
+            "entity_id": location_id,
+            "patch": {"archived": True, "enabled": False},
+        },
+    })
+
+    try:
+        mutations = scheduler.world.normalize_mutations(
+            project_id, project.get("active_node_id"), raw_mutations, provenance="author"
+        )
+        if project.get("active_node_id"):
+            transaction = scheduler.world.commit_to_existing_node(
+                project_id, project["active_node_id"], mutations,
+                provenance="author", summary=f"Deleted location {location['name']}",
+            )
+        else:
+            transaction = scheduler.world.commit_root(
+                project_id, mutations, provenance="author",
+                summary=f"Deleted location {location['name']}",
+            )
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    spatial_repository.synchronize(project_id, scheduler.world.projection(project_id, use_cache=False), force=True)
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    await events.publish("environment", {"project_id": project_id, "action": "location_changed"})
 
 
 @app.put("/api/projects/{project_id}/environment/scene")
