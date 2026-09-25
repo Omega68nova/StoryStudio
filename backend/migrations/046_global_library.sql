@@ -70,3 +70,16 @@ WHEN NEW.current_revision_id IS NOT NULL AND NOT EXISTS (
   WHERE r.id=NEW.current_revision_id AND r.resource_id=NEW.id
 )
 BEGIN SELECT RAISE(ABORT,'library current revision resource mismatch'); END;
+
+
+CREATE TRIGGER library_revisions_are_immutable
+BEFORE UPDATE ON library_resource_revisions
+BEGIN SELECT RAISE(ABORT,'library revisions are immutable'); END;
+
+CREATE TRIGGER library_import_revision_matches_resource
+BEFORE INSERT ON library_project_imports
+WHEN NOT EXISTS (
+  SELECT 1 FROM library_resource_revisions r
+  WHERE r.id=NEW.revision_id AND r.resource_id=NEW.resource_id
+)
+BEGIN SELECT RAISE(ABORT,'library import revision resource mismatch'); END;
