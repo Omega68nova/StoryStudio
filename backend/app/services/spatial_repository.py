@@ -103,14 +103,15 @@ class SpatialRepository:
                 )
                 self.db.execute(
                     "INSERT INTO spatial_locations("
-                    "location_id,project_id,name,parent_location_id,topology,occupancy,boundary_access,spatial_kind,exposure,"
+                    "location_id,project_id,name,parent_location_id,topology,occupancy,boundary_access,spatial_kind,priority_layer,exposure,"
                     "x,y,hidden,discovered,enabled,random_encounter,minutes_per_unit,base_visibility_units,encounter_rate,"
                     "requires_map_review,footprint_kind,footprint_space_id,local_bounds_kind,local_bounds_space_id,updated_at"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         location_id, project_id, str(entity.get("name") or location_id), state.get("parent_location_id"),
                         state.get("topology", "closed"), state.get("occupancy", "direct_allowed"),
                         state.get("boundary_access", "free"), state.get("spatial_kind", "spot"),
+                        float(state.get("priority_layer", 0) or 0),
                         state.get("exposure", "outdoor"), state.get("x"), state.get("y"),
                         int(bool(state.get("hidden", False))), int(bool(state.get("discovered", True))),
                         int(state.get("enabled", True) is not False), int(bool(state.get("random_encounter", False))),
@@ -192,10 +193,12 @@ class SpatialRepository:
                     coordinate_space_id = owner_id
                 self.db.execute(
                     "INSERT INTO spatial_anchors_current("
-                    "id,project_id,location_id,coordinate_space_id,name,kind,x,y,hidden,discovered,enabled,requires_map_review,updated_at"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "id,project_id,location_id,coordinate_space_id,binding_kind,binding_target_id,name,kind,x,y,hidden,discovered,enabled,requires_map_review,updated_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
-                        anchor_id, project_id, owner_id, coordinate_space_id, str(item.get("name") or "Anchor"),
+                        anchor_id, project_id, owner_id, coordinate_space_id,
+                        str(item.get("binding_kind") or "coordinate"), item.get("binding_target_id"),
+                        str(item.get("name") or "Anchor"),
                         str(item.get("kind") or "waypoint"), item.get("x"), item.get("y"),
                         int(bool(item.get("hidden", False))), int(bool(item.get("discovered", True))),
                         int(item.get("enabled", True) is not False), int(bool(item.get("requires_map_review", False))), now,
@@ -423,6 +426,7 @@ class SpatialRepository:
                 "occupancy": item["occupancy"],
                 "boundary_access": item["boundary_access"],
                 "spatial_kind": item["spatial_kind"],
+                "priority_layer": item["priority_layer"],
                 "exposure": item["exposure"],
                 "hidden": bool(item["hidden"]),
                 "discovered": bool(item["discovered"]),
@@ -447,6 +451,7 @@ class SpatialRepository:
         anchors = [
             {
                 "id": item["id"], "location_id": item["location_id"], "coordinate_space_id": item["coordinate_space_id"],
+                "binding_kind": item["binding_kind"], "binding_target_id": item["binding_target_id"],
                 "name": item["name"], "kind": item["kind"],
                 **({"x": item["x"], "y": item["y"]} if administrative and include_geometry else {}),
                 "hidden": bool(item["hidden"]), "discovered": bool(item["discovered"]),
