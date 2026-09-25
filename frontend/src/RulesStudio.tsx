@@ -3,6 +3,7 @@ import { Alert, Button, Checkbox, Dialog, DialogActions, DialogContent, DialogTi
 import { api } from "./api";
 import type { BulletCatalog } from "./BulletHellStudio";
 import { RuleIcon } from "./RuleIcon";
+import { FavoriteLibraryButton, type FavoriteSourceKind } from "./FavoriteLibraryButton";
 import type { AbilityAction, AbilityActionTarget, AbilityCost, AbilityDefinition, EffectDefinition, FormulaNode, RequirementExpression, RuleMigrationWarning, RuleOwnerKind, StatDefinition } from "./types";
 
 const ownerKinds: RuleOwnerKind[] = ["character", "item", "location", "faction", "lore_system", "fact", "plot_beat", "relationship"];
@@ -97,6 +98,7 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
     {rules.migration_warnings.filter(item => !item.acknowledged).map(item => <Alert key={item.id} severity="warning" action={<Button onClick={async () => { await api(`/projects/${projectId}/rules/migration-warnings/${item.id}/acknowledge`, { method: "POST" }); await load(); }}>Acknowledge</Button>}>{item.message}</Alert>)}
     <div className="rules-grid">
       <RuleList
+        projectId={projectId}
         title="Stats"
         kicker="Values"
         add={() => { setEditingKey(null); setStat(copy(blankStat)); }}
@@ -109,10 +111,13 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
           meta: item.stat_key,
           badges: [item.display_style, item.visibility, ...item.compatible_owner_kinds],
           edit: () => { setEditingKey(item.stat_key); setStat(copy(item)); },
+          favoriteKind: "stat" as FavoriteSourceKind,
+          favoriteKey: item.stat_key,
           remove: () => void remove("stats", item.stat_key),
         }))}
       />
       <RuleList
+        projectId={projectId}
         title="Effects"
         kicker="Reusable operations"
         add={() => { setEditingKey(null); setEffect({ ...copy(blankEffect), target_stat_key: rules.stats[0]?.stat_key ?? "" }); }}
@@ -125,10 +130,13 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
           meta: `${item.operation} ${item.target_stat_key}`,
           badges: [item.clock, item.evaluation_mode, item.stacking_policy, item.enabled ? "enabled" : "disabled"],
           edit: () => { setEditingKey(item.effect_key); setEffect(copy(item)); },
+          favoriteKind: "effect" as FavoriteSourceKind,
+          favoriteKey: item.effect_key,
           remove: () => void remove("effects", item.effect_key),
         }))}
       />
       <RuleList
+        projectId={projectId}
         title="Abilities"
         kicker="Character & item actions"
         add={() => { setEditingKey(null); setAbility(copy(blankAbility)); }}
@@ -141,6 +149,8 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
           meta: `${item.ability_kind} · ${item.target_type}`,
           badges: [...item.compatible_owner_kinds, `${item.actions.length} action${item.actions.length === 1 ? "" : "s"}`, item.enabled ? "enabled" : "disabled"],
           edit: () => { setEditingKey(item.ability_key); setAbility(copy(item)); },
+          favoriteKind: "ability" as FavoriteSourceKind,
+          favoriteKey: item.ability_key,
           remove: () => void remove("abilities", item.ability_key),
         }))}
       />
@@ -152,11 +162,13 @@ export function RulesStudio({ projectId, revision, fail }: { projectId: string; 
 }
 
 function RuleList({
+  projectId,
   title,
   kicker,
   add,
   rows,
 }: {
+  projectId: string;
   title: string;
   kicker: string;
   add: () => void;
@@ -168,6 +180,8 @@ function RuleList({
     description?: string;
     meta: string;
     badges: string[];
+    favoriteKind: FavoriteSourceKind;
+    favoriteKey: string;
     edit: () => void;
     remove: () => void;
   }>;
@@ -187,7 +201,7 @@ function RuleList({
           {row.description && <p>{row.description}</p>}
           <div className="rule-card-badges">{row.badges.map((badge, index) => <span key={`${badge}:${index}`}>{badge.replaceAll("_", " ")}</span>)}</div>
         </div>
-        <div className="rule-card-actions"><Button size="small" onClick={row.edit}>Edit</Button><Button size="small" color="error" onClick={row.remove}>Delete</Button></div>
+        <div className="rule-card-actions"><FavoriteLibraryButton projectId={projectId} sourceKind={row.favoriteKind} sourceKey={row.favoriteKey} /><Button size="small" onClick={row.edit}>Edit</Button><Button size="small" color="error" onClick={row.remove}>Delete</Button></div>
       </article>)}
     </div>
   </section>;
