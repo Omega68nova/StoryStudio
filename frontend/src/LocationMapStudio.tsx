@@ -960,6 +960,7 @@ export function LocationMapStudio({
         }),
       });
       await loadBackgrounds(selectedLocation.id);
+      if (mediaId) setBackgroundSelection(mediaId);
     } finally {
       setImageBusy(false);
     }
@@ -969,10 +970,14 @@ export function LocationMapStudio({
     if (!selectedLocation) return;
     const form = new FormData();
     form.append("file", file);
+    const conditions = new URLSearchParams({ kind: "location" });
+    if (backgroundSelection === "new" && backgroundWeatherId) conditions.set("weather_id", backgroundWeatherId);
+    if (backgroundSelection === "new" && backgroundTimePhaseId) conditions.set("time_phase_id", backgroundTimePhaseId);
     setImageBusy(true);
     try {
-      await api(`/entities/${selectedLocation.id}/media/upload?kind=location`, { method: "POST", body: form });
+      const created = await api<MediaAsset>(`/entities/${selectedLocation.id}/media/upload?${conditions.toString()}`, { method: "POST", body: form });
       await loadBackgrounds(selectedLocation.id);
+      setBackgroundSelection(created.id);
     } finally {
       setImageBusy(false);
     }
@@ -981,6 +986,9 @@ export function LocationMapStudio({
   async function deleteBackground(asset: MediaAsset) {
     if (!selectedLocation) return;
     await api(`/media-assets/${asset.id}`, { method: "DELETE" });
+    setBackgroundSelection("new");
+    setBackgroundWeatherId("");
+    setBackgroundTimePhaseId("");
     await loadBackgrounds(selectedLocation.id);
   }
 
