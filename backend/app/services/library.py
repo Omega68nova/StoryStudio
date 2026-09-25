@@ -249,13 +249,34 @@ class GlobalLibraryService:
         *,
         include_revisions: bool = True,
     ) -> dict[str, Any]:
+        roots = list(dict.fromkeys(resource_ids))
+        if not roots:
+            raise ValueError("At least one library resource is required")
+        ordered: list[str] = []
+        seen: set[str] = set()
+        queue = list(roots)
+        while queue:
+            resource_id = queue.pop(0)
+            if resource_id in seen:
+                continue
+            resource = self.data.library.resource(resource_id)
+            if not resource:
+                raise ValueError(f"Unknown library resource: {resource_id}")
+            seen.add(resource_id)
+            ordered.append(resource_id)
+            queue.extend(
+                child["child_resource_id"]
+                for child in resource.get("children") or []
+                if child["child_resource_id"] not in seen
+            )
         resources = self.data.library.export_resources(
-            resource_ids,
+            ordered,
             include_revisions=include_revisions,
         )
         return {
             "schema": "storystudio.global_library.export",
             "schema_version": 1,
+            "root_resource_ids": roots,
             "resources": resources,
         }
 
