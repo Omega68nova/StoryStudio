@@ -1921,7 +1921,14 @@ async def delete_environment_location(project_id: str, location_id: str) -> None
         or str(rule.get("connection_id") or "") in doomed_connection_ids
     }
 
+    doomed_relationship_ids = {
+        str(relationship_id) for relationship_id, relationship in projection.get("relations", {}).items()
+        if str(relationship.get("source_id") or "") == location_id
+        or str(relationship.get("target_id") or "") == location_id
+    }
+
     raw_mutations: list[dict[str, Any]] = []
+    raw_mutations.extend({"tool": "removeRelationship", "arguments": {"relationship_id": value}} for value in sorted(doomed_relationship_ids))
     raw_mutations.extend({"tool": "removeMapObject", "arguments": {"kind": "encounter", "id": value}} for value in sorted(doomed_encounter_ids))
     raw_mutations.extend({"tool": "removeMapObject", "arguments": {"kind": "connection", "id": value}} for value in sorted(doomed_connection_ids))
     raw_mutations.extend({"tool": "removeMapObject", "arguments": {"kind": "barrier", "id": value}} for value in sorted(doomed_barrier_ids))
