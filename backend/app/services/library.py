@@ -440,6 +440,24 @@ class GlobalLibraryService:
                 for entry in state.get("inventory") or []:
                     if isinstance(entry, dict):
                         add("item", entry.get("item_id"), "inventory")
+                for equipment_id in state.get("equipment") or []:
+                    add("item", equipment_id, "equipment")
+                if self.world is not None:
+                    projection = self.world.projection(project_id, head_node_id)
+                    for relation in projection.get("relations", {}).values():
+                        if str(relation.get("source_id") or "") != source_key:
+                            continue
+                        relation_kind = str(relation.get("relation") or "")
+                        target_id = str(relation.get("target_id") or "")
+                        target = projection.get("entities", {}).get(target_id)
+                        if not target:
+                            continue
+                        if relation_kind == "home" and target.get("kind") == "location":
+                            add("location", target_id, "home")
+                        elif relation_kind == "member_of" and target.get("kind") == "faction":
+                            add("faction", target_id, "faction")
+                        elif relation_kind == "owns" and target.get("kind") == "item":
+                            add("item", target_id, "owned_item")
             if source_kind == "item":
                 add("location", state.get("home_location_id"), "home")
             if source_kind == "location" and self.world is not None:
@@ -482,9 +500,11 @@ class GlobalLibraryService:
                     add("fact", getattr(action, "fact_id", None), "fact")
 
         elif source_kind == "outfit":
-            row = self.data.db.fetch_one("SELECT entity_id FROM entity_outfits WHERE id=?", (source_key,))
+            row = self.data.db.fetch_one("SELECT entity_id,equipment_json FROM entity_outfits WHERE id=?", (source_key,))
             if row:
                 add("character", row["entity_id"], "owner", selected=False)
+                for equipment_id in json.loads(row.get("equipment_json") or "[]"):
+                    add("item", equipment_id, "equipment")
         return result
 
     def favorite_preview(
