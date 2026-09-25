@@ -274,18 +274,28 @@ class Database:
             self._insert_legacy_requirement(connection, project_id, ability_key, requirements)
         costs = _safe_json(record.get("costs_json"), {})
         for position, (stat_key, amount) in enumerate(costs.items() if isinstance(costs, dict) else []):
+            try:
+                numeric_amount = float(amount)
+            except (TypeError, ValueError):
+                numeric_amount = 0
+            if numeric_amount <= 0:
+                connection.execute(
+                    "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
+                    (new_id(), project_id, "discarded_invalid_ability_cost", f"Discarded non-positive stat cost '{stat_key}' from ability {ability_key}.", json.dumps({"ability_key": ability_key, "stat_key": stat_key, "position": position, "amount": amount}), now),
+                )
+                continue
             if not connection.execute(
                 "SELECT 1 FROM stat_definitions WHERE project_id=? AND stat_key=?",
                 (project_id, stat_key),
             ).fetchone():
                 connection.execute(
                     "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) VALUES(?,?,?,?,?,?)",
-                    (new_id(), project_id, "discarded_invalid_ability_cost", f"Discarded unknown stat cost '{stat_key}' from ability {ability_key}.", json.dumps({"ability_key": ability_key, "stat_key": stat_key, "position": position}), now),
+                    (new_id(), project_id, "discarded_invalid_ability_cost", f"Discarded unknown stat cost '{stat_key}' from ability {ability_key}.", json.dumps({"ability_key": ability_key, "stat_key": stat_key, "position": position, "amount": numeric_amount}), now),
                 )
                 continue
             connection.execute(
                 "INSERT INTO ability_costs(id,project_id,ability_key,position,cost_kind,stat_key,amount) VALUES(?,?,?,?, 'stat',?,?)",
-                (new_id(), project_id, ability_key, position, stat_key, amount),
+                (new_id(), project_id, ability_key, position, stat_key, numeric_amount),
             )
         effects = _safe_json(record.get("effects_json"), [])
         for position, effect in enumerate(effects if isinstance(effects, list) else []):
