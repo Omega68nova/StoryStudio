@@ -645,7 +645,11 @@ class SpatialService:
         def visible(item: dict[str, Any]) -> bool: return administrative or (item.get("discovered", True) and not item.get("hidden", False))
         locations = [{"id": item["id"], "name": item["name"], **{key: item.get("state", {}).get(key) for key in ("parent_location_id", "topology", "occupancy", "boundary_access", "spatial_kind", "x", "y", "hidden", "discovered")}} for item in self.locations().values() if item.get("state", {}).get("parent_location_id") == parent_id and (administrative or (item.get("state", {}).get("discovered", True) and not item.get("state", {}).get("hidden", False)))]
         ids = {item["id"] for item in locations}
-        anchors = [item for item in self.anchors.values() if item.get("location_id") in {*ids, parent_id} and visible(item)]
+        anchors = [
+            self._resolved_anchor_raw(item)
+            for item in self.anchors.values()
+            if item.get("location_id") in {*ids, parent_id} and visible(item)
+        ]
         if not include_geometry:
             locations = [{key: value for key, value in item.items() if key not in {"x", "y", "footprint", "local_bounds"}} for item in locations]
             anchors = [{key: value for key, value in item.items() if key not in {"x", "y"}} for item in anchors]
