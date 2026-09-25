@@ -94,6 +94,24 @@ class LibraryStatPackApply(BaseModel):
     source_story_node_id: str | None = None
 
 
+LibraryFavoriteSourceKind = Literal[
+    "character", "location", "item", "outfit", "faction", "lore_system",
+    "fact", "plot_beat", "stat", "effect", "ability",
+]
+
+
+class LibraryFavoritePreviewRequest(BaseModel):
+    source_kind: LibraryFavoriteSourceKind
+    source_key: str = Field(min_length=1, max_length=240)
+    source_story_node_id: str | None = None
+
+
+class LibraryFavoritePublishRequest(LibraryFavoritePreviewRequest):
+    version: Literal["original", "latest", "both"] = "latest"
+    dependency_tokens: list[str] = Field(default_factory=list, max_length=500)
+    tags: list[str] = Field(default_factory=list, max_length=100)
+
+
 class ProjectUpdate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
 
