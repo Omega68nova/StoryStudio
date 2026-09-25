@@ -103,7 +103,7 @@ export function WorldConfigurationStudio({
             onFocusHandled={() => setEnvironmentLocationId(null)}
           />
         )}
-        {section === "locations" && <LocationMapStudio projectId={projectId} revision={revision} fail={fail} />}
+        {section === "locations" && <LocationMapStudio projectId={projectId} revision={revision} workflows={workflows} fail={fail} />}
         {section === "rules" && <RulesStudio projectId={projectId} revision={revision} fail={fail} />}
         {section === "generation" && <PlanningStudio projectId={projectId} revision={revision} fail={fail} />}
         {section === "minigames" && <MinigamesStudio projectId={projectId} revision={revision} fail={fail} />}
