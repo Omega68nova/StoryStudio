@@ -65,7 +65,9 @@ The initial view supports:
 - child/dependency count,
 - referenced-story count,
 - import count,
-- saving the current story's complete canonical stat set as a marked stat pack.
+- saving the current story's complete canonical stat set as a marked stat pack,
+- applying a stat pack to the current story with explicit stop-on-conflict or
+  keep-existing behavior.
 
 New-story creation now selects marked reusable stat packs from the Global
 Library instead of exposing the two hardcoded Adventure/Romance choices.
