@@ -98,7 +98,13 @@ export function FavoriteLibraryButton({
       setPreview(next);
       setFavorited(next.already_favorited);
       setVersion("latest");
-      setSelected(new Set(next.dependencies.filter(item => item.default_selected).map(item => item.token)));
+      const defaults = new Set<string>();
+      for (const item of next.dependencies) {
+        if (item.default_selected && (item.parent_token === next.token || defaults.has(item.parent_token))) {
+          defaults.add(item.token);
+        }
+      }
+      setSelected(defaults);
       setDependencyVersions(Object.fromEntries(
         next.dependencies.map(item => [item.token, "latest" as VersionChoice]),
       ));
