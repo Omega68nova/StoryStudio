@@ -1331,7 +1331,7 @@ export function LocationMapStudio({
               label="Lock endpoint to"
               value={routeDialog.selections[index]}
               onChange={event => {
-                const selections: [string, string] = [...routeDialog.selections];
+                const selections: [string, string] = [routeDialog.selections[0], routeDialog.selections[1]];
                 selections[index] = event.target.value;
                 setRouteDialog({ ...routeDialog, selections });
               }}
