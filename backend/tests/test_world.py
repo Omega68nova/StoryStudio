@@ -21,6 +21,19 @@ def create(engine: WorldEngine, project_id: str, **entity):
     return mutations[0].arguments["entity_id"]
 
 
+def test_stat_icon_migration_recovers_if_column_already_exists_without_version(tmp_path: Path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    db.execute("DELETE FROM schema_migrations WHERE version='043_stat_icons'")
+    assert "icon" in {row["name"] for row in db.fetch_all("PRAGMA table_info(stat_definitions)")}
+
+    db.initialize()
+
+    assert db.fetch_one(
+        "SELECT version FROM schema_migrations WHERE version='043_stat_icons'"
+    )
+
+
 def test_branch_replay_and_historical_lore_cards(tmp_path: Path) -> None:
     db, project, world = setup_world(tmp_path)
     character_id = create(world, project["id"], kind="character", name="Mara", aliases=[], tags=[], state={"wardrobe": "blue coat"})
