@@ -108,6 +108,7 @@ export function CharacterStudio({ projectId, revision, workflows, fail }: { proj
           color: definition.color ?? null,
           minimum_color: definition.minimum_color ?? null,
           maximum_color: definition.maximum_color ?? null,
+          icon: definition.icon ?? null,
           display_style: definition.display_style ?? "compact",
           integer_only: Boolean(definition.integer_only),
           visibility: definition.visibility,
