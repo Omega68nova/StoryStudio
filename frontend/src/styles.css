@@ -929,6 +929,11 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   color: #827767;
   line-height: 1.35;
 }
+.location-map-environment-dialog {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px !important;
+}
 
 /* Location Map v2 authoring surface */
 .location-map-v2 {
