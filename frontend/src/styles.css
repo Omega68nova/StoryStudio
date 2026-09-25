@@ -1631,7 +1631,7 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 }
 @media (max-width: 720px) {
   .scene-cast-layer {
-    inset-top: 40px;
+    top: 40px;
     opacity: .5;
   }
   .scene-cast-side { width: 43vw; }
