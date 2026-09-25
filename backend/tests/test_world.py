@@ -83,6 +83,52 @@ def test_branch_replay_and_historical_lore_cards(tmp_path: Path) -> None:
     assert db.fetch_one("SELECT count(*) AS n FROM lore_card_versions WHERE entity_id = ?", (character_id,))["n"] == 3
 
 
+def test_location_archive_can_cleanup_spatial_paths_atomically(tmp_path: Path) -> None:
+    _, project, world = setup_world(tmp_path)
+    root = create(world, project["id"], kind="location", name="World", aliases=[], tags=[], state={"topology": "open"})
+    a = create(world, project["id"], kind="location", name="A", aliases=[], tags=[], state={
+        "parent_location_id": root, "spatial_kind": "spot", "x": 10, "y": 10,
+        "footprint": {"location_id": root, "kind": "point", "points": [{"x": 10, "y": 10}]},
+    })
+    b = create(world, project["id"], kind="location", name="B", aliases=[], tags=[], state={
+        "parent_location_id": root, "spatial_kind": "spot", "x": 20, "y": 20,
+        "footprint": {"location_id": root, "kind": "point", "points": [{"x": 20, "y": 20}]},
+    })
+    setup = world.normalize_mutations(project["id"], None, [
+        {"tool": "setWorldRoot", "arguments": {"root_location_id": root, "reparent_previous": False, "adopt_top_level": False}},
+        {"tool": "upsertMapAnchor", "arguments": {
+            "id": "a-anchor", "location_id": a, "coordinate_space_id": root,
+            "binding_kind": "spot", "binding_target_id": a, "name": "A", "kind": "waypoint", "x": 10, "y": 10,
+        }},
+        {"tool": "upsertMapAnchor", "arguments": {
+            "id": "b-anchor", "location_id": b, "coordinate_space_id": root,
+            "binding_kind": "spot", "binding_target_id": b, "name": "B", "kind": "waypoint", "x": 20, "y": 20,
+        }},
+        {"tool": "upsertTravelConnection", "arguments": {
+            "id": "road", "kind": "route", "source_anchor_id": "a-anchor", "target_anchor_id": "b-anchor",
+            "travel_minutes": 2, "modes": ["walk"], "bidirectional": True,
+        }},
+        {"tool": "setRelationship", "arguments": {
+            "relationship_id": "legacy-road", "source_id": a, "target_id": b,
+            "relation": "route", "travel_minutes": 2, "modes": ["walk"], "bidirectional": True,
+        }},
+    ], provenance="author")
+    world.commit_root(project["id"], setup, provenance="author", summary="map")
+
+    cleanup = world.normalize_mutations(project["id"], None, [
+        {"tool": "removeRelationship", "arguments": {"relationship_id": "legacy-road"}},
+        {"tool": "removeMapObject", "arguments": {"kind": "connection", "id": "road"}},
+        {"tool": "removeMapObject", "arguments": {"kind": "anchor", "id": "a-anchor"}},
+        {"tool": "updateEntity", "arguments": {"entity_id": a, "patch": {"archived": True, "enabled": False}}},
+    ], provenance="author")
+    world.commit_root(project["id"], cleanup, provenance="author", summary="delete location")
+    projection = world.projection(project["id"])
+    assert projection["entities"][a]["state"]["archived"] is True
+    assert "road" not in projection["travel_connections"]
+    assert "a-anchor" not in projection["map_anchors"]
+    assert "legacy-road" not in projection["relations"]
+
+
 def test_routes_cardinal_queries_and_movement_time(tmp_path: Path) -> None:
     _, project, world = setup_world(tmp_path)
     south = create(world, project["id"], kind="location", name="South", aliases=[], tags=[], state={"x": 0, "y": 0})
