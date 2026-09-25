@@ -43,6 +43,26 @@ class LibraryRepository(BaseRepository):
             tuple(params),
         )
 
+    def resource_for_source(
+        self,
+        *,
+        source_project_id: str,
+        source_kind: str,
+        source_key: str,
+    ) -> dict[str, Any] | None:
+        row = self.db.fetch_one(
+            """
+            SELECT r.id
+            FROM library_resources r
+            JOIN library_resource_revisions v ON v.resource_id=r.id
+            WHERE v.source_project_id=? AND v.source_kind=? AND v.source_key=?
+            ORDER BY v.created_at DESC
+            LIMIT 1
+            """,
+            (source_project_id, source_kind, source_key),
+        )
+        return self.resource(row["id"]) if row else None
+
     def resource(self, resource_id: str) -> dict[str, Any] | None:
         row = self.db.fetch_one(
             """
