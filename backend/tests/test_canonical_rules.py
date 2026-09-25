@@ -29,7 +29,8 @@ def save_stat(world: WorldEngine, project_id: str, key: str, *, owners: list[str
 
 def test_normalized_repository_round_trip_has_no_legacy_json_columns(tmp_path: Path) -> None:
     project, world = setup_world(tmp_path)
-    save_stat(world, project["id"], "hp", owners=["character"], default=50)
+    world.data.rules.save_stat(Stat(project_id=project["id"], stat_key="hp", label="Hp", compatible_owner_kinds=["character"], default_value=50, icon="❤"))
+    assert world.data.rules.stat(project["id"], "hp").icon == "❤"
     effect = world.data.rules.save_effect(EffectDefinition(project_id=project["id"], effect_key="healing", name="Healing", description="Restore health", target_stat_key="hp", operation="add", formula={"kind": "multiply", "children": [{"kind": "constant", "value": 10}, {"kind": "stat", "participant": "source", "stat_key": "hp"}]}))
     ability = world.data.rules.save_ability(Ability(project_id=project["id"], ability_key="renew", name="Renew", requirements={"kind": "compare", "target": "actor", "stat_key": "hp", "comparison": "gte", "value": 1}, costs=[{"kind": "stat", "stat_key": "hp", "amount": 1}], actions=[{"kind": "apply_effect", "target": "target", "effect_key": "healing"}]))
 

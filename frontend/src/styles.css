@@ -560,7 +560,7 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   min-height: 30px;
   padding: 5px 7px 6px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 5px;
   align-items: center;
   overflow: hidden;
@@ -825,8 +825,19 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  align-items: baseline;
+  align-items: center;
   font-size: 11px;
+}
+.character-stat-heading {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.character-stat-heading b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .character-stat-group-header > span {
   font-variant-numeric: tabular-nums;
@@ -1243,4 +1254,274 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
     border-left: 0;
     border-top: 1px solid #d8cfbf;
   }
+}
+
+
+/* Canonical rule resource surfaces */
+.rule-icon {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid #d6c9b7;
+  border-radius: 9px;
+  color: #725b3d;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(255,255,255,.75), transparent 42%),
+    linear-gradient(145deg, #f2e9da, #e7dccb);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.32);
+  font-family: Georgia, serif;
+  font-weight: 700;
+}
+.rule-icon-small { width: 22px; height: 22px; border-radius: 6px; font-size: 10px; }
+.rule-icon-medium { width: 34px; height: 34px; font-size: 14px; }
+.rule-icon-large { width: 48px; height: 48px; border-radius: 11px; font-size: 18px; }
+.rule-icon img { width: 100%; height: 100%; object-fit: cover; }
+.rule-icon-text { max-width: 100%; overflow: hidden; padding: 0 3px; text-overflow: clip; white-space: nowrap; line-height: 1; }
+.rule-icon.has-icon { border-color: #c9b38f; background: #eee2cf; }
+.rule-editor-icon-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #e0d5c6;
+  border-radius: 10px;
+  background: rgba(245, 239, 229, .55);
+}
+
+.rules-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.rule-library {
+  padding: 0;
+  overflow: hidden;
+}
+.rule-library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 17px 17px 13px;
+  border-bottom: 1px solid #e3dacd;
+  background: rgba(245, 239, 229, .7);
+}
+.rule-library-header h2 { margin: 1px 0 0; font-size: 20px; }
+.rule-library-header span {
+  display: block;
+  color: #9a7951;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.rule-library-header .MuiButton-root {
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.rule-library-list {
+  max-height: min(620px, calc(100vh - 250px));
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  scrollbar-width: thin;
+}
+.rule-library-empty {
+  display: grid;
+  gap: 4px;
+  padding: 28px 15px;
+  color: #8b8174;
+  text-align: center;
+}
+.rule-library-empty b { color: #5f5549; font-family: Georgia, serif; font-weight: 500; }
+.rule-library-empty small { font-size: 10px; line-height: 1.45; }
+.rule-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px;
+  border: 1px solid #ddd2c2;
+  border-radius: 10px;
+  background: rgba(255, 253, 248, .76);
+  transition: border-color .14s ease, box-shadow .14s ease, transform .14s ease;
+}
+.rule-card:hover {
+  border-color: #c6b394;
+  box-shadow: 0 7px 18px rgba(67, 52, 33, .08);
+  transform: translateY(-1px);
+}
+.rule-card-body { min-width: 0; display: grid; gap: 5px; }
+.rule-card-title {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1px;
+}
+.rule-card-title strong {
+  overflow: hidden;
+  color: #3d352c;
+  font: 600 14px/1.25 Georgia, serif;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rule-card-title code {
+  overflow: hidden;
+  color: #958879;
+  font: 9px/1.3 Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rule-card p {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: #746b60;
+  font-size: 10px;
+  line-height: 1.35;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.rule-card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.rule-card-badges span {
+  padding: 2px 6px;
+  border: 1px solid #e2d6c4;
+  border-radius: 999px;
+  color: #796a57;
+  background: #f3ecdf;
+  font-size: 8px;
+  line-height: 1.35;
+  text-transform: capitalize;
+}
+.rule-card-actions {
+  display: grid;
+  gap: 2px;
+  opacity: .55;
+  transition: opacity .14s ease;
+}
+.rule-card:hover .rule-card-actions,
+.rule-card:focus-within .rule-card-actions { opacity: 1; }
+.rule-card-actions .MuiButton-root { min-width: 46px; padding: 2px 5px; font-size: 9px; }
+
+.active-effect-panel {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #d8ccb9;
+  border-radius: 10px;
+  background: rgba(245, 238, 226, .72);
+}
+.active-effect-panel-title {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1px 3px 4px;
+  color: #6f6252;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.active-effect-panel-title b {
+  min-width: 20px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #e7dac6;
+  color: #765c3c;
+  text-align: center;
+  font-size: 9px;
+}
+.active-effect-card {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px;
+  border: 1px solid #e1d6c7;
+  border-radius: 8px;
+  background: rgba(255, 253, 248, .82);
+}
+.active-effect-card > div { min-width: 0; display: grid; gap: 2px; }
+.active-effect-card strong,
+.active-effect-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.active-effect-card strong { font-size: 11px; }
+.active-effect-card small { color: #82776a; font-size: 9px; }
+.active-effect-card .MuiButton-root { min-width: 0; padding: 3px 5px; font-size: 9px; }
+.world-active-effects { margin: 10px 0; }
+
+.rule-assignment {
+  display: grid;
+  gap: 8px;
+  padding: 11px;
+  border: 1px solid #d9cebe;
+  border-radius: 10px;
+  background: rgba(247, 242, 233, .72);
+}
+.rule-assignment-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: end;
+}
+.rule-assignment-heading span {
+  color: #9a7951;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.rule-assignment-heading h4 { margin: 2px 0 0; font: 15px Georgia, serif; }
+.rule-assignment-heading small { color: #95897b; font-size: 9px; }
+.rule-assignment-list { display: grid; gap: 5px; }
+.rule-assignment-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px;
+  border: 1px solid #e0d5c7;
+  border-radius: 8px;
+  background: rgba(255, 253, 248, .78);
+}
+.rule-assignment-card > div { min-width: 0; display: grid; gap: 2px; }
+.rule-assignment-card b,
+.rule-assignment-card small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rule-assignment-card b { font-size: 11px; }
+.rule-assignment-card small { color: #887c6d; font-size: 9px; text-transform: capitalize; }
+.rule-assignment-card .MuiButton-root { min-width: 0; padding: 3px 5px; font-size: 9px; }
+.rule-assignment-empty {
+  padding: 15px;
+  border: 1px dashed #d7cbb9;
+  border-radius: 8px;
+  color: #938778;
+  text-align: center;
+  font-size: 10px;
+}
+.rule-assignment-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+}
+
+@media (max-width: 1180px) {
+  .rules-grid { grid-template-columns: 1fr; }
+  .rule-library-list { max-height: none; }
+}
+@media (max-width: 640px) {
+  .rule-card { grid-template-columns: 40px minmax(0, 1fr); }
+  .rule-card > .rule-icon-large { width: 40px; height: 40px; }
+  .rule-card-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; opacity: 1; }
+  .rule-editor-icon-row { grid-template-columns: 1fr; }
 }

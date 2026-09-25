@@ -781,6 +781,7 @@ class StatDefinitionCreate(BaseModel):
     color: str | None = Field(default=None, max_length=64)
     minimum_color: str | None = Field(default=None, max_length=64)
     maximum_color: str | None = Field(default=None, max_length=64)
+    icon: str | None = Field(default=None, max_length=500)
     display_style: Literal["compact", "bar"] = "compact"
     integer_only: bool = True
     visibility: Literal["public", "private", "narrator"] = "public"

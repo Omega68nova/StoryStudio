@@ -655,6 +655,7 @@ class Stat(DomainModel):
     color: str | None = None
     minimum_color: str | None = None
     maximum_color: str | None = None
+    icon: str | None = None
     display_style: StatDisplayStyle = StatDisplayStyle.COMPACT
     integer_only: bool = True
     visibility: StatVisibility = StatVisibility.PUBLIC
