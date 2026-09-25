@@ -47,6 +47,10 @@ type SpatialAnchor = {
   coordinate_space_id?: string | null;
   binding_kind?: "coordinate" | "area" | "area_border" | "spot";
   binding_target_id?: string | null;
+  binding_offset_x?: number | null;
+  binding_offset_y?: number | null;
+  binding_segment_index?: number | null;
+  binding_segment_t?: number | null;
   name: string;
   kind: string;
   x?: number | null;
@@ -115,16 +119,22 @@ type EndpointChoice = {
   label: string;
   targetId?: string | null;
   point: Point;
+  offsetX?: number;
+  offsetY?: number;
+  segmentIndex?: number;
+  segmentT?: number;
 };
 type RouteDialogState = {
   points: [Point, Point];
   options: [EndpointChoice[], EndpointChoice[]];
   selections: [string, string];
+  kind: SpatialConnection["kind"];
   travelMinutes: number;
   modes: string;
   bidirectional: boolean;
 } | null;
 type ConnectionDraft = {
+  kind: SpatialConnection["kind"];
   travelMinutes: number;
   modes: string;
   bidirectional: boolean;
@@ -135,6 +145,8 @@ type ConnectionDraft = {
   minigameKey: string;
   difficulty: number;
 };
+type HitCandidate = { id: string; label: string; detail: string };
+type HitMenuState = { mouseX: number; mouseY: number; candidates: HitCandidate[] } | null;
 
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 const round = (value: number) => Math.round(value * 10) / 10;
@@ -164,16 +176,23 @@ const closestPointOnSegment = (point: Point, a: Point, b: Point): Point => {
   const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq));
   return { x: round(a.x + t * dx), y: round(a.y + t * dy) };
 };
-const closestBorderPoint = (point: Point, points: Point[]): { point: Point; distance: number } | null => {
+const closestBorderPoint = (point: Point, points: Point[]): { point: Point; distance: number; segmentIndex: number; segmentT: number } | null => {
   if (points.length < 2) return null;
-  let best: { point: Point; distance: number } | null = null;
+  let best: { point: Point; distance: number; segmentIndex: number; segmentT: number } | null = null;
   for (let index = 0; index < points.length; index++) {
-    const candidate = closestPointOnSegment(point, points[index], points[(index + 1) % points.length]);
+    const left = points[index], right = points[(index + 1) % points.length];
+    const dx = right.x - left.x, dy = right.y - left.y;
+    const lengthSq = dx * dx + dy * dy;
+    const segmentT = lengthSq
+      ? Math.max(0, Math.min(1, ((point.x - left.x) * dx + (point.y - left.y) * dy) / lengthSq))
+      : 0;
+    const candidate = { x: round(left.x + segmentT * dx), y: round(left.y + segmentT * dy) };
     const candidateDistance = distance(point, candidate);
-    if (!best || candidateDistance < best.distance) best = { point: candidate, distance: candidateDistance };
+    if (!best || candidateDistance < best.distance) best = { point: candidate, distance: candidateDistance, segmentIndex: index, segmentT };
   }
   return best;
 };
+const distanceToSegment = (point: Point, left: Point, right: Point) => distance(point, closestPointOnSegment(point, left, right));
 const areaPriority = (entity?: WorldEntity | null) => Number(entity?.state.priority_layer ?? 0);
 const compareAreaPriority = (left: WorldEntity, right: WorldEntity) => {
   const priority = areaPriority(left) - areaPriority(right);
@@ -245,6 +264,7 @@ export function LocationMapStudio({
   const [backgrounds, setBackgrounds] = useState<BackgroundRecord[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
+  const [hitMenu, setHitMenu] = useState<HitMenuState>(null);
 
   const load = useCallback(async () => {
     const [nextMap, nextWorld, nextSettings] = await Promise.all([
@@ -326,6 +346,7 @@ export function LocationMapStudio({
       return;
     }
     setConnectionDraft({
+      kind: selectedConnection.kind,
       travelMinutes: selectedConnection.travel_minutes,
       modes: (selectedConnection.modes ?? ["walk"]).join(", "),
       bidirectional: selectedConnection.bidirectional !== false,
