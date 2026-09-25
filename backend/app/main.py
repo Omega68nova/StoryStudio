@@ -95,7 +95,7 @@ from app.schemas import (
     AmbientPreferenceUpdate, AmbientVariantCreate, AmbientAssignmentCreate, AmbientSoundSetsUpdate, WeatherProposalDecision,
     NoisePreferenceUpdate, NoiseVariantUpdate,
     SceneEnvironmentUpdate,
-    LocationBackgroundCreate, EnvironmentLocationUpdate, WorldRootUpdate, WorldRootCreate,
+    LocationBackgroundCreate, EnvironmentLocationUpdate, MapLocationPlacementUpdate, WorldRootUpdate, WorldRootCreate,
     MapAnchorUpdate, BarrierUpdate, TravelConnectionUpdate, EncounterRuleUpdate,
     TravelActionRequest,
     GeometryEditRequest, MapGeometryUpdate, MapDiscoveryUpdate,
@@ -1978,6 +1978,96 @@ def _route_anchor_rebind_mutations(projection: dict[str, Any], location_id: str,
         if changed:
             result.append({"tool": "upsertMapAnchor", "arguments": updated})
     return result
+
+
+def _canonical_map_location_patch(state: dict[str, Any], request: MapLocationPlacementUpdate, location_id: str) -> dict[str, Any]:
+    from app.services.spatial import validate_geometry, SpatialValidationError
+
+    def enum_value(value: Any, allowed: set[str], fallback: str) -> str:
+        text = str(value or "")
+        return text if text in allowed else fallback
+
+    footprint = dict(request.footprint)
+    footprint["location_id"] = footprint.get("location_id") or state.get("parent_location_id") or location_id
+    try:
+        footprint = validate_geometry(footprint)
+    except SpatialValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    local_bounds = state.get("local_bounds")
+    if isinstance(local_bounds, dict):
+        try:
+            local_bounds = validate_geometry(local_bounds)
+        except SpatialValidationError:
+            local_bounds = None
+    else:
+        local_bounds = None
+
+    minutes = state.get("minutes_per_unit")
+    minutes = float(minutes) if isinstance(minutes, (int, float)) and float(minutes) > 0 else 1.0
+    radius = state.get("base_visibility_units")
+    radius = float(radius) if isinstance(radius, (int, float)) and float(radius) >= 0 else None
+    rate = state.get("encounter_rate")
+    rate = max(0.0, min(1.0, float(rate))) if isinstance(rate, (int, float)) else 0.0
+    priority = state.get("priority_layer")
+    priority = float(priority) if isinstance(priority, (int, float)) else 0.0
+
+    return {
+        "parent_location_id": state.get("parent_location_id"),
+        "exposure": enum_value(state.get("exposure"), {"indoor", "outdoor", "isolated"}, "outdoor"),
+        "description": str(state.get("description") or ""),
+        "imagegen_description": str(state.get("imagegen_description") or ""),
+        "image_tags": [str(item) for item in state.get("image_tags", [])] if isinstance(state.get("image_tags"), list) else [],
+        "enabled": state.get("enabled", True) is not False,
+        "random_encounter": bool(state.get("random_encounter", False)),
+        "discovered": bool(state.get("discovered", True)),
+        "hidden": bool(state.get("hidden", False)),
+        "x": float(request.x),
+        "y": float(request.y),
+        "topology": enum_value(state.get("topology"), {"open", "closed"}, "closed"),
+        "occupancy": enum_value(state.get("occupancy"), {"direct_allowed", "child_required"}, "direct_allowed"),
+        "boundary_access": enum_value(state.get("boundary_access"), {"free", "connection_required"}, "free"),
+        "spatial_kind": request.spatial_kind,
+        "priority_layer": priority,
+        "minutes_per_unit": minutes,
+        "base_visibility_units": radius,
+        "encounter_rate": rate,
+        "footprint": footprint,
+        "local_bounds": local_bounds,
+    }
+
+
+@app.put("/api/projects/{project_id}/spatial/locations/{location_id}/placement")
+async def place_spatial_location(project_id: str, location_id: str, request: MapLocationPlacementUpdate) -> dict[str, Any]:
+    project = require_project(project_id)
+    projection = scheduler.world.projection(project_id)
+    current = projection.get("entities", {}).get(location_id)
+    if not current or current.get("kind") != "location" or current.get("state", {}).get("archived"):
+        raise HTTPException(404, "Location not found")
+    patch = _canonical_map_location_patch(current.get("state", {}), request, location_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(
+            project_id,
+            project.get("active_node_id"),
+            [{"tool": "updateEntity", "arguments": {"entity_id": location_id, "patch": patch}}],
+            provenance="author",
+        )
+        if project.get("active_node_id"):
+            transaction = scheduler.world.commit_to_existing_node(
+                project_id, project["active_node_id"], mutations,
+                provenance="author", summary=f"Placed {current['name']} on map",
+            )
+        else:
+            transaction = scheduler.world.commit_root(
+                project_id, mutations, provenance="author",
+                summary=f"Placed {current['name']} on map",
+            )
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    spatial_repository.synchronize(project_id, scheduler.world.projection(project_id, use_cache=False), force=True)
+    await events.publish("memory_changed", {"project_id": project_id, "transaction_id": transaction["id"]})
+    await events.publish("environment", {"project_id": project_id, "action": "location_changed"})
+    return scheduler.world.entity_card(project_id, location_id)
 
 
 @app.post("/api/projects/{project_id}/environment/locations", status_code=201)
