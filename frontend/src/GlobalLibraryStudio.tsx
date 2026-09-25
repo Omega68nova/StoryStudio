@@ -47,7 +47,7 @@ export function GlobalLibraryStudio({
   const [packDescription, setPackDescription] = useState("");
   const [packTags, setPackTags] = useState("");
   const [applyResource, setApplyResource] = useState<LibraryResource | null>(null);
-  const [conflictPolicy, setConflictPolicy] = useState<"error" | "skip" | "replace">("error");
+  const [conflictPolicy, setConflictPolicy] = useState<"error" | "skip">("error");
 
   const load = useCallback(async () => {
     const params = new URLSearchParams();
@@ -167,11 +167,10 @@ export function GlobalLibraryStudio({
           select
           label="If a stat key already exists"
           value={conflictPolicy}
-          onChange={event => setConflictPolicy(event.target.value as "error" | "skip" | "replace")}
+          onChange={event => setConflictPolicy(event.target.value as "error" | "skip")}
         >
           <MenuItem value="error">Stop and report conflict</MenuItem>
           <MenuItem value="skip">Keep existing stat</MenuItem>
-          <MenuItem value="replace">Replace existing definition</MenuItem>
         </TextField>
         <small>The imported definitions become independent project-local rules. Future library revisions do not update this story automatically.</small>
       </DialogContent>
