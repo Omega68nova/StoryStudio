@@ -969,7 +969,8 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   background-size: 25px 25px, 25px 25px, 125px 125px, 125px 125px;
 }
 .location-map-canvas.tool-spot,
-.location-map-canvas.tool-area {
+.location-map-canvas.tool-area,
+.location-map-canvas.tool-route {
   cursor: crosshair;
 }
 .location-map-canvas.tool-drag {
@@ -989,6 +990,21 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   width: 100%;
   height: 100%;
   overflow: visible;
+  pointer-events: auto;
+}
+.location-map-space-boundary {
+  fill: none;
+  stroke: #171411;
+  stroke-width: 1.05;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.location-map-area,
+.location-map-barrier,
+.location-map-draft,
+.location-map-space-boundary,
+.location-map-route-draft-point {
   pointer-events: none;
 }
 .location-map-area {
@@ -1001,6 +1017,11 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   fill: rgba(130, 149, 102, .27);
   stroke: #5f503e;
   stroke-width: .75;
+}
+.location-map-area.degenerate {
+  fill: none;
+  stroke-dasharray: 2 1.2;
+  stroke-width: .7;
 }
 .location-map-barrier {
   fill: none;
@@ -1018,6 +1039,8 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   stroke: #af7f31;
   stroke-width: .55;
   vector-effect: non-scaling-stroke;
+  pointer-events: stroke;
+  cursor: pointer;
 }
 .location-map-connection.door {
   stroke: #527f98;
@@ -1135,6 +1158,120 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   background: #fffaf0;
   transform: translate(-50%, -50%);
   pointer-events: none;
+}
+.location-map-route-draft-point {
+  fill: #af7f31;
+  stroke: #fffaf0;
+  stroke-width: .55;
+  vector-effect: non-scaling-stroke;
+}
+.location-map-contents {
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid #ded5c8;
+  border-radius: 8px;
+  background: rgba(255, 253, 248, .62);
+}
+.location-map-contents-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.location-map-contents-heading h4 {
+  margin: 1px 0 0;
+  font: 500 14px Georgia, serif;
+}
+.location-map-content-row {
+  min-width: 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 9px;
+  align-items: center;
+  padding: 7px 8px;
+  border: 1px solid #e3dacd;
+  border-radius: 7px;
+  background: rgba(247, 242, 233, .72);
+}
+.location-map-content-row > span {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+.location-map-content-row b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.location-map-content-row small,
+.location-map-content-empty {
+  color: #887c6d;
+  font-size: 9px;
+}
+.location-map-content-empty {
+  margin: 2px 0;
+  line-height: 1.45;
+}
+.location-map-route-endpoints {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.location-map-route-endpoint {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border: 1px solid #ddcfbb;
+  border-radius: 8px;
+  background: #f5eee2;
+}
+.location-map-route-endpoint b {
+  color: #8d6c42;
+  font-size: 9px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.location-map-route-endpoint span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 500 12px Georgia, serif;
+}
+.location-map-route-endpoint small {
+  color: #817465;
+  font-size: 9px;
+}
+.location-map-route-dialog {
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
+}
+.location-map-route-dialog-intro {
+  margin: 0;
+  color: #766b5e;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.location-map-endpoint-choice {
+  display: grid;
+  grid-template-columns: minmax(110px, .65fr) minmax(0, 1.35fr);
+  gap: 12px;
+  align-items: center;
+  padding: 11px;
+  border: 1px solid #ded4c5;
+  border-radius: 8px;
+  background: #f8f3ea;
+}
+.location-map-endpoint-choice p {
+  margin: 0 0 2px;
+}
+.location-map-route-dialog-settings {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
 }
 .location-map-inspector {
   min-width: 0;
@@ -1644,5 +1781,13 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
     width: calc(28px * var(--mobile-story-scale));
     height: calc(28px * var(--mobile-story-scale));
     flex-basis: calc(28px * var(--mobile-story-scale));
+  }
+}
+
+@media (max-width: 640px) {
+  .location-map-route-endpoints,
+  .location-map-endpoint-choice,
+  .location-map-route-dialog-settings {
+    grid-template-columns: 1fr;
   }
 }
