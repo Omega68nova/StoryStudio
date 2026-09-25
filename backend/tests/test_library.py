@@ -152,3 +152,14 @@ def test_library_revision_provenance_rejects_cross_project_story_node(tmp_path: 
             source_project_id=second["id"],
             source_story_node_id=node["id"],
         )
+
+
+def test_library_revision_rows_are_immutable(tmp_path: Path) -> None:
+    db, data, _ = setup_library(tmp_path)
+    resource = data.library.create_resource(resource_kind="bundle", name="Immutable")
+    revision = data.library.add_revision(resource["id"], {"schema_version": 1, "value": "first"})
+    with pytest.raises(Exception, match="library revisions are immutable"):
+        db.execute(
+            "UPDATE library_resource_revisions SET snapshot_json=? WHERE id=?",
+            ('{"schema_version":1,"value":"changed"}', revision["id"]),
+        )
