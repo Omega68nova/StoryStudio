@@ -37,6 +37,45 @@ class SpatialRepository:
         return str(kind), clean
 
     @staticmethod
+    def _resolved_anchor_point(item: dict[str, Any], locations: dict[str, dict[str, Any]]) -> tuple[float | None, float | None]:
+        binding_kind = str(item.get("binding_kind") or "coordinate")
+        target_id = str(item.get("binding_target_id") or "")
+        target = locations.get(target_id)
+        if binding_kind == "coordinate" or not target:
+            return item.get("x"), item.get("y")
+
+        state = target.get("state", {})
+        _kind, points = SpatialRepository._geometry(state.get("footprint"))
+        if binding_kind == "spot":
+            if points:
+                return points[0]["x"], points[0]["y"]
+            return state.get("x"), state.get("y")
+
+        if binding_kind == "area":
+            if not points:
+                return item.get("x"), item.get("y")
+            center_x = sum(point["x"] for point in points) / len(points)
+            center_y = sum(point["y"] for point in points) / len(points)
+            offset_x = item.get("binding_offset_x")
+            offset_y = item.get("binding_offset_y")
+            if isinstance(offset_x, (int, float)) and isinstance(offset_y, (int, float)):
+                return center_x + float(offset_x), center_y + float(offset_y)
+            return item.get("x"), item.get("y")
+
+        if binding_kind == "area_border" and len(points) >= 2:
+            index = item.get("binding_segment_index")
+            t = item.get("binding_segment_t")
+            if isinstance(index, int) and isinstance(t, (int, float)):
+                left = points[index % len(points)]
+                right = points[(index + 1) % len(points)]
+                ratio = max(0.0, min(1.0, float(t)))
+                return (
+                    left["x"] + (right["x"] - left["x"]) * ratio,
+                    left["y"] + (right["y"] - left["y"]) * ratio,
+                )
+        return item.get("x"), item.get("y")
+
+    @staticmethod
     def _source_transaction_id(projection: dict[str, Any]) -> str | None:
         transactions = projection.get("transactions") or []
         return str(transactions[-1]["id"]) if transactions and transactions[-1].get("id") else None
@@ -191,15 +230,20 @@ class SpatialRepository:
                 coordinate_space_id = str(item.get("coordinate_space_id") or owner_state.get("parent_location_id") or owner_id)
                 if coordinate_space_id not in locations:
                     coordinate_space_id = owner_id
+                resolved_x, resolved_y = self._resolved_anchor_point(item, locations)
                 self.db.execute(
                     "INSERT INTO spatial_anchors_current("
-                    "id,project_id,location_id,coordinate_space_id,binding_kind,binding_target_id,name,kind,x,y,hidden,discovered,enabled,requires_map_review,updated_at"
-                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "id,project_id,location_id,coordinate_space_id,binding_kind,binding_target_id,"
+                    "binding_offset_x,binding_offset_y,binding_segment_index,binding_segment_t,"
+                    "name,kind,x,y,hidden,discovered,enabled,requires_map_review,updated_at"
+                    ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         anchor_id, project_id, owner_id, coordinate_space_id,
                         str(item.get("binding_kind") or "coordinate"), item.get("binding_target_id"),
+                        item.get("binding_offset_x"), item.get("binding_offset_y"),
+                        item.get("binding_segment_index"), item.get("binding_segment_t"),
                         str(item.get("name") or "Anchor"),
-                        str(item.get("kind") or "waypoint"), item.get("x"), item.get("y"),
+                        str(item.get("kind") or "waypoint"), resolved_x, resolved_y,
                         int(bool(item.get("hidden", False))), int(bool(item.get("discovered", True))),
                         int(item.get("enabled", True) is not False), int(bool(item.get("requires_map_review", False))), now,
                     ),
@@ -452,6 +496,8 @@ class SpatialRepository:
             {
                 "id": item["id"], "location_id": item["location_id"], "coordinate_space_id": item["coordinate_space_id"],
                 "binding_kind": item["binding_kind"], "binding_target_id": item["binding_target_id"],
+                "binding_offset_x": item["binding_offset_x"], "binding_offset_y": item["binding_offset_y"],
+                "binding_segment_index": item["binding_segment_index"], "binding_segment_t": item["binding_segment_t"],
                 "name": item["name"], "kind": item["kind"],
                 **({"x": item["x"], "y": item["y"]} if administrative and include_geometry else {}),
                 "hidden": bool(item["hidden"]), "discovered": bool(item["discovered"]),

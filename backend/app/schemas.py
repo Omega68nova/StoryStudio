@@ -655,6 +655,10 @@ class MapAnchorUpdate(BaseModel):
     coordinate_space_id: str | None = None
     binding_kind: Literal["coordinate", "area", "area_border", "spot"] = "coordinate"
     binding_target_id: str | None = None
+    binding_offset_x: float | None = None
+    binding_offset_y: float | None = None
+    binding_segment_index: int | None = Field(default=None, ge=0)
+    binding_segment_t: float | None = Field(default=None, ge=0, le=1)
     name: str = Field(min_length=1, max_length=200)
     kind: Literal["landmark", "entrance", "exit", "waypoint", "encounter"] = "waypoint"
     x: float | None = None

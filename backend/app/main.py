@@ -1734,6 +1734,76 @@ def _location_state(request: EnvironmentLocationUpdate) -> dict[str, Any]:
     }
 
 
+def _route_anchor_rebind_mutations(projection: dict[str, Any], location_id: str, request: EnvironmentLocationUpdate) -> list[dict[str, Any]]:
+    anchors = projection.get("map_anchors", {})
+    old_location = projection.get("entities", {}).get(location_id) or {}
+    old_state = old_location.get("state", {})
+    old_footprint = old_state.get("footprint") if isinstance(old_state.get("footprint"), dict) else {}
+    old_points = [
+        {"x": float(point["x"]), "y": float(point["y"])}
+        for point in old_footprint.get("points", []) or []
+        if isinstance(point, dict) and isinstance(point.get("x"), (int, float)) and isinstance(point.get("y"), (int, float))
+    ]
+    next_footprint = request.footprint if isinstance(request.footprint, dict) else {}
+    next_points = [
+        {"x": float(point["x"]), "y": float(point["y"])}
+        for point in next_footprint.get("points", []) or []
+        if isinstance(point, dict) and isinstance(point.get("x"), (int, float)) and isinstance(point.get("y"), (int, float))
+    ]
+    result: list[dict[str, Any]] = []
+
+    for raw in anchors.values():
+        if str(raw.get("binding_target_id") or "") != location_id:
+            continue
+        kind = str(raw.get("binding_kind") or "coordinate")
+        updated = dict(raw)
+        changed = False
+
+        if kind == "area":
+            if old_points and not isinstance(updated.get("binding_offset_x"), (int, float)):
+                center_x = sum(point["x"] for point in old_points) / len(old_points)
+                center_y = sum(point["y"] for point in old_points) / len(old_points)
+                if isinstance(updated.get("x"), (int, float)) and isinstance(updated.get("y"), (int, float)):
+                    updated["binding_offset_x"] = float(updated["x"]) - center_x
+                    updated["binding_offset_y"] = float(updated["y"]) - center_y
+                    changed = True
+
+        elif kind == "area_border" and len(next_points) >= 2:
+            from app.services.spatial import SpatialService
+            resolved = SpatialService(projection)._anchor(str(raw["id"]))
+            if resolved.x is not None and resolved.y is not None:
+                px, py = float(resolved.x), float(resolved.y)
+                best: tuple[float, int, float, float, float] | None = None
+                for index in range(len(next_points)):
+                    left = next_points[index]
+                    right = next_points[(index + 1) % len(next_points)]
+                    dx, dy = right["x"] - left["x"], right["y"] - left["y"]
+                    length_sq = dx * dx + dy * dy
+                    ratio = 0.0 if length_sq == 0 else max(0.0, min(1.0, ((px - left["x"]) * dx + (py - left["y"]) * dy) / length_sq))
+                    x = left["x"] + ratio * dx
+                    y = left["y"] + ratio * dy
+                    distance_sq = (px - x) ** 2 + (py - y) ** 2
+                    candidate = (distance_sq, index, ratio, x, y)
+                    if best is None or candidate < best:
+                        best = candidate
+                if best is not None:
+                    _, index, ratio, x, y = best
+                    if (
+                        updated.get("binding_segment_index") != index
+                        or updated.get("binding_segment_t") != ratio
+                        or updated.get("x") != x
+                        or updated.get("y") != y
+                    ):
+                        updated["binding_segment_index"] = index
+                        updated["binding_segment_t"] = ratio
+                        updated["x"], updated["y"] = x, y
+                        changed = True
+
+        if changed:
+            result.append({"tool": "upsertMapAnchor", "arguments": updated})
+    return result
+
+
 @app.post("/api/projects/{project_id}/environment/locations", status_code=201)
 async def create_environment_location(project_id: str, request: EnvironmentLocationUpdate) -> dict[str, Any]:
     project = require_project(project_id)
@@ -1757,7 +1827,10 @@ async def update_environment_location(project_id: str, location_id: str, request
     current = scheduler.world.projection(project_id).get("entities", {}).get(location_id)
     if not current or current.get("kind") != "location": raise HTTPException(404, "Location not found")
     try:
-        mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), [{"tool": "updateEntity", "arguments": {"entity_id": location_id, "name": request.name, "tags": request.tags, "patch": _location_state(request)}}], provenance="author")
+        projection = scheduler.world.projection(project_id)
+        raw_mutations = _route_anchor_rebind_mutations(projection, location_id, request)
+        raw_mutations.append({"tool": "updateEntity", "arguments": {"entity_id": location_id, "name": request.name, "tags": request.tags, "patch": _location_state(request)}})
+        mutations = scheduler.world.normalize_mutations(project_id, project.get("active_node_id"), raw_mutations, provenance="author")
         if project.get("active_node_id"):
             transaction = scheduler.world.commit_to_existing_node(project_id, project["active_node_id"], mutations, provenance="author", summary=f"Updated {request.name}")
         else:

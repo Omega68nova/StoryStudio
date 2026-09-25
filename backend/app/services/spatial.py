@@ -139,11 +139,51 @@ class SpatialService:
             if root_id not in self.ancestors(str(location["id"])):
                 raise SpatialValidationError(f"Active location '{location['name']}' is outside the world root")
 
+    def _resolved_anchor_raw(self, raw: dict[str, Any]) -> dict[str, Any]:
+        result = dict(raw)
+        binding_kind = str(result.get("binding_kind") or "coordinate")
+        target_id = str(result.get("binding_target_id") or "")
+        target = self.locations().get(target_id)
+        if binding_kind == "coordinate" or not target:
+            return result
+
+        state = target.get("state", {})
+        footprint = state.get("footprint")
+        points = [
+            {"x": float(point["x"]), "y": float(point["y"])}
+            for point in (footprint.get("points") if isinstance(footprint, dict) else []) or []
+            if isinstance(point, dict) and isinstance(point.get("x"), (int, float)) and isinstance(point.get("y"), (int, float))
+        ]
+        if binding_kind == "spot":
+            if points:
+                result["x"], result["y"] = points[0]["x"], points[0]["y"]
+            elif isinstance(state.get("x"), (int, float)) and isinstance(state.get("y"), (int, float)):
+                result["x"], result["y"] = float(state["x"]), float(state["y"])
+            return result
+
+        if binding_kind == "area" and points:
+            center_x = sum(point["x"] for point in points) / len(points)
+            center_y = sum(point["y"] for point in points) / len(points)
+            offset_x, offset_y = result.get("binding_offset_x"), result.get("binding_offset_y")
+            if isinstance(offset_x, (int, float)) and isinstance(offset_y, (int, float)):
+                result["x"], result["y"] = center_x + float(offset_x), center_y + float(offset_y)
+            return result
+
+        if binding_kind == "area_border" and len(points) >= 2:
+            index, ratio = result.get("binding_segment_index"), result.get("binding_segment_t")
+            if isinstance(index, int) and isinstance(ratio, (int, float)):
+                left = points[index % len(points)]
+                right = points[(index + 1) % len(points)]
+                ratio = max(0.0, min(1.0, float(ratio)))
+                result["x"] = left["x"] + (right["x"] - left["x"]) * ratio
+                result["y"] = left["y"] + (right["y"] - left["y"]) * ratio
+        return result
+
     def _anchor(self, anchor_id: str) -> MapAnchor:
         raw = self.anchors.get(anchor_id)
         if not raw:
             raise SpatialValidationError(f"Unknown map anchor: {anchor_id}")
-        return MapAnchor.model_validate(raw)
+        return MapAnchor.model_validate(self._resolved_anchor_raw(raw))
 
     def validate_connection(self, raw: dict[str, Any]) -> dict[str, Any]:
         try:
@@ -605,7 +645,11 @@ class SpatialService:
         def visible(item: dict[str, Any]) -> bool: return administrative or (item.get("discovered", True) and not item.get("hidden", False))
         locations = [{"id": item["id"], "name": item["name"], **{key: item.get("state", {}).get(key) for key in ("parent_location_id", "topology", "occupancy", "boundary_access", "spatial_kind", "x", "y", "hidden", "discovered")}} for item in self.locations().values() if item.get("state", {}).get("parent_location_id") == parent_id and (administrative or (item.get("state", {}).get("discovered", True) and not item.get("state", {}).get("hidden", False)))]
         ids = {item["id"] for item in locations}
-        anchors = [item for item in self.anchors.values() if item.get("location_id") in {*ids, parent_id} and visible(item)]
+        anchors = [
+            self._resolved_anchor_raw(item)
+            for item in self.anchors.values()
+            if item.get("location_id") in {*ids, parent_id} and visible(item)
+        ]
         if not include_geometry:
             locations = [{key: value for key, value in item.items() if key not in {"x", "y", "footprint", "local_bounds"}} for item in locations]
             anchors = [{key: value for key, value in item.items() if key not in {"x", "y"}} for item in anchors]

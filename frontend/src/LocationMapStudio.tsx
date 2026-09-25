@@ -47,6 +47,10 @@ type SpatialAnchor = {
   coordinate_space_id?: string | null;
   binding_kind?: "coordinate" | "area" | "area_border" | "spot";
   binding_target_id?: string | null;
+  binding_offset_x?: number | null;
+  binding_offset_y?: number | null;
+  binding_segment_index?: number | null;
+  binding_segment_t?: number | null;
   name: string;
   kind: string;
   x?: number | null;
@@ -115,16 +119,22 @@ type EndpointChoice = {
   label: string;
   targetId?: string | null;
   point: Point;
+  offsetX?: number;
+  offsetY?: number;
+  segmentIndex?: number;
+  segmentT?: number;
 };
 type RouteDialogState = {
   points: [Point, Point];
   options: [EndpointChoice[], EndpointChoice[]];
   selections: [string, string];
+  kind: SpatialConnection["kind"];
   travelMinutes: number;
   modes: string;
   bidirectional: boolean;
 } | null;
 type ConnectionDraft = {
+  kind: SpatialConnection["kind"];
   travelMinutes: number;
   modes: string;
   bidirectional: boolean;
@@ -135,6 +145,8 @@ type ConnectionDraft = {
   minigameKey: string;
   difficulty: number;
 };
+type HitCandidate = { id: string; label: string; detail: string };
+type HitMenuState = { mouseX: number; mouseY: number; candidates: HitCandidate[] } | null;
 
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 const round = (value: number) => Math.round(value * 10) / 10;
@@ -164,16 +176,23 @@ const closestPointOnSegment = (point: Point, a: Point, b: Point): Point => {
   const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq));
   return { x: round(a.x + t * dx), y: round(a.y + t * dy) };
 };
-const closestBorderPoint = (point: Point, points: Point[]): { point: Point; distance: number } | null => {
+const closestBorderPoint = (point: Point, points: Point[]): { point: Point; distance: number; segmentIndex: number; segmentT: number } | null => {
   if (points.length < 2) return null;
-  let best: { point: Point; distance: number } | null = null;
+  let best: { point: Point; distance: number; segmentIndex: number; segmentT: number } | null = null;
   for (let index = 0; index < points.length; index++) {
-    const candidate = closestPointOnSegment(point, points[index], points[(index + 1) % points.length]);
+    const left = points[index], right = points[(index + 1) % points.length];
+    const dx = right.x - left.x, dy = right.y - left.y;
+    const lengthSq = dx * dx + dy * dy;
+    const segmentT = lengthSq
+      ? Math.max(0, Math.min(1, ((point.x - left.x) * dx + (point.y - left.y) * dy) / lengthSq))
+      : 0;
+    const candidate = { x: round(left.x + segmentT * dx), y: round(left.y + segmentT * dy) };
     const candidateDistance = distance(point, candidate);
-    if (!best || candidateDistance < best.distance) best = { point: candidate, distance: candidateDistance };
+    if (!best || candidateDistance < best.distance) best = { point: candidate, distance: candidateDistance, segmentIndex: index, segmentT };
   }
   return best;
 };
+const distanceToSegment = (point: Point, left: Point, right: Point) => distance(point, closestPointOnSegment(point, left, right));
 const areaPriority = (entity?: WorldEntity | null) => Number(entity?.state.priority_layer ?? 0);
 const compareAreaPriority = (left: WorldEntity, right: WorldEntity) => {
   const priority = areaPriority(left) - areaPriority(right);
@@ -245,6 +264,7 @@ export function LocationMapStudio({
   const [backgrounds, setBackgrounds] = useState<BackgroundRecord[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
+  const [hitMenu, setHitMenu] = useState<HitMenuState>(null);
 
   const load = useCallback(async () => {
     const [nextMap, nextWorld, nextSettings] = await Promise.all([
@@ -326,6 +346,7 @@ export function LocationMapStudio({
       return;
     }
     setConnectionDraft({
+      kind: selectedConnection.kind,
       travelMinutes: selectedConnection.travel_minutes,
       modes: (selectedConnection.modes ?? ["walk"]).join(", "),
       bidirectional: selectedConnection.bidirectional !== false,
@@ -494,12 +515,15 @@ export function LocationMapStudio({
     for (const entity of areaEntities) {
       const points = geometryPoints(entity);
       if (pointInPolygon(point, points)) {
+        const center = centroid(points);
         options.push({
           key: `area:${entity.id}`,
           kind: "area",
           targetId: entity.id,
           label: `Inside area · ${entity.name} (priority ${areaPriority(entity)})`,
           point,
+          offsetX: round(point.x - center.x),
+          offsetY: round(point.y - center.y),
         });
       }
       const border = closestBorderPoint(point, points);
@@ -510,6 +534,8 @@ export function LocationMapStudio({
           targetId: entity.id,
           label: `Area border · ${entity.name}`,
           point: border.point,
+          segmentIndex: border.segmentIndex,
+          segmentT: border.segmentT,
         });
       }
     }
@@ -546,6 +572,7 @@ export function LocationMapStudio({
       points: [first, second],
       options: [firstOptions, secondOptions],
       selections: [preferredEndpoint(firstOptions).key, preferredEndpoint(secondOptions).key],
+      kind: "route",
       travelMinutes: 0,
       modes: "walk",
       bidirectional: true,
@@ -567,6 +594,10 @@ export function LocationMapStudio({
           coordinate_space_id: layerId,
           binding_kind: choice.kind,
           binding_target_id: choice.targetId ?? null,
+          binding_offset_x: choice.offsetX ?? null,
+          binding_offset_y: choice.offsetY ?? null,
+          binding_segment_index: choice.segmentIndex ?? null,
+          binding_segment_t: choice.segmentT ?? null,
           name: `${target?.name ?? currentLayer?.name ?? "Map"} route ${side}`,
           kind: "waypoint",
           x: choice.point.x,
@@ -580,7 +611,7 @@ export function LocationMapStudio({
     const connection = await api<{ id: string }>(`/projects/${projectId}/spatial/connections`, {
       method: "PUT",
       body: JSON.stringify({
-        kind: "route",
+        kind: routeDialog.kind,
         source_anchor_id: sourceAnchor.id,
         target_anchor_id: targetAnchor.id,
         travel_minutes: Math.max(0, Math.round(routeDialog.travelMinutes)),
@@ -633,7 +664,7 @@ export function LocationMapStudio({
       method: "PUT",
       body: JSON.stringify({
         id: connection.id,
-        kind: connection.kind,
+        kind: connectionDraft.kind,
         source_anchor_id: connection.source_anchor_id,
         target_anchor_id: connection.target_anchor_id,
         travel_minutes: Math.max(0, Math.round(connectionDraft.travelMinutes)),
@@ -801,6 +832,124 @@ export function LocationMapStudio({
     await loadBackgrounds(selectedLocation.id);
   }
 
+  function renderedGeometryPoints(entity?: WorldEntity | null): Point[] {
+    if (!entity) return [];
+    const points = geometryPoints(entity).map(point => ({ ...point }));
+    if (dragLocation?.id === entity.id) {
+      return points.map(point => ({
+        x: clamp(round(point.x + dragOffset.x)),
+        y: clamp(round(point.y + dragOffset.y)),
+      }));
+    }
+    if (vertexDrag?.locationId === entity.id && vertexPreview && points[vertexDrag.index]) {
+      points[vertexDrag.index] = vertexPreview;
+    }
+    return points;
+  }
+
+  function resolvedAnchorPoint(anchor?: SpatialAnchor | null): Point | null {
+    if (!anchor) return null;
+    const fallback = anchor.x != null && anchor.y != null ? { x: Number(anchor.x), y: Number(anchor.y) } : null;
+    if (!anchor.binding_target_id || !anchor.binding_kind || anchor.binding_kind === "coordinate" || !world) return fallback;
+    const target = world.entities[anchor.binding_target_id];
+    if (!target) return fallback;
+    const points = renderedGeometryPoints(target);
+
+    if (anchor.binding_kind === "spot") {
+      if (points.length) return points[0];
+      if (typeof target.state.x === "number" && typeof target.state.y === "number") {
+        const offset = dragLocation?.id === target.id ? dragOffset : { x: 0, y: 0 };
+        return { x: round(target.state.x + offset.x), y: round(target.state.y + offset.y) };
+      }
+      return fallback;
+    }
+
+    if (anchor.binding_kind === "area" && points.length) {
+      const center = centroid(points);
+      if (typeof anchor.binding_offset_x === "number" && typeof anchor.binding_offset_y === "number") {
+        return {
+          x: round(center.x + anchor.binding_offset_x),
+          y: round(center.y + anchor.binding_offset_y),
+        };
+      }
+      return fallback;
+    }
+
+    if (anchor.binding_kind === "area_border" && points.length >= 2) {
+      const index = anchor.binding_segment_index;
+      const ratio = anchor.binding_segment_t;
+      if (typeof index === "number" && typeof ratio === "number") {
+        const left = points[index % points.length];
+        const right = points[(index + 1) % points.length];
+        return {
+          x: round(left.x + (right.x - left.x) * ratio),
+          y: round(left.y + (right.y - left.y) * ratio),
+        };
+      }
+      if (fallback) return closestBorderPoint(fallback, points)?.point ?? fallback;
+    }
+    return fallback;
+  }
+
+  function hitCandidates(point: Point): HitCandidate[] {
+    if (!map || !world) return [];
+    const candidates: HitCandidate[] = [];
+    for (const item of map.locations) {
+      const entity = world.entities[item.id];
+      if (!entity) continue;
+      const points = renderedGeometryPoints(entity);
+      if (entity.state.spatial_kind === "area") {
+        const border = closestBorderPoint(point, points);
+        if (pointInPolygon(point, points) || (border && border.distance <= 1.8)) {
+          candidates.push({ id: item.id, label: item.name, detail: "area" });
+        }
+      } else {
+        const spot = points[0] ?? { x: Number(item.x ?? entity.state.x ?? 0), y: Number(item.y ?? entity.state.y ?? 0) };
+        if (distance(point, spot) <= 2.7) candidates.push({ id: item.id, label: item.name, detail: "spot" });
+      }
+    }
+    for (const anchor of map.anchors) {
+      if ((anchor.binding_kind ?? "coordinate") !== "coordinate") continue;
+      const anchorPoint = resolvedAnchorPoint(anchor);
+      if (anchorPoint && distance(point, anchorPoint) <= 2.2) {
+        candidates.push({ id: anchor.id, label: anchor.name, detail: "coordinate endpoint" });
+      }
+    }
+    for (const connection of map.connections) {
+      const source = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.source_anchor_id));
+      const target = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.target_anchor_id));
+      if (source && target && distanceToSegment(point, source, target) <= 1.4) {
+        const label = connection.kind === "route" ? "Route / shortcut" : connection.kind === "portal" ? "Portal" : "Door";
+        candidates.push({ id: connection.id, label, detail: "connection" });
+      }
+    }
+    for (const barrier of map.barriers) {
+      const points = barrier.geometry?.points ?? [];
+      if (points.some((segmentStart, index) =>
+        index < points.length - 1 && distanceToSegment(point, segmentStart, points[index + 1]) <= 1.4
+      )) {
+        candidates.push({ id: barrier.id, label: barrier.name, detail: "barrier" });
+      }
+    }
+    return candidates;
+  }
+
+  function openShiftHitMenu(event: MouseEvent<HTMLDivElement>) {
+    if (!event.shiftKey) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
+    const candidates = hitCandidates(point);
+    if (candidates.length === 1) {
+      setSelectedId(candidates[0].id);
+      setHitMenu(null);
+      return;
+    }
+    if (candidates.length > 1) {
+      setHitMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, candidates });
+    }
+  }
+
   function canvasClick(event: MouseEvent<HTMLDivElement>) {
     if (tool !== "route" && event.target !== event.currentTarget && (event.target as HTMLElement).closest("button")) return;
     const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
@@ -935,6 +1084,7 @@ export function LocationMapStudio({
     <div className="location-map-body">
       <div
         className={`location-map-canvas tool-${tool}`}
+        onClickCapture={openShiftHitMenu}
         onClick={canvasClick}
         onWheel={event => {
           event.preventDefault();
@@ -995,21 +1145,33 @@ export function LocationMapStudio({
               className={`location-map-barrier${item.hidden ? " hidden" : ""}`}
             /> : null)}
             {map.connections.map(item => {
-              const source = anchors.get(item.source_anchor_id);
-              const target = anchors.get(item.target_anchor_id);
-              if (!source || !target || source.x == null || source.y == null || target.x == null || target.y == null) return null;
-              return <line
-                key={item.id}
-                x1={source.x}
-                y1={source.y}
-                x2={target.x}
-                y2={target.y}
-                className={`location-map-connection ${item.kind}${selectedId === item.id ? " selected" : ""}`}
-                onClick={event => {
-                  event.stopPropagation();
-                  setSelectedId(item.id);
-                }}
-              />;
+              const source = resolvedAnchorPoint(anchors.get(item.source_anchor_id));
+              const target = resolvedAnchorPoint(anchors.get(item.target_anchor_id));
+              if (!source || !target) return null;
+              return <g key={item.id}>
+                <line
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  className="location-map-connection-hitbox"
+                  onClick={event => {
+                    event.stopPropagation();
+                    setSelectedId(item.id);
+                  }}
+                />
+                <line
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  className={`location-map-connection ${item.kind}${selectedId === item.id ? " selected" : ""}`}
+                  onClick={event => {
+                    event.stopPropagation();
+                    setSelectedId(item.id);
+                  }}
+                />
+              </g>;
             })}
             {areaDraft.length > 1 && <polyline
               points={areaDraft.map(point => `${point.x},${point.y}`).join(" ")}
@@ -1055,12 +1217,15 @@ export function LocationMapStudio({
           })}
 
           {map.anchors.map((item, index) => {
-            const x = Number(item.x ?? 8 + (index * 8) % 80);
-            const y = Number(item.y ?? 12 + (index * 7) % 75);
+            if ((item.binding_kind ?? "coordinate") !== "coordinate") return null;
+            const point = resolvedAnchorPoint(item) ?? {
+              x: Number(item.x ?? 8 + (index * 8) % 80),
+              y: Number(item.y ?? 12 + (index * 7) % 75),
+            };
             return <button
               key={item.id}
               className={`location-map-anchor ${item.kind}${selectedId === item.id ? " selected" : ""}`}
-              style={{ left: `${x}%`, top: `${y}%` }}
+              style={{ left: `${point.x}%`, top: `${point.y}%` }}
               title={item.name}
               onClick={event => {
                 if (tool === "route") return;
@@ -1250,6 +1415,17 @@ export function LocationMapStudio({
             </div>)}
           </div>
           <div className="location-map-inspector-form">
+            <TextField
+              select
+              size="small"
+              label="Connection type"
+              value={connectionDraft.kind}
+              onChange={event => setConnectionDraft({ ...connectionDraft, kind: event.target.value as SpatialConnection["kind"] })}
+            >
+              <MenuItem value="route">Route / shortcut</MenuItem>
+              <MenuItem value="door">Door</MenuItem>
+              <MenuItem value="portal">Portal</MenuItem>
+            </TextField>
             <TextField size="small" type="number" label="Travel minutes" value={connectionDraft.travelMinutes} onChange={event => setConnectionDraft({ ...connectionDraft, travelMinutes: Number(event.target.value) })} />
             <TextField size="small" label="Travel modes" helperText="Comma separated, e.g. walk, fly" value={connectionDraft.modes} onChange={event => setConnectionDraft({ ...connectionDraft, modes: event.target.value })} />
             <div className="location-map-switches">
@@ -1303,6 +1479,26 @@ export function LocationMapStudio({
     </div>
 
     <Menu
+      open={Boolean(hitMenu)}
+      onClose={() => setHitMenu(null)}
+      anchorReference="anchorPosition"
+      anchorPosition={hitMenu ? { top: hitMenu.mouseY, left: hitMenu.mouseX } : undefined}
+    >
+      {hitMenu?.candidates.map(candidate => <MenuItem
+        key={candidate.id}
+        onClick={() => {
+          setSelectedId(candidate.id);
+          setHitMenu(null);
+        }}
+      >
+        <span className="location-map-hit-choice">
+          <b>{candidate.label}</b>
+          <small>{candidate.detail}</small>
+        </span>
+      </MenuItem>)}
+    </Menu>
+
+    <Menu
       open={Boolean(vertexMenu)}
       onClose={() => setVertexMenu(null)}
       anchorReference="anchorPosition"
@@ -1340,6 +1536,17 @@ export function LocationMapStudio({
             </TextField>
           </section>)}
           {routeDialog && <div className="location-map-route-dialog-settings">
+            <TextField
+              select
+              size="small"
+              label="Connection type"
+              value={routeDialog.kind}
+              onChange={event => setRouteDialog({ ...routeDialog, kind: event.target.value as SpatialConnection["kind"] })}
+            >
+              <MenuItem value="route">Route / shortcut</MenuItem>
+              <MenuItem value="door">Door</MenuItem>
+              <MenuItem value="portal">Portal</MenuItem>
+            </TextField>
             <TextField size="small" type="number" label="Travel minutes" value={routeDialog.travelMinutes} onChange={event => setRouteDialog({ ...routeDialog, travelMinutes: Number(event.target.value) })} />
             <TextField size="small" label="Modes" value={routeDialog.modes} onChange={event => setRouteDialog({ ...routeDialog, modes: event.target.value })} />
             <FormControlLabel control={<Switch checked={routeDialog.bidirectional} onChange={event => setRouteDialog({ ...routeDialog, bidirectional: event.target.checked })} />} label="Bidirectional" />

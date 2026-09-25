@@ -780,6 +780,10 @@ class MapAnchor(DomainModel):
     coordinate_space_id: DomainId | None = None
     binding_kind: Literal["coordinate", "area", "area_border", "spot"] = "coordinate"
     binding_target_id: DomainId | None = None
+    binding_offset_x: Number | None = None
+    binding_offset_y: Number | None = None
+    binding_segment_index: int | None = Field(default=None, ge=0)
+    binding_segment_t: float | None = Field(default=None, ge=0, le=1)
     name: str = Field(min_length=1)
     kind: AnchorKind = AnchorKind.WAYPOINT
     x: Number | None = None
