@@ -1218,17 +1218,55 @@ export function LocationMapStudio({
             <Button onClick={() => setEditorDraft(locationDraft(selectedLocation))}>Reset</Button>
             <Button variant="contained" onClick={() => void saveLocation(editorDraft)}>Save</Button>
           </div>
+        </> : selectedConnection && connectionDraft ? <>
+          <section className="location-map-inspector-heading">
+            <div><p className="eyebrow">ROUTE</p><h3>{selectedConnection.kind === "route" ? "Travel route" : selectedConnection.kind}</h3></div>
+            <Chip size="small" label={connectionDraft.bidirectional ? "two-way" : "one-way"} />
+          </section>
+          <div className="location-map-route-endpoints">
+            {([
+              ["A", anchors.get(selectedConnection.source_anchor_id)],
+              ["B", anchors.get(selectedConnection.target_anchor_id)],
+            ] as const).map(([side, anchor]) => <div className="location-map-route-endpoint" key={side}>
+              <b>Endpoint {side}</b>
+              <span>{anchor?.name ?? "Missing anchor"}</span>
+              <small>{(anchor?.binding_kind ?? "coordinate").replaceAll("_", " ")}{anchor?.binding_target_id && world?.entities[anchor.binding_target_id] ? ` · ${world.entities[anchor.binding_target_id].name}` : ""}</small>
+              {anchor?.x != null && anchor?.y != null && <small>{round(anchor.x)}, {round(anchor.y)}</small>}
+            </div>)}
+          </div>
+          <div className="location-map-inspector-form">
+            <TextField size="small" type="number" label="Travel minutes" value={connectionDraft.travelMinutes} onChange={event => setConnectionDraft({ ...connectionDraft, travelMinutes: Number(event.target.value) })} />
+            <TextField size="small" label="Travel modes" helperText="Comma separated, e.g. walk, fly" value={connectionDraft.modes} onChange={event => setConnectionDraft({ ...connectionDraft, modes: event.target.value })} />
+            <div className="location-map-switches">
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.bidirectional} onChange={event => setConnectionDraft({ ...connectionDraft, bidirectional: event.target.checked })} />} label="Bidirectional" />
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.enabled} onChange={event => setConnectionDraft({ ...connectionDraft, enabled: event.target.checked })} />} label="Enabled" />
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.discovered} onChange={event => setConnectionDraft({ ...connectionDraft, discovered: event.target.checked })} />} label="Discovered" />
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.hidden} onChange={event => setConnectionDraft({ ...connectionDraft, hidden: event.target.checked })} />} label="Hidden" />
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.locked} onChange={event => setConnectionDraft({ ...connectionDraft, locked: event.target.checked })} />} label="Locked" />
+            </div>
+            {connectionDraft.locked && <div className="location-map-two-column">
+              <TextField size="small" label="Lock minigame" value={connectionDraft.minigameKey} onChange={event => setConnectionDraft({ ...connectionDraft, minigameKey: event.target.value })} />
+              <TextField size="small" type="number" label="Difficulty" value={connectionDraft.difficulty} onChange={event => setConnectionDraft({ ...connectionDraft, difficulty: Number(event.target.value) })} />
+            </div>}
+          </div>
+          <div className="location-map-object-summary">
+            <p><b>Source owner</b><span>{world?.entities[selectedConnection.source_location_id ?? ""]?.name ?? selectedConnection.source_location_id ?? "Map"}</span></p>
+            <p><b>Target owner</b><span>{world?.entities[selectedConnection.target_location_id ?? ""]?.name ?? selectedConnection.target_location_id ?? "Map"}</span></p>
+            <small>Endpoint bindings preserve whether each point is free, inside an area, on an area border, or attached to a spot.</small>
+          </div>
+          <div className="location-map-inspector-actions">
+            <Button color="error" onClick={() => void deleteConnection(selectedConnection)}>Delete route</Button>
+            <Button variant="contained" onClick={() => void saveConnection(selectedConnection)}>Save route</Button>
+          </div>
         </> : selectedSpatial ? <>
           <section className="location-map-inspector-heading">
             <div><p className="eyebrow">MAP OBJECT</p><h3>{"name" in selectedSpatial ? selectedSpatial.name : selectedSpatial.kind}</h3></div>
           </section>
           <div className="location-map-object-summary">
             {"kind" in selectedSpatial && <p><b>Type</b><span>{selectedSpatial.kind}</span></p>}
-            {"travel_minutes" in selectedSpatial && <p><b>Travel</b><span>{selectedSpatial.travel_minutes} min</span></p>}
-            {"blocked_modes" in selectedSpatial && <p><b>Blocks</b><span>{String((selectedSpatial as any).blocked_modes ?? "walk")}</span></p>}
-            <small>Detailed route, door, portal, barrier and lock editors can plug into this inspector without changing the map canvas.</small>
-          </div>
-        </> : <>
+            {"blocked_modes" in selectedSpatial && <p><b>Blocks</b><span>{String((selectedSpatial as SpatialBarrier).blocked_modes ?? "walk")}</span></p>}
+            {"binding_kind" in selectedSpatial && <p><b>Binding</b><span>{String((selectedSpatial as SpatialAnchor).binding_kind ?? "coordinate").replaceAll("_", " ")}</span></p>}
+          </div>        </> : <>
           <section className="location-map-inspector-heading">
             <div><p className="eyebrow">INSPECTOR</p><h3>Nothing selected</h3></div>
           </section>
