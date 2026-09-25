@@ -824,10 +824,9 @@ function StoryWorkspace(props: {
     : [];
   const currentActorId = currentAssistant?.pov_character_id ?? [...path].reverse().find(node => node.pov_character_id)?.pov_character_id ?? null;
   const currentActor = entities.find(entity => entity.id === currentActorId);
+  const currentPartyValue = currentActor?.state.party_ids;
   const currentPartyIds = new Set(
-    Array.isArray(currentActor?.state.party_ids)
-      ? currentActor!.state.party_ids.map(String)
-      : [],
+    Array.isArray(currentPartyValue) ? currentPartyValue.map(String) : [],
   );
 
   useEffect(() => {
