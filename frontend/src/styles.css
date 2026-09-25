@@ -1871,7 +1871,7 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 }
 .global-library-row {
   display: grid;
-  grid-template-columns: minmax(220px, 2fr) minmax(120px, .8fr) 80px 80px 80px 80px;
+  grid-template-columns: minmax(220px, 2fr) minmax(120px, .8fr) 80px 80px 80px 80px 84px;
   gap: 10px;
   align-items: center;
   min-height: 48px;
