@@ -1490,7 +1490,7 @@ Expected implementation slices:
 
 ---
 
-# 22. Current roadmap status
+# 23. Current roadmap status
 
 ```text
 Phase 3 — DataProvider / repositories
