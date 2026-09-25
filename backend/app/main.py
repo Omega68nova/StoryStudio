@@ -45,6 +45,12 @@ from app.schemas import (
     ProjectStoryDefaultsUpdate,
     ProjectCreate,
     ProjectUpdate,
+    LibraryResourceCreate,
+    LibraryResourceUpdate,
+    LibraryRevisionCreate,
+    LibraryChildrenUpdate,
+    LibraryStatPackSave,
+    LibraryStatPackApply,
     ProjectMusicUpdate,
     MusicPlaybackUpdate,
     ReviewDecision,
@@ -113,6 +119,7 @@ from app.services.routeDataService import RouteDataService
 from app.services.generationPlanApiService import GenerationPlanApiService
 from app.services.batchGenerationApiService import BatchGenerationApiService
 from app.services.batchGeneration import GenerationPlanError
+from app.services.library import GlobalLibraryService
 from app.domain.adapters import outfit_from_record
 from app.domain.world import Ability, EffectDefinition, RequirementExpression, Stat
 
@@ -130,6 +137,7 @@ sound = SoundManager(db, events=events, data_provider=data)
 route_data = RouteDataService(data)
 generation_api = GenerationPlanApiService(db, data_provider=data, world=scheduler.world)
 batch_api = BatchGenerationApiService(db, data_provider=data, world=scheduler.world)
+library_service = GlobalLibraryService(data)
 world_clone = WorldCloneService(scheduler.world)
 current_user_context: ContextVar[AuthUser | None] = ContextVar("current_user", default=None)
 BUILD_VERSION = "0.17.0-environment"
