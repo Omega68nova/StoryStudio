@@ -157,6 +157,11 @@ const centroid = (points: Point[]): Point => {
     y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
   };
 };
+const triangleAt = (center: Point, radius = 4): Point[] => [
+  { x: clamp(round(center.x)), y: clamp(round(center.y - radius)) },
+  { x: clamp(round(center.x - radius)), y: clamp(round(center.y + radius)) },
+  { x: clamp(round(center.x + radius)), y: clamp(round(center.y + radius)) },
+];
 const distance = (left: Point, right: Point) => Math.hypot(left.x - right.x, left.y - right.y);
 const pointInPolygon = (point: Point, polygon: Point[]) => {
   if (polygon.length < 3) return false;
@@ -494,6 +499,48 @@ export function LocationMapStudio({
     await load();
   }
 
+  function fallbackLocationPoint(entity: WorldEntity): Point {
+    const itemIndex = Math.max(0, map?.locations.findIndex(item => item.id === entity.id) ?? 0);
+    const points = geometryPoints(entity);
+    if (points.length) return centroid(points);
+    if (typeof entity.state.x === "number" && typeof entity.state.y === "number") {
+      return { x: Number(entity.state.x), y: Number(entity.state.y) };
+    }
+    return {
+      x: 12 + (itemIndex * 11) % 75,
+      y: 16 + (itemIndex * 9) % 68,
+    };
+  }
+
+  async function convertLocationKind(entity: WorldEntity, kind: "spot" | "area") {
+    const current = locationDraft(entity);
+    if (current.spatial_kind === kind) return;
+    const points = geometryPoints(entity);
+    const center = points.length ? centroid(points) : fallbackLocationPoint(entity);
+    const next: EnvironmentLocation = {
+      ...current,
+      spatial_kind: kind,
+      x: round(center.x),
+      y: round(center.y),
+      footprint: kind === "area"
+        ? { location_id: layerId, kind: "polygon", points: triangleAt(center) }
+        : { location_id: layerId, kind: "point", points: [{ x: round(center.x), y: round(center.y) }] },
+    };
+    await saveLocation(next);
+    setEditorDraft(next);
+  }
+
+  async function deleteLocation(entity: WorldEntity) {
+    const confirmed = window.confirm(
+      `Delete "${entity.name}"? Connected map paths/endpoints will also be removed. Child locations and occupied locations must be cleared first.`
+    );
+    if (!confirmed) return;
+    await api(`/projects/${projectId}/environment/locations/${entity.id}`, { method: "DELETE" });
+    setSelectedId(null);
+    setEditorDraft(null);
+    await load();
+  }
+
   function routeEndpointOptions(point: Point): EndpointChoice[] {
     if (!layerId || !world || !map) return [{
       key: "coordinate",
@@ -737,6 +784,13 @@ export function LocationMapStudio({
           y: clamp(round(point.y + dragOffset.y)),
         })),
       };
+    } else {
+      // Legacy locations can exist without x/y or footprint geometry. Their
+      // first drag adopts the drop point as canonical map geometry.
+      const center = { x: next.x, y: next.y };
+      next.footprint = next.spatial_kind === "area"
+        ? { location_id: layerId, kind: "polygon", points: triangleAt(center) }
+        : { location_id: layerId, kind: "point", points: [center] };
     }
     setDragLocation(null);
     setDragOffset({ x: 0, y: 0 });
