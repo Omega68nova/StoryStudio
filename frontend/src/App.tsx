@@ -525,6 +525,7 @@ export default function App() {
         {view === "library" && isAdmin && (
           <GlobalLibraryStudio
             projectId={project?.id}
+            sourceStoryNodeId={leafId}
             fail={setError}
             changed={() => void loadStatPacks()}
           />
