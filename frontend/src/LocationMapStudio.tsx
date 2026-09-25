@@ -16,6 +16,7 @@ import {
   TextField,
 } from "@mui/material";
 import { api } from "./api";
+import { FavoriteLibraryButton } from "./FavoriteLibraryButton";
 import { EntityImageSurface } from "./customComponents/EntityImageSurface";
 import type {
   EnvironmentLocation,
@@ -1576,6 +1577,7 @@ export function LocationMapStudio({
               : <p className="location-map-content-empty">No child locations are configured inside this area.</p>}
           </section>}
           <div className="location-map-inspector-actions">
+            <FavoriteLibraryButton projectId={projectId} sourceKind="location" sourceKey={selectedLocation.id} compact={false} />
             <Button color="error" onClick={() => void deleteLocation(selectedLocation)}>Delete location</Button>
             <Button onClick={() => setEditorDraft(locationDraft(selectedLocation))}>Reset</Button>
             <Button variant="contained" onClick={() => void saveLocation(editorDraft)}>Save</Button>

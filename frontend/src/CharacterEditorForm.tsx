@@ -13,6 +13,7 @@ import { BoxedMultiselectFilter, CreatableBoxedMultiselect } from "./customCompo
 import { EntityImageSurface } from "./customComponents/EntityImageSurface";
 import { updateDraftState } from "./entityDrafts";
 import { RuleIcon } from "./RuleIcon";
+import { FavoriteLibraryButton } from "./FavoriteLibraryButton";
 import type {
   AbilityDefinition,
   CharacterEditorDraft,
@@ -46,6 +47,7 @@ const RELATION_TYPES = [
 ] as const;
 
 type Props = {
+  projectId: string;
   draft: CharacterEditorDraft;
   setDraft: (value: CharacterEditorDraft) => void;
   entities: WorldEntity[];
@@ -84,6 +86,7 @@ type Props = {
 };
 
 export function CharacterEditorForm({
+  projectId,
   draft,
   setDraft,
   entities,
@@ -360,9 +363,9 @@ export function CharacterEditorForm({
             })}
           >Create outfit</Button>}
 
-          {selectedOutfit && !outfitDraft && <Button
+          {selectedOutfit && !outfitDraft && <div className="character-outfit-actions"><Button
             onClick={() => chooseViewOutfit(selectedOutfit.id)}
-          >Edit {selectedOutfit.name}</Button>}
+          >Edit {selectedOutfit.name}</Button><FavoriteLibraryButton projectId={projectId} sourceKind="outfit" sourceKey={selectedOutfit.id} /></div>}
 
           {outfitDraft && <div className="character-outfit-editor">
             <TextField
