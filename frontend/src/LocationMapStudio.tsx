@@ -611,6 +611,20 @@ export function LocationMapStudio({
     await saveLocation(next);
   }
 
+  async function createConnectedVertex() {
+    if (!vertexMenu || !world) return;
+    const entity = world.entities[vertexMenu.locationId];
+    if (!entity) return;
+    const points = geometryPoints(entity);
+    if (!points.length) return;
+    const point = points[vertexMenu.index];
+    const next = points[(vertexMenu.index + 1) % points.length];
+    const middle = { x: round((point.x + next.x) / 2), y: round((point.y + next.y) / 2) };
+    const { locationId, index } = vertexMenu;
+    setVertexMenu(null);
+    await insertVertex(locationId, index, middle);
+  }
+
   async function saveConnection(connection: SpatialConnection) {
     if (!connectionDraft) return;
     await api(`/projects/${projectId}/spatial/connections`, {
