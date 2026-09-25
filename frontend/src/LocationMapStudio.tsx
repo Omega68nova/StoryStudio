@@ -1166,6 +1166,45 @@ export function LocationMapStudio({
           <Button size="small" onClick={() => setLayerId(item.id)}>{item.name}</Button>
         </span>)}
       </div>
+      <div className="location-map-quick-settings">
+        {(tool === "spot" || tool === "area") ? <>
+          <span className="location-map-quick-label">{tool === "spot" ? "New spot defaults" : "New area defaults"}</span>
+          <TextField
+            select
+            size="small"
+            label="Exposure"
+            value={locationDefaults.exposure}
+            onChange={event => setLocationDefaults({ ...locationDefaults, exposure: event.target.value as EnvironmentLocation["exposure"] })}
+          >
+            <MenuItem value="outdoor">Outdoor</MenuItem>
+            <MenuItem value="indoor">Indoor</MenuItem>
+            <MenuItem value="isolated">Sealed / isolated</MenuItem>
+          </TextField>
+          <FormControlLabel control={<Switch size="small" checked={locationDefaults.enabled} onChange={event => setLocationDefaults({ ...locationDefaults, enabled: event.target.checked })} />} label="Enabled" />
+          <FormControlLabel control={<Switch size="small" checked={locationDefaults.discovered} onChange={event => setLocationDefaults({ ...locationDefaults, discovered: event.target.checked })} />} label="Discovered" />
+          <FormControlLabel control={<Switch size="small" checked={locationDefaults.hidden} onChange={event => setLocationDefaults({ ...locationDefaults, hidden: event.target.checked })} />} label="Hidden" />
+          <FormControlLabel control={<Switch size="small" checked={locationDefaults.randomEncounter} onChange={event => setLocationDefaults({ ...locationDefaults, randomEncounter: event.target.checked })} />} label="Random encounter" />
+        </> : tool === "route" ? <>
+          <span className="location-map-quick-label">New connection defaults</span>
+          <TextField
+            select
+            size="small"
+            label="Type"
+            value={connectionDefaults.kind}
+            onChange={event => setConnectionDefaults({ ...connectionDefaults, kind: event.target.value as SpatialConnection["kind"] })}
+          >
+            <MenuItem value="route">Route / shortcut</MenuItem>
+            <MenuItem value="door">Door</MenuItem>
+            <MenuItem value="portal">Portal / teleporter</MenuItem>
+          </TextField>
+          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.bidirectional} onChange={event => setConnectionDefaults({ ...connectionDefaults, bidirectional: event.target.checked })} />} label="Bidirectional" />
+          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.enabled} onChange={event => setConnectionDefaults({ ...connectionDefaults, enabled: event.target.checked })} />} label="Enabled" />
+          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.discovered} onChange={event => setConnectionDefaults({ ...connectionDefaults, discovered: event.target.checked })} />} label="Discovered" />
+          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.hidden} onChange={event => setConnectionDefaults({ ...connectionDefaults, hidden: event.target.checked })} />} label="Hidden" />
+        </> : <span className="location-map-quick-hint">
+          {tool === "select" ? "Select mode · drag location labels to move them · Shift-click overlaps to choose an object" : tool === "edit" ? "Edit geometry · drag vertices or right-click them for point actions" : "Map authoring"}
+        </span>}
+      </div>
       <div className="location-map-toolbar">
         <ButtonGroup size="small">
           {toolLabels.map(item => <Button
@@ -1201,7 +1240,9 @@ export function LocationMapStudio({
         onClickCapture={openShiftHitMenu}
         onClick={canvasClick}
         onWheel={event => {
+          if (!event.ctrlKey) return;
           event.preventDefault();
+          event.stopPropagation();
           setZoom(value => Math.max(.5, Math.min(2, round(value - event.deltaY * .001))));
         }}
         onPointerMove={event => {
@@ -1681,6 +1722,9 @@ export function LocationMapStudio({
             <TextField size="small" type="number" label="Travel minutes" value={routeDialog.travelMinutes} onChange={event => setRouteDialog({ ...routeDialog, travelMinutes: Number(event.target.value) })} />
             <TextField size="small" label="Modes" value={routeDialog.modes} onChange={event => setRouteDialog({ ...routeDialog, modes: event.target.value })} />
             <FormControlLabel control={<Switch checked={routeDialog.bidirectional} onChange={event => setRouteDialog({ ...routeDialog, bidirectional: event.target.checked })} />} label="Bidirectional" />
+            <FormControlLabel control={<Switch checked={routeDialog.enabled} onChange={event => setRouteDialog({ ...routeDialog, enabled: event.target.checked })} />} label="Enabled" />
+            <FormControlLabel control={<Switch checked={routeDialog.discovered} onChange={event => setRouteDialog({ ...routeDialog, discovered: event.target.checked })} />} label="Discovered" />
+            <FormControlLabel control={<Switch checked={routeDialog.hidden} onChange={event => setRouteDialog({ ...routeDialog, hidden: event.target.checked })} />} label="Hidden" />
           </div>}
         </div>
       </DialogContent>
