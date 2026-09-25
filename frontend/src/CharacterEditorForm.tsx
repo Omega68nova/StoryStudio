@@ -353,19 +353,24 @@ export function CharacterEditorForm({
             {outfits.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
           </TextField>
 
-          {!selectedOutfit && draft.id && <Button
-            onClick={() => setOutfitDraft({
-              entity_id: draft.id!,
-              name: "",
-              description: "",
-              imagegen_description: "",
-              equipment: [],
-            })}
-          >Create outfit</Button>}
-
-          {selectedOutfit && !outfitDraft && <div className="character-outfit-actions"><Button
-            onClick={() => chooseViewOutfit(selectedOutfit.id)}
-          >Edit {selectedOutfit.name}</Button><FavoriteLibraryButton projectId={projectId} sourceKind="outfit" sourceKey={selectedOutfit.id} /></div>}
+          {draft.id && !outfitDraft && <div className="character-outfit-actions">
+            <Button
+              onClick={() => {
+                setViewOutfitId("");
+                setOutfitDraft({
+                  entity_id: draft.id!,
+                  name: "",
+                  description: "",
+                  imagegen_description: "",
+                  equipment: [],
+                });
+              }}
+            >Create outfit</Button>
+            {selectedOutfit && <>
+              <Button onClick={() => chooseViewOutfit(selectedOutfit.id)}>Edit {selectedOutfit.name}</Button>
+              <FavoriteLibraryButton projectId={projectId} sourceKind="outfit" sourceKey={selectedOutfit.id} />
+            </>}
+          </div>}
 
           {outfitDraft && <div className="character-outfit-editor">
             <TextField
