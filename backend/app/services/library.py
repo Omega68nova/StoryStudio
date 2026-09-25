@@ -682,15 +682,24 @@ class GlobalLibraryService:
                 dependency_versions.get(token, "latest"),
             )
 
+        source_by_token: dict[str, tuple[str, str]] = {
+            root_token: (source_kind, source_key),
+            **{
+                token: (allowed[token]["source_kind"], allowed[token]["source_key"])
+                for token in selected
+            },
+        }
         for parent_token, parent_resource in list(resources.items()):
+            parent_kind, parent_key = source_by_token[parent_token]
             children: list[dict[str, Any]] = []
-            for token, item in allowed.items():
-                if token not in selected:
-                    continue
-                effective_parent = item["parent_token"]
-                if effective_parent not in resources:
-                    effective_parent = root_token
-                if effective_parent != parent_token:
+            for item in self._direct_dependencies(
+                project_id,
+                parent_kind,
+                parent_key,
+                source_story_node_id,
+            ):
+                token = item["token"]
+                if token not in resources or token == parent_token:
                     continue
                 children.append({
                     "child_resource_id": resources[token]["id"],
