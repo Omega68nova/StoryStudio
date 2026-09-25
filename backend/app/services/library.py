@@ -135,14 +135,38 @@ class GlobalLibraryService:
     ) -> dict[str, Any]:
         _resource, revision, snapshot = self.stat_pack_snapshot(resource_id, revision_id)
         selected_revision_id = revision["id"]
-        if conflict_policy not in {"error", "skip", "replace"}:
-            raise ValueError("conflict_policy must be error, skip, or replace")
+        if conflict_policy not in {"error", "skip"}:
+            raise ValueError("conflict_policy must be error or skip")
 
         existing = {item.stat_key: item for item in self.data.rules.stats(project_id)}
         incoming = [
             Stat.model_validate({**raw, "project_id": project_id})
             for raw in snapshot.get("stats", [])
         ]
+        incoming_by_key = {item.stat_key: item for item in incoming}
+        collisions = sorted(set(existing).intersection(incoming_by_key))
+        if collisions and conflict_policy == "error":
+            raise ValueError(f"Stat already exists: {', '.join(collisions)}")
+
+        final_definitions = dict(existing)
+        for key, stat in incoming_by_key.items():
+            if key not in existing:
+                final_definitions[key] = stat
+        for stat in incoming:
+            if stat.stat_key in existing and conflict_policy == "skip":
+                continue
+            owners = set(map(str, stat.compatible_owner_kinds))
+            for dependency_key in (stat.minimum_stat_key, stat.maximum_stat_key):
+                if not dependency_key:
+                    continue
+                dependency = final_definitions.get(dependency_key)
+                if not dependency:
+                    raise ValueError(f"Imported stat {stat.stat_key} references missing stat {dependency_key}")
+                if owners.difference(map(str, dependency.compatible_owner_kinds)):
+                    raise ValueError(
+                        f"Imported stat {stat.stat_key} is incompatible with existing bound stat {dependency_key}"
+                    )
+
         ordered = self.data.rules.dependency_ordered_stats(
             incoming,
             available=set(existing),
@@ -151,11 +175,8 @@ class GlobalLibraryService:
         skipped: list[str] = []
         for stat in ordered:
             if stat.stat_key in existing:
-                if conflict_policy == "error":
-                    raise ValueError(f"Stat already exists: {stat.stat_key}")
-                if conflict_policy == "skip":
-                    skipped.append(stat.stat_key)
-                    continue
+                skipped.append(stat.stat_key)
+                continue
             self.data.rules.save_stat(stat)
             existing[stat.stat_key] = stat
             applied.append(stat.stat_key)
