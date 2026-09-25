@@ -46,7 +46,10 @@ def _geometry(value: MapGeometry) -> BaseGeometry:
     elif value.kind == "polyline":
         result = LineString(points)
     else:
-        result = Polygon(points)
+        # A two-point area is a supported authoring state. It has no interior
+        # yet, but remains editable and participates as a border segment until
+        # a third point is added.
+        result = LineString(points) if len(points) == 2 else Polygon(points)
     if result.is_empty or not result.is_valid:
         raise SpatialValidationError("Geometry must be non-empty and valid; self-intersecting polygons are not supported")
     return result
@@ -78,6 +81,36 @@ class SpatialService:
             key: value for key, value in self.entities.items()
             if value.get("kind") == "location" and not value.get("state", {}).get("archived")
         }
+
+    @staticmethod
+    def area_priority_key(item: dict[str, Any]) -> tuple[float, str, str]:
+        state = item.get("state", {})
+        return (
+            float(state.get("priority_layer", 0) or 0),
+            str(item.get("name") or ""),
+            str(item.get("id") or ""),
+        )
+
+    def resolve_area_at(self, coordinate_space_id: str, x: float, y: float) -> dict[str, Any] | None:
+        """Return the winning colliding area using Map V2 priority semantics."""
+        _require_geometry()
+        point = Point(float(x), float(y))
+        candidates: list[dict[str, Any]] = []
+        for item in self.locations().values():
+            state = item.get("state", {})
+            if state.get("parent_location_id") != coordinate_space_id or state.get("spatial_kind") != "area":
+                continue
+            footprint = state.get("footprint")
+            if not isinstance(footprint, dict) or footprint.get("kind") != "polygon":
+                continue
+            try:
+                shape = _geometry(MapGeometry.model_validate(footprint))
+            except (ValidationError, ValueError, SpatialValidationError):
+                continue
+            # Degenerate two-point authoring areas have no interior.
+            if shape.geom_type == "Polygon" and shape.covers(point):
+                candidates.append(item)
+        return min(candidates, key=self.area_priority_key) if candidates else None
 
     def root_id(self) -> str | None:
         explicit = self.projection.get("root_location_id")
