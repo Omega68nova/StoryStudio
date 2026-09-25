@@ -280,18 +280,22 @@ class GlobalLibraryService:
             if not row:
                 raise ValueError("Outfit not found")
             entity = self.data.db.fetch_one(
-                "SELECT project_id,name FROM world_entities WHERE id=?",
+                "SELECT project_id FROM world_entities WHERE id=?",
                 (row["entity_id"],),
             )
             if not entity or entity["project_id"] != project_id:
                 raise ValueError("Outfit does not belong to this project")
+            owner_name = ""
+            if self.world is not None:
+                owner = self.world.projection(project_id, head_node_id).get("entities", {}).get(row["entity_id"])
+                owner_name = str((owner or {}).get("name") or "")
             snapshot = dict(row)
             if "equipment_json" in snapshot:
                 snapshot["equipment"] = json.loads(snapshot.pop("equipment_json") or "[]")
             return {
                 "name": row["name"],
                 "description": str(row.get("description") or ""),
-                "tags": [str(entity.get("name") or "")],
+                "tags": [owner_name] if owner_name else [],
                 "original": snapshot,
                 "latest": snapshot,
                 "original_available": False,
