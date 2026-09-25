@@ -1282,9 +1282,29 @@ class WorldEngine:
                 continue
             selected.append(entity)
             used += cost
+        scene_context: dict[str, Any] = {"actor": None, "party": [], "present_non_party": []}
+        if pov_character_id and pov_character_id in projection["entities"]:
+            actor = projection["entities"][pov_character_id]
+            actor_state = actor.get("state", {})
+            location_id = actor_state.get("current_location_id")
+            party_ids = {str(item) for item in actor_state.get("party_ids", [])}
+            scene_context["actor"] = {"id": actor["id"], "name": actor["name"], "location_id": location_id}
+            for entity in projection["entities"].values():
+                if entity.get("kind") != "character" or entity["id"] == pov_character_id:
+                    continue
+                if entity.get("state", {}).get("current_location_id") != location_id:
+                    continue
+                summary = {"id": entity["id"], "name": entity["name"]}
+                if entity["id"] in party_ids:
+                    scene_context["party"].append(summary)
+                elif self.visible(entity, pov_character_id, narration_mode, projection):
+                    scene_context["present_non_party"].append(summary)
+            scene_context["party"].sort(key=lambda item: item["name"].casefold())
+            scene_context["present_non_party"].sort(key=lambda item: item["name"].casefold())
         result = {
             "world_time": {"elapsed_minutes": projection["elapsed_minutes"], "display_time": projection["display_time"]},
             "pov_character_id": pov_character_id, "narration_mode": narration_mode,
+            "scene_context": scene_context,
             "entities": selected, "tokens_estimated": used,
         }
         # Keep private character knowledge out of lore cards/search. The prose
