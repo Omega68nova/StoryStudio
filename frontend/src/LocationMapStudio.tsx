@@ -848,6 +848,16 @@ export function LocationMapStudio({
 
   const parentId = String(currentLayer?.state.parent_location_id || "");
   const anchors = new Map(map.anchors.map(anchor => [anchor.id, anchor]));
+  const localBoundsRaw = currentLayer?.state.local_bounds as Geometry | null | undefined;
+  const localBoundsPoints = Array.isArray(localBoundsRaw?.points) ? localBoundsRaw.points : [];
+  const priorityOrderedAreas = map.locations
+    .filter(item => world?.entities[item.id]?.state.spatial_kind === "area")
+    .sort((left, right) => {
+      const leftEntity = world?.entities[left.id];
+      const rightEntity = world?.entities[right.id];
+      if (!leftEntity || !rightEntity) return 0;
+      return compareAreaPriority(rightEntity, leftEntity);
+    });
   const toolLabels: Array<{ id: Tool; label: string }> = [
     { id: "select", label: "Select" },
     { id: "drag", label: "Drag" },
@@ -927,20 +937,32 @@ export function LocationMapStudio({
       >
         <div className="location-map-world" style={{ transform: `scale(${zoom})` }}>
           <svg className="location-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {map.locations.map(item => {
+            {localBoundsPoints.length >= 2
+              ? <polygon
+                  points={localBoundsPoints.map(point => `${point.x},${point.y}`).join(" ")}
+                  className="location-map-space-boundary"
+                />
+              : <rect x=".45" y=".45" width="99.1" height="99.1" className="location-map-space-boundary" />}
+            {priorityOrderedAreas.map(item => {
               const entity = world?.entities[item.id];
               const points = geometryPoints(entity);
-              if (points.length < 3) return null;
+              if (points.length < 2) return null;
               const offset = dragLocation?.id === item.id ? dragOffset : { x: 0, y: 0 };
               const rendered = points.map(point => ({
                 x: clamp(point.x + offset.x),
                 y: clamp(point.y + offset.y),
               }));
-              return <polygon
-                key={item.id}
-                points={rendered.map(point => `${point.x},${point.y}`).join(" ")}
-                className={`location-map-area${selectedId === item.id ? " selected" : ""}`}
-              />;
+              return rendered.length >= 3
+                ? <polygon
+                    key={item.id}
+                    points={rendered.map(point => `${point.x},${point.y}`).join(" ")}
+                    className={`location-map-area${selectedId === item.id ? " selected" : ""}`}
+                  />
+                : <polyline
+                    key={item.id}
+                    points={rendered.map(point => `${point.x},${point.y}`).join(" ")}
+                    className={`location-map-area degenerate${selectedId === item.id ? " selected" : ""}`}
+                  />;
             })}
             {map.barriers.map(item => item.geometry?.points?.length ? <polyline
               key={item.id}
@@ -958,12 +980,17 @@ export function LocationMapStudio({
                 x2={target.x}
                 y2={target.y}
                 className={`location-map-connection ${item.kind}${selectedId === item.id ? " selected" : ""}`}
+                onClick={event => {
+                  event.stopPropagation();
+                  setSelectedId(item.id);
+                }}
               />;
             })}
             {areaDraft.length > 1 && <polyline
               points={areaDraft.map(point => `${point.x},${point.y}`).join(" ")}
               className="location-map-draft"
             />}
+            {routePoints.length === 1 && <circle cx={routePoints[0].x} cy={routePoints[0].y} r="1.1" className="location-map-route-draft-point" />}
           </svg>
 
           {map.locations.map((item, index) => {
@@ -976,11 +1003,12 @@ export function LocationMapStudio({
             const point = { x: clamp(base.x + offset.x), y: clamp(base.y + offset.y) };
             return <button
               key={item.id}
-              className={`location-map-node ${points.length >= 3 ? "area-node" : "spot-node"}${selectedId === item.id ? " selected" : ""}${routeStartId === item.id ? " route-start" : ""}`}
+              className={`location-map-node ${entity?.state.spatial_kind === "area" ? "area-node" : "spot-node"}${selectedId === item.id ? " selected" : ""}`}
               style={{ left: `${point.x}%`, top: `${point.y}%` }}
               onClick={event => {
+                if (tool === "route") return;
                 event.stopPropagation();
-                void chooseLocation(item.id);
+                chooseLocation(item.id);
               }}
               onDoubleClick={event => {
                 event.stopPropagation();
@@ -989,7 +1017,11 @@ export function LocationMapStudio({
               onPointerDown={event => void beginLocationDrag(event, item.id)}
             >
               <b>{item.name}</b>
-              <small>{item.spatial_kind ?? "spot"}{entity?.state.parent_location_id ? "" : " · root"}</small>
+              <small>
+                {item.spatial_kind ?? "spot"}
+                {entity?.state.spatial_kind === "area" ? ` · p${areaPriority(entity)} · ${areaContents[item.id]?.length ?? 0} inside` : ""}
+                {entity?.state.parent_location_id ? "" : " · root"}
+              </small>
             </button>;
           })}
 
@@ -1002,6 +1034,7 @@ export function LocationMapStudio({
               style={{ left: `${x}%`, top: `${y}%` }}
               title={item.name}
               onClick={event => {
+                if (tool === "route") return;
                 event.stopPropagation();
                 setSelectedId(item.id);
               }}
@@ -1011,7 +1044,7 @@ export function LocationMapStudio({
           {tool === "edit" && map.locations.flatMap(item => {
             const entity = world?.entities[item.id];
             const points = geometryPoints(entity);
-            if (points.length < 3) return [];
+            if (points.length < 2) return [];
             return points.flatMap((point, index) => {
               const next = points[(index + 1) % points.length];
               const shownPoint = vertexDrag?.locationId === item.id && vertexDrag.index === index && vertexPreview ? vertexPreview : point;
@@ -1023,11 +1056,18 @@ export function LocationMapStudio({
                   style={{ left: `${shownPoint.x}%`, top: `${shownPoint.y}%` }}
                   title="Drag vertex"
                   onPointerDown={event => {
+                    if (event.button !== 0) return;
                     event.stopPropagation();
                     setSelectedId(item.id);
                     setVertexDrag({ locationId: item.id, index });
                     setVertexPreview(point);
                     event.currentTarget.setPointerCapture?.(event.pointerId);
+                  }}
+                  onContextMenu={event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSelectedId(item.id);
+                    setVertexMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, locationId: item.id, index });
                   }}
                 />,
                 <button
