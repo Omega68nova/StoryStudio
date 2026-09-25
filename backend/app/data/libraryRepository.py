@@ -155,6 +155,16 @@ class LibraryRepository(BaseRepository):
         with self.db._lock, self.db.connect() as connection:
             if not connection.execute("SELECT 1 FROM library_resources WHERE id=?", (resource_id,)).fetchone():
                 raise ValueError("Library resource not found")
+            if source_story_node_id:
+                source_node = connection.execute(
+                    "SELECT project_id FROM story_nodes WHERE id=?",
+                    (source_story_node_id,),
+                ).fetchone()
+                if not source_node:
+                    raise ValueError("Source story node not found")
+                if source_project_id and source_node["project_id"] != source_project_id:
+                    raise ValueError("Source story node does not belong to source project")
+                source_project_id = source_project_id or source_node["project_id"]
             number = connection.execute(
                 "SELECT COALESCE(MAX(revision_number),0)+1 AS n FROM library_resource_revisions WHERE resource_id=?",
                 (resource_id,),
@@ -189,6 +199,23 @@ class LibraryRepository(BaseRepository):
                     raise ValueError("A library resource cannot contain itself")
                 if not connection.execute("SELECT 1 FROM library_resources WHERE id=?", (child_id,)).fetchone():
                     raise ValueError(f"Unknown child library resource: {child_id}")
+                cycle = connection.execute(
+                    """
+                    WITH RECURSIVE descendants(id) AS (
+                      SELECT child_resource_id
+                      FROM library_resource_children
+                      WHERE parent_resource_id=?
+                      UNION
+                      SELECT c.child_resource_id
+                      FROM library_resource_children c
+                      JOIN descendants d ON c.parent_resource_id=d.id
+                    )
+                    SELECT 1 FROM descendants WHERE id=? LIMIT 1
+                    """,
+                    (child_id, parent_resource_id),
+                ).fetchone()
+                if cycle:
+                    raise ValueError("Library resource trees cannot contain cycles")
                 connection.execute(
                     """
                     INSERT INTO library_resource_children(
@@ -215,6 +242,19 @@ class LibraryRepository(BaseRepository):
         source_story_node_id: str | None = None,
     ) -> dict[str, Any]:
         import_id, now = new_id(), utc_now()
+        revision = self.db.fetch_one(
+            "SELECT resource_id FROM library_resource_revisions WHERE id=?",
+            (revision_id,),
+        )
+        if not revision or revision["resource_id"] != resource_id:
+            raise ValueError("Imported revision does not belong to resource")
+        if source_story_node_id:
+            node = self.db.fetch_one(
+                "SELECT project_id FROM story_nodes WHERE id=?",
+                (source_story_node_id,),
+            )
+            if not node or node["project_id"] != project_id:
+                raise ValueError("Import source story node does not belong to target project")
         self.db.execute(
             """
             INSERT INTO library_project_imports(
