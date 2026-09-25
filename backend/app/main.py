@@ -562,6 +562,127 @@ async def websocket_events(socket: WebSocket) -> None:
         return
 
 
+@app.get("/api/library/resources")
+async def list_library_resources(
+    resource_kind: str | None = None,
+    marked_only: bool = False,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    return data.library.list_resources(
+        resource_kind=resource_kind,
+        marked_only=marked_only,
+        search=search,
+    )
+
+
+@app.post("/api/library/resources", status_code=201)
+async def create_library_resource(request: LibraryResourceCreate) -> dict[str, Any]:
+    return data.library.create_resource(
+        resource_kind=request.resource_kind,
+        name=request.name,
+        description=request.description,
+        marked=request.marked,
+        tags=request.tags,
+    )
+
+
+@app.get("/api/library/resources/{resource_id}")
+async def get_library_resource(resource_id: str) -> dict[str, Any]:
+    resource = data.library.resource(resource_id)
+    if not resource:
+        raise HTTPException(404, "Library resource not found")
+    resource["revisions"] = data.library.revisions(resource_id)
+    return resource
+
+
+@app.put("/api/library/resources/{resource_id}")
+async def update_library_resource(resource_id: str, request: LibraryResourceUpdate) -> dict[str, Any]:
+    try:
+        return data.library.update_resource(
+            resource_id,
+            name=request.name,
+            description=request.description,
+            marked=request.marked,
+            tags=request.tags,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/api/library/resources/{resource_id}/revisions", status_code=201)
+async def add_library_revision(resource_id: str, request: LibraryRevisionCreate) -> dict[str, Any]:
+    try:
+        return data.library.add_revision(
+            resource_id,
+            request.snapshot,
+            source_project_id=request.source_project_id,
+            source_story_node_id=request.source_story_node_id,
+            source_kind=request.source_kind,
+            source_key=request.source_key,
+            note=request.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.put("/api/library/resources/{resource_id}/children", status_code=204)
+async def update_library_children(resource_id: str, request: LibraryChildrenUpdate) -> None:
+    if not data.library.resource(resource_id):
+        raise HTTPException(404, "Library resource not found")
+    try:
+        data.library.set_children(resource_id, request.children)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/library/stat-packs", status_code=201)
+async def save_project_stat_pack(project_id: str, request: LibraryStatPackSave) -> dict[str, Any]:
+    project = require_project(project_id)
+    if request.source_story_node_id:
+        node = db.fetch_one(
+            "SELECT id FROM story_nodes WHERE id=? AND project_id=?",
+            (request.source_story_node_id, project_id),
+        )
+        if not node:
+            raise HTTPException(422, "Source story node does not belong to this project")
+    try:
+        return library_service.save_stat_pack(
+            project["id"],
+            name=request.name,
+            stat_keys=request.stat_keys,
+            resource_id=request.resource_id,
+            description=request.description,
+            marked=request.marked,
+            tags=request.tags,
+            source_story_node_id=request.source_story_node_id,
+            note=request.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/library/stat-packs/{resource_id}/apply")
+async def apply_library_stat_pack(project_id: str, resource_id: str, request: LibraryStatPackApply) -> dict[str, Any]:
+    project = require_project(project_id)
+    if request.source_story_node_id:
+        node = db.fetch_one(
+            "SELECT id FROM story_nodes WHERE id=? AND project_id=?",
+            (request.source_story_node_id, project_id),
+        )
+        if not node:
+            raise HTTPException(422, "Source story node does not belong to this project")
+    try:
+        return library_service.apply_stat_pack(
+            resource_id,
+            project["id"],
+            revision_id=request.revision_id,
+            conflict_policy=request.conflict_policy,
+            source_story_node_id=request.source_story_node_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.get("/api/projects")
 async def list_projects() -> list[dict[str, Any]]:
     user = current_user()
@@ -573,12 +694,25 @@ async def create_project(request: ProjectCreate) -> dict[str, Any]:
     project = db.create_project(request.title.strip())
     environment.ensure_project(project["id"])
     db.execute("INSERT OR IGNORE INTO project_music_settings(project_id) VALUES (?)", (project["id"],))
-    presets = {
-        "adventure": [("hp", "HP", "character", 100, 0, 100), ("mana", "Mana", "character", 100, 0, 100)],
-        "romance": [("favorability", "Favorability", "relationship", 0, -100, 100)],
-    }
-    for key, label, scope, default, minimum, maximum in presets.get(request.stats_preset, []):
-        data.rules.save_stat(Stat(project_id=project["id"], stat_key=key, label=label, compatible_owner_kinds=[scope], default_value=default, minimum=minimum, maximum=maximum))
+    if request.stats_library_id:
+        try:
+            library_service.apply_stat_pack(
+                request.stats_library_id,
+                project["id"],
+                conflict_policy="error",
+            )
+        except ValueError as exc:
+            # Project creation has already allocated the project. Keep it valid
+            # and report why the optional reusable stat pack could not apply.
+            raise HTTPException(422, str(exc)) from exc
+    else:
+        # Compatibility path for clients created before reusable stat packs.
+        presets = {
+            "adventure": [("hp", "HP", "character", 100, 0, 100), ("mana", "Mana", "character", 100, 0, 100)],
+            "romance": [("favorability", "Favorability", "relationship", 0, -100, 100)],
+        }
+        for key, label, scope, default, minimum, maximum in presets.get(request.stats_preset, []):
+            data.rules.save_stat(Stat(project_id=project["id"], stat_key=key, label=label, compatible_owner_kinds=[scope], default_value=default, minimum=minimum, maximum=maximum))
     return db.get_project(project["id"]) or project
 
 
