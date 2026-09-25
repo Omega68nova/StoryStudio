@@ -287,6 +287,9 @@ export function LocationMapStudio({
   const [vertexPreview, setVertexPreview] = useState<Point | null>(null);
   const [editorDraft, setEditorDraft] = useState<EnvironmentLocation | null>(null);
   const [backgrounds, setBackgrounds] = useState<BackgroundRecord[]>([]);
+  const [backgroundSelection, setBackgroundSelection] = useState<string>("new");
+  const [backgroundWeatherId, setBackgroundWeatherId] = useState("");
+  const [backgroundTimePhaseId, setBackgroundTimePhaseId] = useState("");
   const [imageBusy, setImageBusy] = useState(false);
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
   const [hitMenu, setHitMenu] = useState<HitMenuState>(null);
@@ -346,15 +349,29 @@ export function LocationMapStudio({
   const loadBackgrounds = useCallback(async (locationId: string) => {
     const rows = await api<BackgroundRecord[]>(`/projects/${projectId}/environment/locations/${locationId}/backgrounds`);
     setBackgrounds(rows);
+    setBackgroundSelection(current => current !== "new" && rows.some(row => row.media_asset_id === current)
+      ? current
+      : (rows[0]?.media_asset_id ?? "new"));
   }, [projectId]);
 
   useEffect(() => {
     if (!selectedLocation) {
       setBackgrounds([]);
+      setBackgroundSelection("new");
+      setBackgroundWeatherId("");
+      setBackgroundTimePhaseId("");
       return;
     }
     void loadBackgrounds(selectedLocation.id).catch(cause => fail(String(cause)));
   }, [selectedLocation?.id, loadBackgrounds, fail]);
+
+  useEffect(() => {
+    if (backgroundSelection === "new") return;
+    const row = backgrounds.find(item => item.media_asset_id === backgroundSelection);
+    if (!row) return;
+    setBackgroundWeatherId(row.weather_id ?? "");
+    setBackgroundTimePhaseId(row.time_phase_id ?? "");
+  }, [backgroundSelection, backgrounds]);
 
   const breadcrumbs = useMemo(() => {
     const result: Array<{ id: string; name: string }> = [];
@@ -417,8 +434,9 @@ export function LocationMapStudio({
   }, [selectedConnection]);
 
   const backgroundAsset = useMemo<MediaAsset | null>(() => {
-    if (!selectedLocation || !backgrounds.length) return null;
-    const row = backgrounds[0];
+    if (!selectedLocation || !backgrounds.length || backgroundSelection === "new") return null;
+    const row = backgrounds.find(item => item.media_asset_id === backgroundSelection);
+    if (!row) return null;
     return {
       id: row.media_asset_id,
       entity_id: selectedLocation.id,
@@ -428,7 +446,7 @@ export function LocationMapStudio({
       prompt: row.prompt,
       negative_prompt: row.negative_prompt,
     };
-  }, [backgrounds, selectedLocation]);
+  }, [backgrounds, selectedLocation, backgroundSelection]);
 
   function canvasPoint(clientX: number, clientY: number, element: HTMLElement): Point {
     const rect = element.getBoundingClientRect();
@@ -912,7 +930,7 @@ export function LocationMapStudio({
     if (!selectedLocation) return;
     const workflowId = environmentSettings?.background_workflow_id;
     if (!workflowId) {
-      fail("Choose a background workflow in Environment before generating location images.");
+      fail("Choose a background workflow in Environment settings before generating location images.");
       return;
     }
     const fallback = String(selectedLocation.state.imagegen_description || selectedLocation.state.description || selectedLocation.name);
@@ -926,7 +944,7 @@ export function LocationMapStudio({
           `/projects/${projectId}/environment/locations/${selectedLocation.id}/backgrounds`,
           {
             method: "POST",
-            body: JSON.stringify({ prompt, negative_prompt: "", weather_id: null, time_phase_id: null }),
+            body: JSON.stringify({ prompt, negative_prompt: "", weather_id: backgroundWeatherId || null, time_phase_id: backgroundTimePhaseId || null }),
           },
         );
         mediaId = created.media_asset_id;
@@ -1466,6 +1484,59 @@ export function LocationMapStudio({
             <Chip size="small" label={editorDraft.spatial_kind} />
           </section>
 
+          <section className="location-map-background-manager">
+            <div className="location-map-section-heading">
+              <div><p className="eyebrow">BACKGROUNDS</p><h4>Scene image variants</h4></div>
+              <Chip size="small" label={backgrounds.length} />
+            </div>
+            <TextField
+              select
+              size="small"
+              label="Background variant"
+              value={backgroundSelection}
+              onChange={event => {
+                const value = event.target.value;
+                setBackgroundSelection(value);
+                if (value === "new") {
+                  setBackgroundWeatherId("");
+                  setBackgroundTimePhaseId("");
+                }
+              }}
+            >
+              <MenuItem value="new">+ New background variant</MenuItem>
+              {backgrounds.map(row => {
+                const weather = environmentSettings?.weather.find(item => item.id === row.weather_id)?.name ?? "Any weather";
+                const phase = environmentSettings?.time_phases.find(item => item.id === row.time_phase_id)?.name ?? "Any time";
+                return <MenuItem key={row.media_asset_id} value={row.media_asset_id}>{weather} · {phase}</MenuItem>;
+              })}
+            </TextField>
+            <div className="location-map-two-column">
+              <TextField
+                select
+                size="small"
+                label="Weather"
+                disabled={backgroundSelection !== "new"}
+                value={backgroundWeatherId}
+                onChange={event => setBackgroundWeatherId(event.target.value)}
+              >
+                <MenuItem value="">Any weather</MenuItem>
+                {environmentSettings?.weather.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+              </TextField>
+              <TextField
+                select
+                size="small"
+                label="Time"
+                disabled={backgroundSelection !== "new"}
+                value={backgroundTimePhaseId}
+                onChange={event => setBackgroundTimePhaseId(event.target.value)}
+              >
+                <MenuItem value="">Any time</MenuItem>
+                {environmentSettings?.time_phases.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+              </TextField>
+            </div>
+            <small>{backgroundSelection === "new" ? "Generate or upload a new condition-specific background." : "Select New background variant to create a different weather/time image."}</small>
+          </section>
+
           <EntityImageSurface
             asset={backgroundAsset}
             alt={`${selectedLocation.name} background`}
@@ -1503,6 +1574,20 @@ export function LocationMapStudio({
               label="Image generation description"
               value={editorDraft.imagegen_description}
               onChange={event => setEditorDraft({ ...editorDraft, imagegen_description: event.target.value })}
+            />
+            <TextField
+              size="small"
+              label="Tags"
+              helperText="Comma separated"
+              value={editorDraft.tags.join(", ")}
+              onChange={event => setEditorDraft({ ...editorDraft, tags: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })}
+            />
+            <TextField
+              size="small"
+              label="Image tags"
+              helperText="Comma separated; used for generation and later media search."
+              value={editorDraft.image_tags.join(", ")}
+              onChange={event => setEditorDraft({ ...editorDraft, image_tags: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })}
             />
             <TextField
               select
