@@ -27,8 +27,8 @@ export type WorldConfigurationSection =
 const sections: Array<{ id: WorldConfigurationSection; label: string }> = [
   { id: "world", label: "World" },
   { id: "characters", label: "Characters" },
-  { id: "environment", label: "Environment" },
-  { id: "locations", label: "Location Map" },
+  { id: "environment", label: "Environment settings" },
+  { id: "locations", label: "Environment & Map" },
   { id: "rules", label: "Rules" },
   { id: "generation", label: "Generation plan" },
   { id: "minigames", label: "Minigames" },
