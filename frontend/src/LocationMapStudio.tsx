@@ -132,6 +132,9 @@ type RouteDialogState = {
   travelMinutes: number;
   modes: string;
   bidirectional: boolean;
+  enabled: boolean;
+  discovered: boolean;
+  hidden: boolean;
 } | null;
 type ConnectionDraft = {
   kind: SpatialConnection["kind"];
@@ -147,6 +150,20 @@ type ConnectionDraft = {
 };
 type HitCandidate = { id: string; label: string; detail: string };
 type HitMenuState = { mouseX: number; mouseY: number; candidates: HitCandidate[] } | null;
+type LocationAuthoringDefaults = {
+  exposure: EnvironmentLocation["exposure"];
+  enabled: boolean;
+  discovered: boolean;
+  hidden: boolean;
+  randomEncounter: boolean;
+};
+type ConnectionAuthoringDefaults = {
+  kind: SpatialConnection["kind"];
+  bidirectional: boolean;
+  enabled: boolean;
+  discovered: boolean;
+  hidden: boolean;
+};
 
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 const round = (value: number) => Math.round(value * 10) / 10;
@@ -272,6 +289,20 @@ export function LocationMapStudio({
   const [imageBusy, setImageBusy] = useState(false);
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
   const [hitMenu, setHitMenu] = useState<HitMenuState>(null);
+  const [locationDefaults, setLocationDefaults] = useState<LocationAuthoringDefaults>({
+    exposure: "outdoor",
+    enabled: true,
+    discovered: true,
+    hidden: false,
+    randomEncounter: false,
+  });
+  const [connectionDefaults, setConnectionDefaults] = useState<ConnectionAuthoringDefaults>({
+    kind: "route",
+    bidirectional: true,
+    enabled: true,
+    discovered: true,
+    hidden: false,
+  });
 
   const load = useCallback(async () => {
     const [nextMap, nextWorld, nextSettings] = await Promise.all([
@@ -339,7 +370,7 @@ export function LocationMapStudio({
         messages.push(`${item.name} has no canonical map position; drag it once to adopt its drop coordinates.`);
       }
     });
-    map?.anchors.filter(item => item.x == null || item.y == null).forEach(item => {
+    map?.anchors.filter(item => (item.binding_kind ?? "coordinate") === "coordinate" && (item.x == null || item.y == null)).forEach(item => {
       messages.push(`${item.name} needs map review: its position is incomplete.`);
     });
     return messages;
@@ -417,15 +448,15 @@ export function LocationMapStudio({
       body: JSON.stringify({
         name,
         parent_location_id: layerId,
-        exposure: "outdoor",
+        exposure: locationDefaults.exposure,
         description: "",
         imagegen_description: "",
         tags: [],
         image_tags: [],
-        enabled: true,
-        random_encounter: false,
-        hidden: false,
-        discovered: true,
+        enabled: locationDefaults.enabled,
+        random_encounter: locationDefaults.randomEncounter,
+        hidden: locationDefaults.hidden,
+        discovered: locationDefaults.discovered,
         x: point.x,
         y: point.y,
         topology: "closed",
@@ -467,15 +498,15 @@ export function LocationMapStudio({
         body: JSON.stringify({
           name,
           parent_location_id: layerId,
-          exposure: "outdoor",
+          exposure: locationDefaults.exposure,
           description: "",
           imagegen_description: "",
           tags: [],
           image_tags: [],
-          enabled: true,
-          random_encounter: false,
-          hidden: false,
-          discovered: true,
+          enabled: locationDefaults.enabled,
+          random_encounter: locationDefaults.randomEncounter,
+          hidden: locationDefaults.hidden,
+          discovered: locationDefaults.discovered,
           x: round(center.x),
           y: round(center.y),
           topology: "open",
@@ -631,10 +662,13 @@ export function LocationMapStudio({
       points: [first, second],
       options: [firstOptions, secondOptions],
       selections: [preferredEndpoint(firstOptions).key, preferredEndpoint(secondOptions).key],
-      kind: "route",
+      kind: connectionDefaults.kind,
       travelMinutes: 0,
       modes: "walk",
-      bidirectional: true,
+      bidirectional: connectionDefaults.bidirectional,
+      enabled: connectionDefaults.enabled,
+      discovered: connectionDefaults.discovered,
+      hidden: connectionDefaults.hidden,
     });
   }
 
@@ -659,8 +693,8 @@ export function LocationMapStudio({
           binding_segment_t: choice.segmentT ?? null,
           name: `${target?.name ?? currentLayer?.name ?? "Map"} route ${side}`,
           kind: "waypoint",
-          x: choice.point.x,
-          y: choice.point.y,
+          x: choice.kind === "coordinate" ? choice.point.x : null,
+          y: choice.kind === "coordinate" ? choice.point.y : null,
         }),
       });
     };
@@ -678,6 +712,9 @@ export function LocationMapStudio({
           ? routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean)
           : ["walk"],
         bidirectional: routeDialog.bidirectional,
+        enabled: routeDialog.enabled,
+        discovered: routeDialog.discovered,
+        hidden: routeDialog.hidden,
       }),
     });
     setRouteDialog(null);
@@ -760,7 +797,7 @@ export function LocationMapStudio({
   }
 
   async function beginLocationDrag(event: ReactPointerEvent<HTMLElement>, id: string) {
-    if (tool !== "drag" || !world) return;
+    if ((tool !== "drag" && tool !== "select") || !world || event.button !== 0) return;
     event.stopPropagation();
     const entity = world.entities[id];
     if (!entity) return;
@@ -804,9 +841,20 @@ export function LocationMapStudio({
         ? { location_id: layerId, kind: "polygon", points: triangleAt(center) }
         : { location_id: layerId, kind: "point", points: [center] };
     }
+    const footprint = next.footprint;
     setDragLocation(null);
     setDragOffset({ x: 0, y: 0 });
-    await saveLocation(next);
+    if (!footprint) return;
+    await api(`/projects/${projectId}/spatial/locations/${entity.id}/placement`, {
+      method: "PUT",
+      body: JSON.stringify({
+        x: next.x,
+        y: next.y,
+        spatial_kind: next.spatial_kind,
+        footprint,
+      }),
+    });
+    await load();
   }
 
   async function finishVertexDrag() {
