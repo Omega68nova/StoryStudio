@@ -129,10 +129,13 @@ class LibraryRepository(BaseRepository):
         return self.resource(resource_id) or {}
 
     def revisions(self, resource_id: str) -> list[dict[str, Any]]:
-        return self.db.fetch_all(
+        rows = self.db.fetch_all(
             "SELECT * FROM library_resource_revisions WHERE resource_id=? ORDER BY revision_number DESC",
             (resource_id,),
         )
+        for row in rows:
+            row["snapshot"] = json.loads(row.pop("snapshot_json"))
+        return rows
 
     def revision(self, revision_id: str) -> dict[str, Any] | None:
         row = self.db.fetch_one("SELECT * FROM library_resource_revisions WHERE id=?", (revision_id,))
