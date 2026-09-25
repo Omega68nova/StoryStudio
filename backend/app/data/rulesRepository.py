@@ -216,9 +216,9 @@ class RulesRepository(BaseRepository):
             values["created_at"] = existing["created_at"] if existing else now
             values["updated_at"] = now
             connection.execute(
-                "INSERT INTO stat_definitions(project_id,stat_key,label,description,default_value,minimum,maximum,minimum_stat_key,maximum_stat_key,color,minimum_color,maximum_color,display_style,integer_only,visibility,created_at,updated_at) "
-                "VALUES(:project_id,:stat_key,:label,:description,:default_value,:minimum,:maximum,:minimum_stat_key,:maximum_stat_key,:color,:minimum_color,:maximum_color,:display_style,:integer_only,:visibility,:created_at,:updated_at) "
-                "ON CONFLICT(project_id,stat_key) DO UPDATE SET label=excluded.label,description=excluded.description,default_value=excluded.default_value,minimum=excluded.minimum,maximum=excluded.maximum,minimum_stat_key=excluded.minimum_stat_key,maximum_stat_key=excluded.maximum_stat_key,color=excluded.color,minimum_color=excluded.minimum_color,maximum_color=excluded.maximum_color,display_style=excluded.display_style,integer_only=excluded.integer_only,visibility=excluded.visibility,updated_at=excluded.updated_at",
+                "INSERT INTO stat_definitions(project_id,stat_key,label,description,default_value,minimum,maximum,minimum_stat_key,maximum_stat_key,color,minimum_color,maximum_color,icon,display_style,integer_only,visibility,created_at,updated_at) "
+                "VALUES(:project_id,:stat_key,:label,:description,:default_value,:minimum,:maximum,:minimum_stat_key,:maximum_stat_key,:color,:minimum_color,:maximum_color,:icon,:display_style,:integer_only,:visibility,:created_at,:updated_at) "
+                "ON CONFLICT(project_id,stat_key) DO UPDATE SET label=excluded.label,description=excluded.description,default_value=excluded.default_value,minimum=excluded.minimum,maximum=excluded.maximum,minimum_stat_key=excluded.minimum_stat_key,maximum_stat_key=excluded.maximum_stat_key,color=excluded.color,minimum_color=excluded.minimum_color,maximum_color=excluded.maximum_color,icon=excluded.icon,display_style=excluded.display_style,integer_only=excluded.integer_only,visibility=excluded.visibility,updated_at=excluded.updated_at",
                 values,
             )
             connection.execute("DELETE FROM stat_definition_owner_kinds WHERE project_id=? AND stat_key=?", (stat.project_id, stat.stat_key))
