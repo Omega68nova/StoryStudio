@@ -1187,6 +1187,14 @@ export function LocationMapStudio({
               <TextField size="small" type="number" label="Minutes per map unit" value={editorDraft.minutes_per_unit} onChange={event => setEditorDraft({ ...editorDraft, minutes_per_unit: Number(event.target.value) })} />
               <TextField size="small" type="number" label="Visibility radius" value={editorDraft.base_visibility_units ?? ""} onChange={event => setEditorDraft({ ...editorDraft, base_visibility_units: event.target.value === "" ? null : Number(event.target.value) })} />
               <TextField size="small" type="number" label="Encounter rate" value={editorDraft.encounter_rate} onChange={event => setEditorDraft({ ...editorDraft, encounter_rate: Number(event.target.value) })} />
+              {editorDraft.spatial_kind === "area" && <TextField
+                size="small"
+                type="number"
+                label="Priority layer"
+                helperText="Lower wins overlaps; ties use raw name, then id."
+                value={editorDraft.priority_layer}
+                onChange={event => setEditorDraft({ ...editorDraft, priority_layer: Number(event.target.value) })}
+              />}
             </div>
             <div className="location-map-switches">
               <FormControlLabel control={<Switch size="small" checked={editorDraft.enabled} onChange={event => setEditorDraft({ ...editorDraft, enabled: event.target.checked })} />} label="Enabled" />
@@ -1194,6 +1202,18 @@ export function LocationMapStudio({
               <FormControlLabel control={<Switch size="small" checked={editorDraft.random_encounter} onChange={event => setEditorDraft({ ...editorDraft, random_encounter: event.target.checked })} />} label="Random encounter" />
             </div>
           </div>
+          {editorDraft.spatial_kind === "area" && <section className="location-map-contents">
+            <div className="location-map-contents-heading">
+              <div><p className="eyebrow">CONTENTS</p><h4>Resolved contents</h4></div>
+              <Chip size="small" label={areaContents[selectedLocation.id]?.length ?? 0} />
+            </div>
+            {(areaContents[selectedLocation.id] ?? []).length
+              ? (areaContents[selectedLocation.id] ?? []).map(item => <div className="location-map-content-row" key={item.id}>
+                  <span><b>{item.name}</b><small>{item.spatial_kind ?? "spot"}</small></span>
+                  <small>Read only · enter area to edit</small>
+                </div>)
+              : <p className="location-map-content-empty">No map objects resolve to this area at the current priority.</p>}
+          </section>}
           <div className="location-map-inspector-actions">
             <Button onClick={() => setEditorDraft(locationDraft(selectedLocation))}>Reset</Button>
             <Button variant="contained" onClick={() => void saveLocation(editorDraft)}>Save</Button>
