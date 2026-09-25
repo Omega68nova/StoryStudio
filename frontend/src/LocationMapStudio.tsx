@@ -1266,7 +1266,8 @@ export function LocationMapStudio({
             {"kind" in selectedSpatial && <p><b>Type</b><span>{selectedSpatial.kind}</span></p>}
             {"blocked_modes" in selectedSpatial && <p><b>Blocks</b><span>{String((selectedSpatial as SpatialBarrier).blocked_modes ?? "walk")}</span></p>}
             {"binding_kind" in selectedSpatial && <p><b>Binding</b><span>{String((selectedSpatial as SpatialAnchor).binding_kind ?? "coordinate").replaceAll("_", " ")}</span></p>}
-          </div>        </> : <>
+          </div>
+        </> : <>
           <section className="location-map-inspector-heading">
             <div><p className="eyebrow">INSPECTOR</p><h3>Nothing selected</h3></div>
           </section>
@@ -1285,5 +1286,55 @@ export function LocationMapStudio({
         </section>
       </aside>
     </div>
+
+    <Menu
+      open={Boolean(vertexMenu)}
+      onClose={() => setVertexMenu(null)}
+      anchorReference="anchorPosition"
+      anchorPosition={vertexMenu ? { top: vertexMenu.mouseY, left: vertexMenu.mouseX } : undefined}
+    >
+      <MenuItem onClick={() => void createConnectedVertex()}>Create connected point</MenuItem>
+      <MenuItem
+        disabled={!vertexMenu || geometryPoints(world?.entities[vertexMenu.locationId]).length <= 2}
+        onClick={() => vertexMenu && void removeVertex(vertexMenu.locationId, vertexMenu.index)}
+      >
+        Remove point
+      </MenuItem>
+    </Menu>
+
+    <Dialog open={Boolean(routeDialog)} onClose={() => { setRouteDialog(null); setRoutePoints([]); }} fullWidth maxWidth="sm">
+      <DialogTitle>Configure route endpoints</DialogTitle>
+      <DialogContent>
+        <div className="location-map-route-dialog">
+          <p className="location-map-route-dialog-intro">Only map objects colliding with each placed endpoint are offered. Overlapping areas are ordered by priority, then raw name, then id.</p>
+          {routeDialog && ([0, 1] as const).map(index => <section className="location-map-endpoint-choice" key={index}>
+            <div><p className="eyebrow">ENDPOINT {index === 0 ? "A" : "B"}</p><b>{routeDialog.points[index].x}, {routeDialog.points[index].y}</b></div>
+            <TextField
+              select
+              fullWidth
+              size="small"
+              label="Lock endpoint to"
+              value={routeDialog.selections[index]}
+              onChange={event => {
+                const selections: [string, string] = [...routeDialog.selections];
+                selections[index] = event.target.value;
+                setRouteDialog({ ...routeDialog, selections });
+              }}
+            >
+              {routeDialog.options[index].map(option => <MenuItem key={option.key} value={option.key}>{option.label}</MenuItem>)}
+            </TextField>
+          </section>)}
+          {routeDialog && <div className="location-map-route-dialog-settings">
+            <TextField size="small" type="number" label="Travel minutes" value={routeDialog.travelMinutes} onChange={event => setRouteDialog({ ...routeDialog, travelMinutes: Number(event.target.value) })} />
+            <TextField size="small" label="Modes" value={routeDialog.modes} onChange={event => setRouteDialog({ ...routeDialog, modes: event.target.value })} />
+            <FormControlLabel control={<Switch checked={routeDialog.bidirectional} onChange={event => setRouteDialog({ ...routeDialog, bidirectional: event.target.checked })} />} label="Bidirectional" />
+          </div>}
+        </div>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => { setRouteDialog(null); setRoutePoints([]); }}>Cancel</Button>
+        <Button variant="contained" onClick={() => void createConfiguredRoute()}>Create route</Button>
+      </DialogActions>
+    </Dialog>
   </div>;
 }
