@@ -334,6 +334,10 @@ export function LocationMapStudio({
       if (item.state.occupancy === "child_required" && !locations.some(child => child.state.parent_location_id === item.id)) {
         messages.push(`${item.name} requires a child but has none.`);
       }
+      const points = geometryPoints(item);
+      if (!points.length && (typeof item.state.x !== "number" || typeof item.state.y !== "number")) {
+        messages.push(`${item.name} has no canonical map position; drag it once to adopt its drop coordinates.`);
+      }
     });
     map?.anchors.filter(item => item.x == null || item.y == null).forEach(item => {
       messages.push(`${item.name} needs map review: its position is incomplete.`);
