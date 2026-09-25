@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import {
   Button,
@@ -296,6 +296,7 @@ export function LocationMapStudio({
     hidden: false,
     randomEncounter: false,
   });
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   const [connectionDefaults, setConnectionDefaults] = useState<ConnectionAuthoringDefaults>({
     kind: "route",
     bidirectional: true,
@@ -303,6 +304,19 @@ export function LocationMapStudio({
     discovered: true,
     hidden: false,
   });
+
+  useEffect(() => {
+    const node = canvasRef.current;
+    if (!node) return;
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setZoom(value => Math.max(.5, Math.min(2, round(value - event.deltaY * .001))));
+    };
+    node.addEventListener("wheel", handleWheel, { passive: false });
+    return () => node.removeEventListener("wheel", handleWheel);
+  }, []);
 
   const load = useCallback(async () => {
     const [nextMap, nextWorld, nextSettings] = await Promise.all([
@@ -1236,15 +1250,10 @@ export function LocationMapStudio({
 
     <div className="location-map-body">
       <div
+        ref={canvasRef}
         className={`location-map-canvas tool-${tool}`}
         onClickCapture={openShiftHitMenu}
         onClick={canvasClick}
-        onWheel={event => {
-          if (!event.ctrlKey) return;
-          event.preventDefault();
-          event.stopPropagation();
-          setZoom(value => Math.max(.5, Math.min(2, round(value - event.deltaY * .001))));
-        }}
         onPointerMove={event => {
           const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
           if (dragLocation) {
