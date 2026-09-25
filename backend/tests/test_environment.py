@@ -55,10 +55,15 @@ def test_legacy_map_placement_canonicalizes_invalid_known_fields() -> None:
             "points": [{"x": 42, "y": 37}],
         },
     )
-    patch = _canonical_map_location_patch(legacy_state, request, "legacy-location")
+    projection = {
+        "entities": {
+            "world": {"id": "world", "kind": "location", "state": {"archived": False}},
+        }
+    }
+    patch = _canonical_map_location_patch(legacy_state, request, "legacy-location", projection)
     validated = LocationState.model_validate(patch)
 
-    assert validated.parent_location_id is None
+    assert validated.parent_location_id == "world"
     assert validated.exposure == "outdoor"
     assert validated.topology == "closed"
     assert validated.occupancy == "direct_allowed"
@@ -68,6 +73,34 @@ def test_legacy_map_placement_canonicalizes_invalid_known_fields() -> None:
     assert validated.encounter_rate == 0
     assert validated.x == 42 and validated.y == 37
     assert validated.footprint is not None and validated.footprint.kind == "point"
+
+
+def test_legacy_map_placement_replaces_missing_parent_with_map_layer() -> None:
+    from app.main import _canonical_map_location_patch
+
+    projection = {
+        "entities": {
+            "current-map": {"id": "current-map", "kind": "location", "state": {"archived": False}},
+        }
+    }
+    request = MapLocationPlacementUpdate(
+        x=15,
+        y=25,
+        spatial_kind="spot",
+        footprint={
+            "location_id": "current-map",
+            "kind": "point",
+            "points": [{"x": 15, "y": 25}],
+        },
+    )
+    patch = _canonical_map_location_patch(
+        {"parent_location_id": "deleted-old-parent"},
+        request,
+        "legacy-location",
+        projection,
+    )
+    assert patch["parent_location_id"] == "current-map"
+    assert patch["footprint"]["location_id"] == "current-map"
 
 
 def test_defaults_time_cycle_and_branch_scene(tmp_path: Path) -> None:
