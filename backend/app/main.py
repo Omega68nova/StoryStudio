@@ -707,8 +707,7 @@ async def create_project(request: ProjectCreate) -> dict[str, Any]:
                 conflict_policy="error",
             )
         except ValueError as exc:
-            # Project creation has already allocated the project. Keep it valid
-            # and report why the optional reusable stat pack could not apply.
+            db.execute("DELETE FROM projects WHERE id=?", (project["id"],))
             raise HTTPException(422, str(exc)) from exc
     else:
         # Compatibility path for clients created before reusable stat packs.
