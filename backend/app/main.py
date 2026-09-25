@@ -2091,6 +2091,66 @@ def _canonical_map_location_patch(
         raise HTTPException(422, f"Unable to canonicalize legacy location for placement: {exc}") from exc
 
 
+def _legacy_location_parent_repairs(
+    projection: dict[str, Any],
+    *,
+    target_location_id: str | None = None,
+    target_map_id: str | None = None,
+) -> list[dict[str, Any]]:
+    entities = projection.get("entities", {})
+    root_id = str(projection.get("root_location_id") or "").strip()
+
+    def active_location(candidate: Any, *, child_id: str) -> str | None:
+        value = str(candidate or "").strip()
+        if not value or value == child_id:
+            return None
+        entity = entities.get(value)
+        if not entity or entity.get("kind") != "location" or entity.get("state", {}).get("archived"):
+            return None
+        return value
+
+    valid_root = active_location(root_id, child_id="__root_sentinel__")
+    repairs: list[dict[str, Any]] = []
+
+    for entity in entities.values():
+        if entity.get("kind") != "location" or entity.get("state", {}).get("archived"):
+            continue
+        entity_id = str(entity["id"])
+        if entity_id == valid_root:
+            continue
+
+        state = entity.get("state", {})
+        raw_parent = str(state.get("parent_location_id") or "").strip()
+        if not raw_parent or active_location(raw_parent, child_id=entity_id):
+            continue
+
+        footprint = state.get("footprint")
+        footprint_space = footprint.get("location_id") if isinstance(footprint, dict) else None
+        repaired_parent = active_location(footprint_space, child_id=entity_id)
+
+        if not repaired_parent and entity_id == target_location_id:
+            repaired_parent = active_location(target_map_id, child_id=entity_id)
+
+        if not repaired_parent:
+            repaired_parent = valid_root
+
+        patch: dict[str, Any] = {"parent_location_id": repaired_parent}
+        if isinstance(footprint, dict):
+            repaired_footprint = dict(footprint)
+            repaired_footprint["location_id"] = repaired_parent or entity_id
+            patch["footprint"] = repaired_footprint
+
+        repairs.append({
+            "tool": "updateEntity",
+            "arguments": {
+                "entity_id": entity_id,
+                "patch": patch,
+            },
+        })
+
+    return repairs
+
+
 @app.put("/api/projects/{project_id}/spatial/locations/{location_id}/placement")
 async def place_spatial_location(project_id: str, location_id: str, request: MapLocationPlacementUpdate) -> dict[str, Any]:
     project = require_project(project_id)
@@ -2099,11 +2159,21 @@ async def place_spatial_location(project_id: str, location_id: str, request: Map
     if not current or current.get("kind") != "location" or current.get("state", {}).get("archived"):
         raise HTTPException(404, "Location not found")
     patch = _canonical_map_location_patch(current.get("state", {}), request, location_id, projection)
+    request_map_id = str((request.footprint or {}).get("location_id") or "").strip() or None
+    raw_mutations = _legacy_location_parent_repairs(
+        projection,
+        target_location_id=location_id,
+        target_map_id=request_map_id,
+    )
+    raw_mutations.append({
+        "tool": "updateEntity",
+        "arguments": {"entity_id": location_id, "patch": patch},
+    })
     try:
         mutations = scheduler.world.normalize_mutations(
             project_id,
             project.get("active_node_id"),
-            [{"tool": "updateEntity", "arguments": {"entity_id": location_id, "patch": patch}}],
+            raw_mutations,
             provenance="author",
         )
         if project.get("active_node_id"):
