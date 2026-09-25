@@ -97,6 +97,9 @@ class StoryFinalizer:
         head_node_id: str,
         prose: str,
         mutations: list[NormalizedMutation],
+        *,
+        pov_character_id: str | None = None,
+        interventions: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         projection = self.world.preview(
             project_id,
@@ -113,15 +116,42 @@ class StoryFinalizer:
             if row["story_node_id"] in ancestry
         }
 
+        explicit_character_ids: set[str] = set()
+        actor = projection["entities"].get(str(pov_character_id or ""))
+        if actor and actor.get("kind") == "character":
+            explicit_character_ids.add(actor["id"])
+            actor_location = actor.get("state", {}).get("current_location_id")
+            for party_id in actor.get("state", {}).get("party_ids", []):
+                party = projection["entities"].get(str(party_id))
+                if (
+                    party
+                    and party.get("kind") == "character"
+                    and party.get("state", {}).get("current_location_id") == actor_location
+                ):
+                    explicit_character_ids.add(party["id"])
+
+        for intervention in interventions or []:
+            npc_id = str(intervention.get("npc_id") or "")
+            if projection["entities"].get(npc_id, {}).get("kind") == "character":
+                explicit_character_ids.add(npc_id)
+
+        for mutation in mutations:
+            for key in ("actor_id", "target_id", "character_id", "entity_id"):
+                entity_id = str(mutation.arguments.get(key) or "")
+                if projection["entities"].get(entity_id, {}).get("kind") == "character":
+                    explicit_character_ids.add(entity_id)
+
         result: list[dict[str, Any]] = []
         folded = prose.casefold()
 
         for entity in projection["entities"].values():
-            if (
-                entity["id"] in prior
-                or entity["kind"] not in {"character", "location"}
-                or entity["name"].casefold() not in folded
-            ):
+            if entity["kind"] not in {"character", "location"}:
+                continue
+            mentioned = entity["name"].casefold() in folded
+            if entity["kind"] == "character":
+                if entity["id"] not in explicit_character_ids and not mentioned:
+                    continue
+            elif entity["id"] in prior or not mentioned:
                 continue
 
             outfit_id = (
@@ -129,12 +159,13 @@ class StoryFinalizer:
                 if entity["kind"] == "character"
                 else None
             )
+            first_encounter = entity["id"] not in prior
             result.append({
                 "entity_id": entity["id"],
                 "entity_name": entity["name"],
                 "outfit_id": outfit_id,
                 "encounter_kind": (
-                    "character"
+                    ("character" if first_encounter else "scene_character")
                     if entity["kind"] == "character"
                     else "location"
                 ),
@@ -151,7 +182,7 @@ class StoryFinalizer:
         for appearance in appearances:
             kinds = (
                 ["portrait", "full_body"]
-                if appearance["encounter_kind"] == "character"
+                if str(appearance["encounter_kind"]).endswith("character")
                 else ["location"]
             )
 

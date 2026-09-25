@@ -67,6 +67,27 @@ def test_knowledge_scope_major_change_and_budget(tmp_path: Path) -> None:
     assert package["entities"] and package["tokens_estimated"] >= 1
 
 
+def test_scene_context_separates_actor_party_and_interaction_targets(tmp_path: Path) -> None:
+    _, project, world = setup_world(tmp_path)
+    location = create(world, project["id"], kind="location", name="Square", aliases=[], tags=[], state={})
+    other_location = create(world, project["id"], kind="location", name="Inn", aliases=[], tags=[], state={})
+    actor = create(world, project["id"], kind="character", name="Hero", aliases=[], tags=[], state={"player_controlled": True, "current_location_id": location})
+    ally = create(world, project["id"], kind="character", name="Ally", aliases=[], tags=[], state={"current_location_id": location})
+    away_ally = create(world, project["id"], kind="character", name="Away", aliases=[], tags=[], state={"current_location_id": other_location})
+    stranger = create(world, project["id"], kind="character", name="Merchant", aliases=[], tags=[], state={"current_location_id": location})
+    update = world.normalize_mutations(project["id"], None, [{"tool": "updateEntity", "arguments": {"entity_id": actor, "patch": {"party_ids": [ally, away_ally]}}}], provenance="author")
+    world.commit_root(project["id"], update, provenance="author", summary="party")
+
+    package = world.context_package(
+        project["id"], None, "Talk to Merchant", actor, "third_limited", 1800, [stranger]
+    )
+    scene = package["scene_context"]
+    assert scene["actor"]["id"] == actor
+    assert [item["id"] for item in scene["party"]] == [ally]
+    assert [item["id"] for item in scene["interacting"]] == [stranger]
+    assert stranger in {item["id"] for item in scene["present_non_party"]}
+
+
 def test_character_secret_channels_are_scoped_by_narrator(tmp_path: Path) -> None:
     _, project, world = setup_world(tmp_path)
     pov = create(world, project["id"], kind="character", name="Mara", aliases=[], tags=[], state={

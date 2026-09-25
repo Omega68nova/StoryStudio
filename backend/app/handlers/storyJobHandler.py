@@ -600,6 +600,8 @@ class StoryJobHandler(BaseJobHandler):
                 head_node_id,
                 content,
                 routine_mutations,
+                pov_character_id=pov_character_id,
+                interventions=interventions,
             )
         )
 

@@ -70,6 +70,7 @@ import type {
   StoryNode,
   PendingReview,
   WorldEntity,
+  WorldProjection,
   AbilityDefinition,
   MediaAsset,
   SceneAppearance,
@@ -708,6 +709,7 @@ function StoryWorkspace(props: {
   >([]);
   const [showTree, setShowTree] = useState(false);
   const [entities, setEntities] = useState<WorldEntity[]>([]);
+  const [characterMedia, setCharacterMedia] = useState<Record<string, MediaAsset[]>>({});
   const [reviews, setReviews] = useState<PendingReview[]>([]);
   const [abilities, setAbilities] = useState<AbilityDefinition[]>([]);
   const [requestedAbility, setRequestedAbility] = useState("");
@@ -790,22 +792,61 @@ function StoryWorkspace(props: {
       transcript.scrollTop = transcript.scrollHeight;
   }, [path.length, streamText, reviews.length, composerExpanded, project.id]);
   useEffect(() => {
+    const query = leafId ? `?head_node_id=${encodeURIComponent(leafId)}` : "";
+    api<WorldProjection>(`/projects/${project.id}/world${query}`)
+      .then(world => setEntities(Object.values(world.entities)))
+      .catch((cause) => fail(errorMessage(cause)));
+  }, [project.id, revision, leafId, fail]);
+  useEffect(() => {
     if (!isAdmin) {
-      setEntities([]); setReviews([]); setAbilities([]);
+      setReviews([]);
+      setAbilities([]);
       return;
     }
     Promise.all([
-      api<WorldEntity[]>(`/projects/${project.id}/entities`),
       api<PendingReview[]>(`/projects/${project.id}/reviews`),
       api<{ abilities: AbilityDefinition[] }>(`/projects/${project.id}/rules`),
     ])
-      .then(([characters, pending, rules]) => {
-        setEntities(characters);
+      .then(([pending, rules]) => {
         setReviews(pending);
         setAbilities(rules.abilities);
       })
       .catch((cause) => fail(errorMessage(cause)));
   }, [project.id, revision, fail, isAdmin]);
+
+  const currentAssistant = [...path].reverse().find(node => node.role === "assistant");
+  const currentSceneAppearances = currentAssistant
+    ? project.scene_appearances.filter(
+        item => item.story_node_id === currentAssistant.id && item.encounter_kind.endsWith("character"),
+      )
+    : [];
+  const currentActorId = currentAssistant?.pov_character_id ?? [...path].reverse().find(node => node.pov_character_id)?.pov_character_id ?? null;
+  const currentActor = entities.find(entity => entity.id === currentActorId);
+  const currentPartyValue = currentActor?.state.party_ids;
+  const currentPartyIds = new Set(
+    Array.isArray(currentPartyValue) ? currentPartyValue.map(String) : [],
+  );
+
+  useEffect(() => {
+    const ids = new Set<string>();
+    path.forEach(node => {
+      if (node.pov_character_id) ids.add(node.pov_character_id);
+    });
+    currentSceneAppearances.forEach(item => ids.add(item.entity_id));
+    const missing = [...ids].filter(id => !characterMedia[id]);
+    if (!missing.length) return;
+    void Promise.all(
+      missing.map(async id => [id, await api<MediaAsset[]>(`/entities/${id}/media`).catch(() => [] as MediaAsset[])] as const),
+    ).then(entries => setCharacterMedia(current => ({ ...current, ...Object.fromEntries(entries) })));
+  }, [path, currentSceneAppearances, characterMedia]);
+
+  function characterAsset(entityId: string, kind: "portrait" | "full_body", outfitId?: string | null) {
+    const assets = characterMedia[entityId] ?? [];
+    return assets.find(asset => asset.kind === kind && Boolean(outfitId) && asset.outfit_id === outfitId && asset.file_path)
+      ?? assets.find(asset => asset.kind === kind && !asset.outfit_id && asset.file_path)
+      ?? assets.find(asset => asset.kind === kind && asset.file_path)
+      ?? null;
+  }
 
   async function submit(
     event?: FormEvent,
@@ -1212,6 +1253,13 @@ function StoryWorkspace(props: {
             />
           </Box>
         </Drawer>
+        <SceneCastLayer
+          appearances={currentSceneAppearances}
+          entities={entities}
+          actorId={currentActorId}
+          partyIds={currentPartyIds}
+          assetFor={characterAsset}
+        />
         <div
           className="transcript"
           ref={transcriptRef}
@@ -1258,12 +1306,20 @@ function StoryWorkspace(props: {
                   setEditedText(node.content);
                 }}
               >
-                <div className="turn-label">
-                  {node.author_name_snapshot && node.role === "user" ? `${node.author_name_snapshot} · ${humanize(node.action_kind ?? "input")}` : node.action_kind === "manual_story"
+                <div className={`turn-label ${node.role === "user" ? "with-actor" : ""}`}>
+                  {node.role === "user" && (() => {
+                    const actor = entities.find(entity => entity.id === node.pov_character_id);
+                    const outfitId = typeof actor?.state.active_outfit_id === "string" ? actor.state.active_outfit_id : null;
+                    const portrait = node.pov_character_id ? characterAsset(node.pov_character_id, "portrait", outfitId) : null;
+                    return <span className="turn-actor-icon" title={actor?.name ?? "Acting character"}>
+                      {portrait?.file_path ? <img src={`/media/${portrait.file_path}`} alt="" /> : <span>{(actor?.name ?? node.author_name_snapshot ?? "?").slice(0, 1).toUpperCase()}</span>}
+                    </span>;
+                  })()}
+                  <span>{node.author_name_snapshot && node.role === "user" ? `${node.author_name_snapshot} · ${humanize(node.action_kind ?? "input")}` : node.action_kind === "manual_story"
                     ? `${node.author_name_snapshot ?? "Player"} story`
                     : node.role === "user"
                       ? humanize(node.action_kind ?? "input")
-                      : "Storyteller"}
+                      : "Storyteller"}</span>
                 </div>
                 {node.role === "assistant" &&
                   project.npc_interventions
@@ -1290,7 +1346,7 @@ function StoryWorkspace(props: {
                 />
                 {node.role === "assistant" &&
                   project.scene_appearances
-                    .filter((item) => item.story_node_id === node.id)
+                    .filter((item) => item.story_node_id === node.id && ["character", "location"].includes(item.encounter_kind))
                     .map((item) => (
                       <EncounterCard
                         key={item.id}
@@ -1490,6 +1546,55 @@ function StoryWorkspace(props: {
       </Dialog>
     </div>
   );
+}
+
+function SceneCastLayer({
+  appearances,
+  entities,
+  actorId,
+  partyIds,
+  assetFor,
+}: {
+  appearances: SceneAppearance[];
+  entities: WorldEntity[];
+  actorId: string | null | undefined;
+  partyIds: Set<string>;
+  assetFor: (entityId: string, kind: "portrait" | "full_body", outfitId?: string | null) => MediaAsset | null;
+}) {
+  const characters = appearances
+    .map(appearance => ({
+      appearance,
+      entity: entities.find(entity => entity.id === appearance.entity_id),
+      asset: assetFor(appearance.entity_id, "full_body", appearance.outfit_id),
+    }))
+    .filter(item => item.entity?.kind === "character" && item.asset?.file_path);
+  if (!characters.length) return null;
+  const left = characters.filter(item => item.entity!.id !== actorId && !partyIds.has(item.entity!.id));
+  const right = characters.filter(item => item.entity!.id === actorId || partyIds.has(item.entity!.id));
+  right.sort((a, b) => Number(a.entity!.id === actorId) - Number(b.entity!.id === actorId));
+  return <div className="scene-cast-layer" aria-hidden="true">
+    <div className="scene-cast-side scene-cast-left">
+      {left.map((item, index) => <img
+        key={item.appearance.id}
+        className="scene-character"
+        src={`/media/${item.asset!.file_path}`}
+        alt=""
+        style={{ zIndex: 20 + index }}
+      />)}
+    </div>
+    <div className="scene-cast-side scene-cast-right">
+      {right.map((item, index) => {
+        const actor = item.entity!.id === actorId;
+        return <img
+          key={item.appearance.id}
+          className={`scene-character facing-left ${actor ? "actor" : "party"}`}
+          src={`/media/${item.asset!.file_path}`}
+          alt=""
+          style={{ zIndex: actor ? 60 : 30 + index }}
+        />;
+      })}
+    </div>
+  </div>;
 }
 
 function StoryProse({
