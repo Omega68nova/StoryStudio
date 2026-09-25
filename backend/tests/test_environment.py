@@ -103,6 +103,43 @@ def test_legacy_map_placement_replaces_missing_parent_with_map_layer() -> None:
     assert patch["footprint"]["location_id"] == "current-map"
 
 
+def test_parent_repair_batch_fixes_unrelated_stale_locations() -> None:
+    from app.main import _legacy_location_parent_repairs
+
+    projection = {
+        "root_location_id": "world",
+        "entities": {
+            "world": {"id": "world", "kind": "location", "state": {"archived": False}},
+            "noble": {
+                "id": "noble", "kind": "location",
+                "state": {
+                    "parent_location_id": "missing-old-parent",
+                    "footprint": {"location_id": "world", "kind": "point", "points": [{"x": 1, "y": 1}]},
+                },
+            },
+            "slums": {
+                "id": "slums", "kind": "location",
+                "state": {
+                    "parent_location_id": "missing-old-parent",
+                    "footprint": {"location_id": "missing-old-parent", "kind": "point", "points": [{"x": 2, "y": 2}]},
+                },
+            },
+        },
+    }
+
+    repairs = _legacy_location_parent_repairs(
+        projection,
+        target_location_id="noble",
+        target_map_id="world",
+    )
+    by_id = {item["arguments"]["entity_id"]: item["arguments"]["patch"] for item in repairs}
+
+    assert by_id["noble"]["parent_location_id"] == "world"
+    assert by_id["noble"]["footprint"]["location_id"] == "world"
+    assert by_id["slums"]["parent_location_id"] == "world"
+    assert by_id["slums"]["footprint"]["location_id"] == "world"
+
+
 def test_defaults_time_cycle_and_branch_scene(tmp_path: Path) -> None:
     db, project, world, environment = setup(tmp_path)
     settings = environment.settings(project["id"])
