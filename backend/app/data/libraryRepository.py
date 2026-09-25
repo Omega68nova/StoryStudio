@@ -148,6 +148,18 @@ class LibraryRepository(BaseRepository):
                 )
         return self.resource(resource_id) or {}
 
+    def set_current_revision(self, resource_id: str, revision_id: str) -> None:
+        row = self.db.fetch_one(
+            "SELECT 1 FROM library_resource_revisions WHERE id=? AND resource_id=?",
+            (revision_id, resource_id),
+        )
+        if not row:
+            raise ValueError("Revision does not belong to library resource")
+        self.db.execute(
+            "UPDATE library_resources SET current_revision_id=?,updated_at=? WHERE id=?",
+            (revision_id, utc_now(), resource_id),
+        )
+
     def revisions(self, resource_id: str) -> list[dict[str, Any]]:
         rows = self.db.fetch_all(
             "SELECT * FROM library_resource_revisions WHERE resource_id=? ORDER BY revision_number DESC",
