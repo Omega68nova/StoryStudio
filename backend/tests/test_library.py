@@ -286,6 +286,13 @@ def test_favorite_dependency_menu_builds_transitive_rule_tree(tmp_path: Path) ->
     )
     assert ability_resource is not None
     assert {row["relation_kind"] for row in ability_resource["children"]} == {"effect"}
+    effect_resource = data.library.resource_for_source(
+        source_project_id=project["id"],
+        source_kind="effect",
+        source_key="heal",
+    )
+    assert effect_resource is not None
+    assert {row["relation_kind"] for row in effect_resource["children"]} == {"target_stat"}
 
 
 def test_favorite_uses_active_branch_head_as_revision_provenance(tmp_path: Path) -> None:
@@ -319,3 +326,56 @@ def test_favorite_uses_active_branch_head_as_revision_provenance(tmp_path: Path)
     revision = data.library.revision(published["resource"]["current_revision_id"])
     assert revision is not None
     assert revision["source_story_node_id"] == node["id"]
+
+
+def test_favorite_rejects_nested_dependency_without_parent(tmp_path: Path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    world = WorldEngine(db, data_provider=data)
+    library = GlobalLibraryService(data, world=world)
+    project = db.create_project("Invalid favorite tree")
+    data.rules.save_stat(Stat(
+        project_id=project["id"],
+        stat_key="energy",
+        label="Energy",
+        compatible_owner_kinds=["character", "item"],
+        default_value=10,
+        minimum=0,
+        maximum=100,
+    ))
+    data.rules.save_effect(EffectDefinition(
+        project_id=project["id"],
+        effect_key="restore",
+        name="Restore",
+        target_stat_key="energy",
+        operation="add",
+        formula={"kind": "constant", "value": 1},
+    ))
+    data.rules.save_ability(Ability(
+        project_id=project["id"],
+        ability_key="recharge",
+        name="Recharge",
+        compatible_owner_kinds=["item"],
+        actions=[{"kind": "apply_effect", "target": "target", "effect_key": "restore"}],
+    ))
+    create = world.normalize_mutations(project["id"], None, [{
+        "tool": "createEntity",
+        "arguments": {
+            "entity_id": "battery",
+            "kind": "item",
+            "name": "Battery",
+            "aliases": [],
+            "tags": [],
+            "state": {"abilities": ["recharge"]},
+        },
+    }], provenance="author")
+    world.commit_root(project["id"], create, provenance="author", summary="Create battery")
+
+    with pytest.raises(ValueError, match="requires its parent"):
+        library.favorite_resource_tree(
+            project["id"],
+            source_kind="item",
+            source_key="battery",
+            dependency_tokens=["effect:restore"],
+        )
