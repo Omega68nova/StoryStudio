@@ -1521,6 +1521,9 @@ Phase 7 — Canonical storage refactor
 Phase 7B — Reusability / branch integrity / Global Library
     IN PROGRESS — revisioned foundation, stat packs, and dependency-aware favorites implemented
 
+Phase 7C — Consistency convergence
+    PLANNED — unify location authoring, rules semantics, and media ownership before Phase 8
+
 Phase 8 — Branch-aware context retrieval (RAG)
     FUTURE — depends on Phase 7 canonical records and Phase 7B reusable-resource/media foundations
 ```
@@ -1582,6 +1585,42 @@ fields and sparse historical shapes, and expose canonical references without
 changing persistence or HTTP payloads. Item gameplay semantics, relationship
 definitions, media slots, storage normalization, and planner adoption remain
 separate later slices.
+
+## Phase 7 consistency-convergence status
+
+A repository-wide audit is recorded in
+`Changelogs/PHASE7_CONSISTENCY_AUDIT_PLAN.md`.
+
+The audit establishes three remaining structural convergence goals before
+Phase 8:
+
+1. **Location authoring converges on Map V2.** The current Environment,
+   Location Map, and World surfaces expose overlapping location concepts.
+   Map V2 should become the single Environment & Map authoring workspace,
+   with descriptive location fields, backgrounds, ambient assignments,
+   weather/time controls, encounters, and spatial behavior brought into the
+   map/sidebar rather than maintained as separate location editors.
+
+2. **Rules move from normalized storage to final gameplay semantics.**
+   Stats must support true unbounded values and explicit effect reactions.
+   Requirement comparisons must use actor/source/target numeric expressions,
+   including target-side stats and item targets. Abilities become activation
+   contracts pointing to reusable result effects; Effects become reusable
+   ordered gameplay macros/statuses instead of only one-stat operations.
+
+3. **Media becomes globally referenced rather than owner-local.** Existing
+   image generation profiles remain valid, but entity media, location
+   backgrounds, story images, and rule icons need one hash-addressed media
+   identity/reference model, shared picker, lightbox/download, generation
+   metadata, tags, and reference counts.
+
+Character storage is considered structurally sound; its remaining work in this
+convergence pass is UI sizing/polish and adoption of the shared media system.
+
+The detailed migration order and regression gate are in the audit document.
+No Phase 8 retrieval/generation contract should depend on the duplicated
+location editors, current stat-vs-literal requirement shape, single-stat
+EffectDefinition shape, or per-owner image file storage.
 
 ## Phase 7 canonical-rules slice status
 
