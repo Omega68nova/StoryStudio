@@ -12,9 +12,11 @@ import {
 import { BoxedMultiselectFilter, CreatableBoxedMultiselect } from "./customComponents/BoxedMultiselect";
 import { EntityImageSurface } from "./customComponents/EntityImageSurface";
 import { updateDraftState } from "./entityDrafts";
+import { RuleIcon } from "./RuleIcon";
 import type {
   AbilityDefinition,
   CharacterEditorDraft,
+  EffectDefinition,
   MediaAsset,
   Outfit,
   StatDefinition,
@@ -55,6 +57,7 @@ type Props = {
   media: MediaAsset[];
   stats: StatDefinition[];
   abilities: AbilityDefinition[];
+  effects: EffectDefinition[];
   activeEffects: Array<{ id: string; effect_key: string; source_id?: string | null; clock: string; next_tick: number; expires_at?: number | null; stacks: number }>;
   removeActiveEffect: (id: string) => Promise<void>;
   outfitDraft: OutfitDraft | null;
@@ -92,6 +95,7 @@ export function CharacterEditorForm({
   media,
   stats,
   abilities,
+  effects,
   activeEffects,
   removeActiveEffect,
   outfitDraft,
@@ -234,7 +238,7 @@ export function CharacterEditorForm({
         onSetStat={setStat}
         onUpdateDefinition={updateStatDefinition}
       />
-      {activeEffects.length > 0 && <section className="panel"><h3>Active effects</h3>{activeEffects.map(effect => { const source = entities.find(item => item.id === effect.source_id); return <div className="rule-row" key={effect.id}><div><strong>{effect.effect_key}</strong><small>{effect.stacks} stack(s){source ? ` · from ${source.name}` : ""} · next {effect.clock} tick at {effect.next_tick}{effect.expires_at == null ? " · indefinite" : ` · expires at ${effect.expires_at}`}</small></div><Button size="small" color="error" onClick={() => void removeActiveEffect(effect.id)}>Remove</Button></div>; })}</section>}
+      {activeEffects.length > 0 && <section className="active-effect-panel"><div className="active-effect-panel-title"><span>Active effects</span><b>{activeEffects.length}</b></div>{activeEffects.map(effect => { const source = entities.find(item => item.id === effect.source_id); const definition = effects.find(item => item.effect_key === effect.effect_key); return <div className="active-effect-card" key={effect.id}><RuleIcon icon={definition?.icon} label={definition?.name ?? effect.effect_key} fallback="✦"/><div><strong>{definition?.name ?? effect.effect_key}</strong><small>{effect.stacks > 1 ? `${effect.stacks} stacks · ` : ""}{source ? `from ${source.name} · ` : ""}{effect.clock.replaceAll("_", " ")} · next {effect.next_tick}{effect.expires_at == null ? " · indefinite" : ` · ends ${effect.expires_at}`}</small></div><Button size="small" color="error" onClick={() => void removeActiveEffect(effect.id)}>Remove</Button></div>; })}</section>}
     </aside>
 
     <main className="character-editor-main">
@@ -842,6 +846,7 @@ function CharacterStatRail({
     value: number,
     save: (next: number) => Promise<void>,
     title?: string,
+    icon?: string | null,
   ) {
     if (editing?.id === id) {
       return <TextField
@@ -866,6 +871,7 @@ function CharacterStatRail({
         className="character-stat-chip"
         onClick={() => beginEdit(id, value, save)}
       >
+        <RuleIcon icon={icon} label={label} fallback="#" size="small"/>
         <span className="character-stat-chip-label">{label}</span>
         <span className="character-stat-chip-value">{value}</span>
       </button>
@@ -886,6 +892,8 @@ function CharacterStatRail({
             definition.label,
             value,
             next => onSetStat(definition.stat_key, next),
+            undefined,
+            definition.icon,
           );
         }
 
@@ -949,7 +957,7 @@ function CharacterStatRail({
             aria-label={`${definition.label}: ${value}; minimum ${minimum}; maximum ${maximum}`}
           >
             <div className="character-stat-group-header">
-              <b>{definition.label}</b>
+              <span className="character-stat-heading"><RuleIcon icon={definition.icon} label={definition.label} fallback="#" size="small"/><b>{definition.label}</b></span>
               <span>{value} / {maximum}</span>
             </div>
             <span className="character-stat-track grouped">
@@ -1014,9 +1022,10 @@ function AbilityList({
       {keys.map(key => {
         const ability = abilities.find(item => item.ability_key === key);
         return <div className="character-linked-card" key={key}>
-          <ResourceIcon
-            name={ability?.name ?? key}
-            url={ability?.icon ?? undefined}
+          <RuleIcon
+            icon={ability?.icon}
+            label={ability?.name ?? key}
+            fallback="A"
           />
           <span>
             <b>{ability?.name ?? key}</b>
