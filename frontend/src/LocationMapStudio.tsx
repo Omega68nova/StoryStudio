@@ -833,24 +833,26 @@ export function LocationMapStudio({
   const areaContents = useMemo(() => {
     const result: Record<string, SpatialLocation[]> = {};
     if (!map || !world) return result;
-    const areas = map.locations
-      .map(item => ({ item, entity: world.entities[item.id] }))
-      .filter((entry): entry is { item: SpatialLocation; entity: WorldEntity } =>
-        Boolean(entry.entity && entry.entity.state.spatial_kind === "area" && geometryPoints(entry.entity).length >= 3)
-      );
-    areas.forEach(({ item }) => { result[item.id] = []; });
-    for (const item of map.locations) {
-      const entity = world.entities[item.id];
-      if (!entity) continue;
-      const points = geometryPoints(entity);
-      const point = points.length ? centroid(points) : { x: Number(item.x ?? entity.state.x ?? 0), y: Number(item.y ?? entity.state.y ?? 0) };
-      const owners = areas
-        .filter(({ item: area, entity: areaEntity }) => area.id !== item.id && pointInPolygon(point, geometryPoints(areaEntity)))
-        .sort((a, b) => compareAreaPriority(a.entity, b.entity));
-      const winner = owners[0]?.item.id;
-      if (winner) result[winner]?.push(item);
+    for (const area of map.locations) {
+      const entity = world.entities[area.id];
+      if (!entity || entity.state.spatial_kind !== "area") continue;
+      result[area.id] = Object.values(world.entities)
+        .filter(item =>
+          item.kind === "location"
+          && !item.state.archived
+          && String(item.state.parent_location_id || "") === area.id
+        )
+        .map(item => ({
+          id: item.id,
+          name: item.name,
+          parent_location_id: area.id,
+          spatial_kind: item.state.spatial_kind === "area" ? "area" : "spot",
+          priority_layer: Number(item.state.priority_layer ?? 0),
+          x: typeof item.state.x === "number" ? item.state.x : null,
+          y: typeof item.state.y === "number" ? item.state.y : null,
+        }))
+        .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : left.id < right.id ? -1 : 1);
     }
-    Object.values(result).forEach(items => items.sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : a.id < b.id ? -1 : 1));
     return result;
   }, [map, world]);
 
@@ -1045,6 +1047,10 @@ export function LocationMapStudio({
                 {entity?.state.spatial_kind === "area" ? ` · p${areaPriority(entity)} · ${areaContents[item.id]?.length ?? 0} inside` : ""}
                 {entity?.state.parent_location_id ? "" : " · root"}
               </small>
+              {entity?.state.spatial_kind === "area" && (areaContents[item.id]?.length ?? 0) > 0 && <span className="location-map-node-contents">
+                {areaContents[item.id].slice(0, 3).map(child => child.name).join(" · ")}
+                {areaContents[item.id].length > 3 ? ` +${areaContents[item.id].length - 3}` : ""}
+              </span>}
             </button>;
           })}
 
@@ -1219,9 +1225,9 @@ export function LocationMapStudio({
             {(areaContents[selectedLocation.id] ?? []).length
               ? (areaContents[selectedLocation.id] ?? []).map(item => <div className="location-map-content-row" key={item.id}>
                   <span><b>{item.name}</b><small>{item.spatial_kind ?? "spot"}</small></span>
-                  <small>Read only · enter area to edit</small>
+                  <small>Read only · double-click area to enter</small>
                 </div>)
-              : <p className="location-map-content-empty">No map objects resolve to this area at the current priority.</p>}
+              : <p className="location-map-content-empty">No child locations are configured inside this area.</p>}
           </section>}
           <div className="location-map-inspector-actions">
             <Button onClick={() => setEditorDraft(locationDraft(selectedLocation))}>Reset</Button>
