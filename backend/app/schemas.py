@@ -37,7 +37,61 @@ class ProjectAssignmentsUpdate(BaseModel):
 
 class ProjectCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
+    # Legacy compatibility until all callers migrate to reusable stat packs.
     stats_preset: Literal["none", "adventure", "romance"] = "none"
+    stats_library_id: str | None = None
+
+
+LibraryResourceKind = Literal[
+    "bundle", "character", "location", "item", "outfit", "faction",
+    "lore_system", "fact", "plot_beat", "stat", "stat_pack", "effect",
+    "ability", "rule_pack",
+]
+
+
+class LibraryResourceCreate(BaseModel):
+    resource_kind: LibraryResourceKind
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=20_000)
+    marked: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=100)
+
+
+class LibraryResourceUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=20_000)
+    marked: bool = False
+    tags: list[str] = Field(default_factory=list, max_length=100)
+
+
+class LibraryRevisionCreate(BaseModel):
+    snapshot: dict[str, Any]
+    source_project_id: str | None = None
+    source_story_node_id: str | None = None
+    source_kind: str | None = Field(default=None, max_length=80)
+    source_key: str | None = Field(default=None, max_length=240)
+    note: str = Field(default="", max_length=10_000)
+
+
+class LibraryChildrenUpdate(BaseModel):
+    children: list[dict[str, Any]] = Field(default_factory=list, max_length=500)
+
+
+class LibraryStatPackSave(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=20_000)
+    stat_keys: list[str] | None = None
+    resource_id: str | None = None
+    marked: bool = True
+    tags: list[str] = Field(default_factory=list, max_length=100)
+    source_story_node_id: str | None = None
+    note: str = Field(default="", max_length=10_000)
+
+
+class LibraryStatPackApply(BaseModel):
+    revision_id: str | None = None
+    conflict_policy: Literal["error", "skip", "replace"] = "error"
+    source_story_node_id: str | None = None
 
 
 class ProjectUpdate(BaseModel):
