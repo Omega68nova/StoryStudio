@@ -94,8 +94,24 @@ class GlobalLibraryService:
         stats = snapshot.get("stats")
         if not isinstance(stats, list) or not stats:
             raise ValueError("Stat pack has no stat definitions")
-        for raw in stats:
-            Stat.model_validate(raw)
+        parsed = [Stat.model_validate(raw) for raw in stats]
+        ordered = self.data.rules.dependency_ordered_stats(parsed)
+        by_key = {item.stat_key: item for item in ordered}
+        for stat in ordered:
+            owners = set(map(str, stat.compatible_owner_kinds))
+            for dependency_key in (stat.minimum_stat_key, stat.maximum_stat_key):
+                if not dependency_key:
+                    continue
+                dependency = by_key.get(dependency_key)
+                if not dependency:
+                    raise ValueError(
+                        f"Stat pack is not self-contained; {stat.stat_key} references missing stat {dependency_key}"
+                    )
+                missing = owners.difference(map(str, dependency.compatible_owner_kinds))
+                if missing:
+                    raise ValueError(
+                        f"Stat pack has incompatible bounds: {stat.stat_key} -> {dependency_key}"
+                    )
         return resource, revision, snapshot
 
     def apply_stat_pack(
