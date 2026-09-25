@@ -508,5 +508,6 @@ def test_library_batch_unfavorite_named_preset_and_export(tmp_path: Path) -> Non
     exported = library.export_library_resources([preset["id"], first["id"]])
     assert exported["schema"] == "storystudio.global_library.export"
     assert exported["schema_version"] == 1
-    assert [resource["id"] for resource in exported["resources"]] == [preset["id"], first["id"]]
+    assert exported["root_resource_ids"] == [preset["id"], first["id"]]
+    assert [resource["id"] for resource in exported["resources"]] == [preset["id"], first["id"], second["id"]]
     assert exported["resources"][0]["revisions"][0]["snapshot"]["preset_kind"] == "named_preset"
