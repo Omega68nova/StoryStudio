@@ -233,7 +233,7 @@ export default function App() {
 
   useEffect(() => {
     if (!authUser) return;
-    Promise.all([loadProjects(), loadWorkflows(), isAdmin ? loadStatPacks() : Promise.resolve()])
+    Promise.all([loadProjects(), loadWorkflows(), authUser.role === "admin" ? loadStatPacks() : Promise.resolve()])
       .then(([list]) => list[0] && loadProject(list[0].id))
       .catch((cause) => setError(String(cause.message ?? cause)));
   }, [authUser, loadProject, loadProjects, loadWorkflows, loadStatPacks]);
