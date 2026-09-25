@@ -205,6 +205,8 @@ const compareAreaPriority = (left: WorldEntity, right: WorldEntity) => {
   if (left.name !== right.name) return left.name < right.name ? -1 : 1;
   return left.id === right.id ? 0 : left.id < right.id ? -1 : 1;
 };
+const connectionKindLabel = (kind: SpatialConnection["kind"]) =>
+  kind === "route" ? "Route / shortcut" : kind === "portal" ? "Portal / teleporter" : "Door";
 const geometryPoints = (entity?: WorldEntity | null): Point[] => {
   const raw = entity?.state.footprint as Geometry | null | undefined;
   return Array.isArray(raw?.points)
@@ -762,12 +764,12 @@ export function LocationMapStudio({
     if (!host) return;
     const start = canvasPoint(event.clientX, event.clientY, host);
     const points = geometryPoints(entity);
-    const base = points.length ? centroid(points) : { x: Number(entity.state.x ?? start.x), y: Number(entity.state.y ?? start.y) };
+    const base = fallbackLocationPoint(entity);
     setDragLocation({
       id,
       start,
-      x: Number(entity.state.x ?? base.x),
-      y: Number(entity.state.y ?? base.y),
+      x: base.x,
+      y: base.y,
       footprint: points,
     });
     setDragOffset({ x: 0, y: 0 });
@@ -979,7 +981,7 @@ export function LocationMapStudio({
       const source = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.source_anchor_id));
       const target = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.target_anchor_id));
       if (source && target && distanceToSegment(point, source, target) <= 1.4) {
-        const label = connection.kind === "route" ? "Route / shortcut" : connection.kind === "portal" ? "Portal / teleporter" : "Door";
+        const label = connectionKindLabel(connection.kind);
         candidates.push({ id: connection.id, label, detail: "connection" });
       }
     }
@@ -1473,7 +1475,7 @@ export function LocationMapStudio({
           </div>
         </> : selectedConnection && connectionDraft ? <>
           <section className="location-map-inspector-heading">
-            <div><p className="eyebrow">ROUTE</p><h3>{selectedConnection.kind === "route" ? "Travel route" : selectedConnection.kind}</h3></div>
+            <div><p className="eyebrow">CONNECTION</p><h3>{connectionKindLabel(selectedConnection.kind)}</h3><small>backend kind: <code>{selectedConnection.kind}</code></small></div>
             <Chip size="small" label={connectionDraft.bidirectional ? "two-way" : "one-way"} />
           </section>
           <div className="location-map-route-endpoints">
