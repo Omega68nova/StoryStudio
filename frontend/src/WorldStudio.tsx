@@ -4,18 +4,27 @@ import { api } from "./api";
 import { BoxedMultiselectFilter, CreatableBoxedMultiselect } from "./customComponents/BoxedMultiselect";
 import { RecordDrawer, ResourceButton, ResourceList } from "./customComponents/AdminResourceForms";
 import { applyAdvancedState, entityToDraft, newEntityDraft, updateDraftState } from "./entityDrafts";
-import type { EntityEditorDraft, WorldEntity, WorldProjection, WorldRelationship, WorkflowPreset } from "./types";
+import { RuleIcon } from "./RuleIcon";
+import type { AbilityDefinition, EffectDefinition, EntityEditorDraft, WorldEntity, WorldProjection, WorldRelationship, WorkflowPreset } from "./types";
 
 const GENERAL_KINDS = ["faction", "item", "lore_system", "fact", "plot_beat"];
 const humanize = (value: string) => value.replaceAll("_", " ").replace(/^./, letter => letter.toUpperCase());
 
 export function WorldStudio({ projectId, revision, fail, openEnvironmentLocation }: { projectId: string; revision: number; workflows: WorkflowPreset[]; fail: (message: string) => void; openEnvironmentLocation?: (locationId: string) => void }) {
   const [world, setWorld] = useState<WorldProjection | null>(null);
+  const [rules, setRules] = useState<{ abilities: AbilityDefinition[]; effects: EffectDefinition[] }>({ abilities: [], effects: [] });
   const [query, setQuery] = useState(""); const [kind, setKind] = useState(""); const [relationQuery, setRelationQuery] = useState("");
   const [draft, setDraft] = useState<EntityEditorDraft | null>(null); const [initial, setInitial] = useState(""); const [history, setHistory] = useState<Array<Record<string, unknown>>>([]);
   const [relation, setRelation] = useState<WorldRelationship | null>(null); const [relationOriginal, setRelationOriginal] = useState<WorldRelationship | null>(null); const [relationAdvanced, setRelationAdvanced] = useState("{}"); const [relationInitial, setRelationInitial] = useState("");
   const [error, setError] = useState(""); const [notice, setNotice] = useState("");
-  const load = useCallback(async () => setWorld(await api<WorldProjection>(`/projects/${projectId}/world`)), [projectId]);
+  const load = useCallback(async () => {
+    const [nextWorld, nextRules] = await Promise.all([
+      api<WorldProjection>(`/projects/${projectId}/world`),
+      api<{ abilities: AbilityDefinition[]; effects: EffectDefinition[] }>(`/projects/${projectId}/rules`),
+    ]);
+    setWorld(nextWorld);
+    setRules(nextRules);
+  }, [projectId]);
   useEffect(() => { void load().catch(cause => fail(String(cause))); }, [load, revision, fail]);
   const entities = useMemo(() => Object.values(world?.entities ?? {}), [world]);
   const general = useMemo(() => entities.filter(item => item.kind !== "character" && item.kind !== "relationship" && (!kind || item.kind === kind) && (!query || item.card.search_text.toLocaleLowerCase().includes(query.toLocaleLowerCase()))), [entities, kind, query]);
@@ -58,6 +67,14 @@ export function WorldStudio({ projectId, revision, fail, openEnvironmentLocation
   async function deleteRelation() { if (!relation?.id || !window.confirm("Remove this relationship from the current branch?")) return; try { await api(`/projects/${projectId}/relationships/${relation.id}`, { method: "DELETE" }); await load(); closeRelation(true); } catch (cause) { setError(String(cause)); } }
   async function importBible() { try { const result = await api<{ imported: number }>(`/projects/${projectId}/bible-import`, { method: "POST" }); await load(); setNotice(`Imported ${result.imported} story-bible documents.`); } catch (cause) { fail(String(cause)); } }
   async function sync() { try { const result = await api<{ provider: string }>(`/projects/${projectId}/memory/sync`, { method: "POST" }); setNotice(`Memory indexed with ${result.provider}.`); } catch (cause) { fail(String(cause)); } }
+  async function removeActiveEffect(id: string) {
+    try {
+      await api(`/projects/${projectId}/effects/active/${id}`, { method: "DELETE" });
+      await load();
+    } catch (cause) {
+      setError(String(cause));
+    }
+  }
 
   return <div className="page world-page"><header className="page-header world-title"><div><p className="eyebrow">BRANCH-AWARE MEMORY</p><h1>World</h1><p>{general.length} general entities · {relations.length} relationships · {world?.transactions.length ?? 0} transactions</p></div><div className="button-row"><Button onClick={() => void importBible()}>Import story bible</Button><Button onClick={() => void sync()}>Sync memory index</Button></div></header>{notice && <p className="notice">{notice}</p>}
     <div className="environment-resource-grid"><ResourceList title="Entities" query={query} setQuery={setQuery} onAdd={() => { const next = newEntityDraft("faction"); setDraft(next); setInitial(JSON.stringify(next)); setHistory([]); }}><TextField select size="small" fullWidth label="Kind" value={kind} onChange={event => setKind(event.target.value)}><MenuItem value="">All general kinds</MenuItem>{[...GENERAL_KINDS, "location"].map(value => <MenuItem key={value} value={value}>{humanize(value)}</MenuItem>)}</TextField>{general.map(item => <ResourceButton key={item.id} enabled={!item.state.archived} disabledLabel="Archived" title={item.name} subtitle={humanize(item.kind)} onClick={() => void openEntity(item)} />)}</ResourceList>
@@ -76,16 +93,17 @@ export function WorldStudio({ projectId, revision, fail, openEnvironmentLocation
       archiveLabel={draft?.state.archived ? "Restore" : "Archive"} 
       onDelete={draft?.id ? () => void deleteEntity() : undefined}
     >
-      {draft && <EntityForm draft={draft} setDraft={setDraft} entities={entities} history={history} openEnvironmentLocation={openEnvironmentLocation} />}</RecordDrawer>
-    <RecordDrawer title={relation?.id ? "Edit relationship" : "Create relationship"} open={Boolean(relation)} dirty={relationDirty} error={error} onClose={() => closeRelation()} onSave={() => void saveRelation()} onDelete={relation?.id ? () => void deleteRelation() : undefined}>{relation && <RelationshipForm value={relation} setValue={next => { setRelation(next); setRelationAdvanced(JSON.stringify(next, null, 2)); }} entities={entities} advanced={relationAdvanced} setAdvanced={setRelationAdvanced} />}</RecordDrawer>
+      {draft && <EntityForm draft={draft} setDraft={setDraft} entities={entities} history={history} abilities={rules.abilities} effects={rules.effects} activeEffects={Object.values(world?.active_effects ?? {}).filter(item => item.target_id === draft.id)} removeActiveEffect={removeActiveEffect} openEnvironmentLocation={openEnvironmentLocation} />}</RecordDrawer>
+    <RecordDrawer title={relation?.id ? "Edit relationship" : "Create relationship"} open={Boolean(relation)} dirty={relationDirty} error={error} onClose={() => closeRelation()} onSave={() => void saveRelation()} onDelete={relation?.id ? () => void deleteRelation() : undefined}>{relation && <RelationshipForm value={relation} setValue={next => { setRelation(next); setRelationAdvanced(JSON.stringify(next, null, 2)); }} entities={entities} effects={rules.effects} activeEffects={Object.values(world?.active_effects ?? {}).filter(item => item.target_id === relation.id)} removeActiveEffect={removeActiveEffect} advanced={relationAdvanced} setAdvanced={setRelationAdvanced} />}</RecordDrawer>
   </div>;
 }
 
-function EntityForm({ draft, setDraft, entities, history, openEnvironmentLocation }: { draft: EntityEditorDraft; setDraft: (value: EntityEditorDraft) => void; entities: WorldEntity[]; history: Array<Record<string, unknown>>; openEnvironmentLocation?: (id: string) => void }) {
+function EntityForm({ draft, setDraft, entities, history, abilities, effects, activeEffects, removeActiveEffect, openEnvironmentLocation }: { draft: EntityEditorDraft; setDraft: (value: EntityEditorDraft) => void; entities: WorldEntity[]; history: Array<Record<string, unknown>>; abilities: AbilityDefinition[]; effects: EffectDefinition[]; activeEffects: Array<{ id: string; effect_key: string; source_id?: string | null; clock: string; next_tick: number; expires_at?: number | null; stacks: number }>; removeActiveEffect: (id: string) => Promise<void>; openEnvironmentLocation?: (id: string) => void }) {
   const setState = (patch: Record<string, unknown>) => setDraft(updateDraftState(draft, patch)); const state = draft.state; const [tab, setTab] = useState(0);
   const characters = entities.filter(item => item.kind === "character"), factions = entities.filter(item => item.kind === "faction"), locations = entities.filter(item => item.kind === "location");
   const entitySelect = (label: string, values: unknown, options: WorldEntity[], key: string) => <BoxedMultiselectFilter label={label} options={options} value={options.filter(item => (Array.isArray(values) ? values : []).includes(item.id))} onChange={(_event, next) => setState({ [key]: next.map(item => item.id) })} />;
   return <><TextField select disabled={Boolean(draft.id)} label="Entity kind" value={draft.kind} onChange={event => { const next = newEntityDraft(event.target.value); setDraft({ ...next, name: draft.name, aliases: draft.aliases, tags: draft.tags }); }}>{draft.kind === "relationship" && <MenuItem value="relationship">Legacy relationship</MenuItem>}{GENERAL_KINDS.map(value => <MenuItem key={value} value={value}>{humanize(value)}</MenuItem>)}</TextField><TextField required label="Name" value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} /><CreatableBoxedMultiselect label="Aliases" options={draft.aliases} value={draft.aliases} onChange={(_event, next) => setDraft({ ...draft, aliases: next })} /><CreatableBoxedMultiselect label="Tags" options={draft.tags} value={draft.tags} onChange={(_event, next) => setDraft({ ...draft, tags: next })} />
+    <ActiveEffectList effects={effects} activeEffects={activeEffects} entities={entities} removeActiveEffect={removeActiveEffect} />
     {draft.kind === "location" ? <>
     <p>Location structure, descriptions, backgrounds, discovery, and ambient rules are managed in Environment.</p>
     {draft.id && openEnvironmentLocation && <Button onClick={() => openEnvironmentLocation(draft.id!)}>Edit structure in Environment</Button>}
@@ -127,7 +145,7 @@ function EntityForm({ draft, setDraft, entities, history, openEnvironmentLocatio
           <>
             <TextField multiline label="Appearance" value={String(state.appearance ?? "")} onChange={event => setState({ appearance: event.target.value })} />
             <TextField label="Status" value={String(state.status ?? "")} onChange={event => setState({ status: event.target.value })} />
-            <CreatableBoxedMultiselect label="Abilities or effects" options={arrayStrings(state.abilities)} value={arrayStrings(state.abilities)} onChange={(_event, next) => setState({ abilities: next })} />
+            <ItemAbilityEditor keys={arrayStrings(state.abilities)} abilities={abilities} onChange={next => setState({ abilities: next })} />
             <TextField select label="Current location" value={String(state.current_location_id ?? "")} onChange={event => setState({ current_location_id: event.target.value || null })}><MenuItem value="">None</MenuItem>{locations.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField>
           </>}
           {draft.kind === "lore_system" && 
@@ -156,8 +174,50 @@ function EntityForm({ draft, setDraft, entities, history, openEnvironmentLocatio
           </>;
 }
 
-function RelationshipForm({ value, setValue, entities, advanced, setAdvanced }: { value: WorldRelationship; setValue: (value: WorldRelationship) => void; entities: WorldEntity[]; advanced: string; setAdvanced: (value: string) => void }) {
-  return <><TextField select label="Source" value={value.source_id} onChange={event => setValue({ ...value, source_id: event.target.value })}>{entities.map(item => <MenuItem key={item.id} value={item.id}>{item.name} · {humanize(item.kind)}</MenuItem>)}</TextField><TextField select label="Target" value={value.target_id} onChange={event => setValue({ ...value, target_id: event.target.value })}>{entities.map(item => <MenuItem key={item.id} value={item.id}>{item.name} · {humanize(item.kind)}</MenuItem>)}</TextField><TextField label="Relationship type" value={value.relation} onChange={event => setValue({ ...value, relation: event.target.value })} /><div className="environment-toggle-row"><FormControlLabel control={<Checkbox checked={value.bidirectional !== false} onChange={event => setValue({ ...value, bidirectional: event.target.checked })} />} label="Bidirectional" /><FormControlLabel control={<Checkbox checked={Boolean(value.major)} onChange={event => setValue({ ...value, major: event.target.checked })} />} label="Major" /><FormControlLabel control={<Checkbox checked={Boolean(value.blocked)} onChange={event => setValue({ ...value, blocked: event.target.checked })} />} label="Blocked" /></div><TextField type="number" label="Travel minutes" value={Number(value.travel_minutes ?? 0)} onChange={event => setValue({ ...value, travel_minutes: Number(event.target.value) })} /><TextField label="Direction" value={String(value.direction ?? "")} onChange={event => setValue({ ...value, direction: event.target.value })} /><CreatableBoxedMultiselect label="Travel modes" options={arrayStrings(value.modes)} value={arrayStrings(value.modes)} onChange={(_event, next) => setValue({ ...value, modes: next })} /><TextField fullWidth multiline minRows={10} label="Advanced relationship JSON" value={advanced} onChange={event => setAdvanced(event.target.value)} /></>;
+function RelationshipForm({ value, setValue, entities, effects, activeEffects, removeActiveEffect, advanced, setAdvanced }: { value: WorldRelationship; setValue: (value: WorldRelationship) => void; entities: WorldEntity[]; effects: EffectDefinition[]; activeEffects: Array<{ id: string; effect_key: string; source_id?: string | null; clock: string; next_tick: number; expires_at?: number | null; stacks: number }>; removeActiveEffect: (id: string) => Promise<void>; advanced: string; setAdvanced: (value: string) => void }) {
+  return <><ActiveEffectList effects={effects} activeEffects={activeEffects} entities={entities} removeActiveEffect={removeActiveEffect} /><TextField select label="Source" value={value.source_id} onChange={event => setValue({ ...value, source_id: event.target.value })}>{entities.map(item => <MenuItem key={item.id} value={item.id}>{item.name} · {humanize(item.kind)}</MenuItem>)}</TextField><TextField select label="Target" value={value.target_id} onChange={event => setValue({ ...value, target_id: event.target.value })}>{entities.map(item => <MenuItem key={item.id} value={item.id}>{item.name} · {humanize(item.kind)}</MenuItem>)}</TextField><TextField label="Relationship type" value={value.relation} onChange={event => setValue({ ...value, relation: event.target.value })} /><div className="environment-toggle-row"><FormControlLabel control={<Checkbox checked={value.bidirectional !== false} onChange={event => setValue({ ...value, bidirectional: event.target.checked })} />} label="Bidirectional" /><FormControlLabel control={<Checkbox checked={Boolean(value.major)} onChange={event => setValue({ ...value, major: event.target.checked })} />} label="Major" /><FormControlLabel control={<Checkbox checked={Boolean(value.blocked)} onChange={event => setValue({ ...value, blocked: event.target.checked })} />} label="Blocked" /></div><TextField type="number" label="Travel minutes" value={Number(value.travel_minutes ?? 0)} onChange={event => setValue({ ...value, travel_minutes: Number(event.target.value) })} /><TextField label="Direction" value={String(value.direction ?? "")} onChange={event => setValue({ ...value, direction: event.target.value })} /><CreatableBoxedMultiselect label="Travel modes" options={arrayStrings(value.modes)} value={arrayStrings(value.modes)} onChange={(_event, next) => setValue({ ...value, modes: next })} /><TextField fullWidth multiline minRows={10} label="Advanced relationship JSON" value={advanced} onChange={event => setAdvanced(event.target.value)} /></>;
+}
+
+function ItemAbilityEditor({ keys, abilities, onChange }: { keys: string[]; abilities: AbilityDefinition[]; onChange: (keys: string[]) => void }) {
+  const [candidate, setCandidate] = useState("");
+  const available = abilities.filter(item => item.compatible_owner_kinds.includes("item"));
+  return <section className="rule-assignment">
+    <div className="rule-assignment-heading"><div><span>Canonical abilities</span><h4>Item abilities</h4></div><small>{keys.length} assigned</small></div>
+    <div className="rule-assignment-list">
+      {keys.length === 0 && <div className="rule-assignment-empty">No abilities assigned to this item.</div>}
+      {keys.map(key => {
+        const ability = abilities.find(item => item.ability_key === key);
+        return <div className="rule-assignment-card" key={key}>
+          <RuleIcon icon={ability?.icon} label={ability?.name ?? key} fallback="A"/>
+          <div><b>{ability?.name ?? key}</b><small>{ability ? `${ability.ability_kind} · ${ability.target_type}` : "Unavailable ability"}</small></div>
+          <Button size="small" color="error" onClick={() => onChange(keys.filter(value => value !== key))}>Remove</Button>
+        </div>;
+      })}
+    </div>
+    <div className="rule-assignment-add">
+      <TextField select size="small" label="Add item ability" value={candidate} onChange={event => setCandidate(event.target.value)}>
+        <MenuItem value="">Select ability</MenuItem>
+        {available.filter(item => !keys.includes(item.ability_key)).map(item => <MenuItem key={item.ability_key} value={item.ability_key}>{item.name} · {item.ability_kind}</MenuItem>)}
+      </TextField>
+      <Button disabled={!candidate} onClick={() => { if (!candidate) return; onChange([...keys, candidate]); setCandidate(""); }}>Add</Button>
+    </div>
+  </section>;
+}
+
+function ActiveEffectList({ effects, activeEffects, entities, removeActiveEffect }: { effects: EffectDefinition[]; activeEffects: Array<{ id: string; effect_key: string; source_id?: string | null; clock: string; next_tick: number; expires_at?: number | null; stacks: number }>; entities: WorldEntity[]; removeActiveEffect: (id: string) => Promise<void> }) {
+  if (!activeEffects.length) return null;
+  return <section className="active-effect-panel world-active-effects">
+    <div className="active-effect-panel-title"><span>Active effects</span><b>{activeEffects.length}</b></div>
+    {activeEffects.map(effect => {
+      const definition = effects.find(item => item.effect_key === effect.effect_key);
+      const source = entities.find(item => item.id === effect.source_id);
+      return <div className="active-effect-card" key={effect.id}>
+        <RuleIcon icon={definition?.icon} label={definition?.name ?? effect.effect_key} fallback="✦"/>
+        <div><strong>{definition?.name ?? effect.effect_key}</strong><small>{effect.stacks > 1 ? `${effect.stacks} stacks · ` : ""}{source ? `from ${source.name} · ` : ""}{effect.clock.replaceAll("_", " ")} · next {effect.next_tick}{effect.expires_at == null ? " · indefinite" : ` · ends ${effect.expires_at}`}</small></div>
+        <Button size="small" color="error" onClick={() => void removeActiveEffect(effect.id)}>Remove</Button>
+      </div>;
+    })}
+  </section>;
 }
 
 const arrayStrings = (value: unknown): string[] => Array.isArray(value) ? value.map(String) : [];
