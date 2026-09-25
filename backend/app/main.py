@@ -51,6 +51,8 @@ from app.schemas import (
     LibraryChildrenUpdate,
     LibraryStatPackSave,
     LibraryStatPackApply,
+    LibraryFavoritePreviewRequest,
+    LibraryFavoritePublishRequest,
     ProjectMusicUpdate,
     MusicPlaybackUpdate,
     ReviewDecision,
@@ -137,7 +139,7 @@ sound = SoundManager(db, events=events, data_provider=data)
 route_data = RouteDataService(data)
 generation_api = GenerationPlanApiService(db, data_provider=data, world=scheduler.world)
 batch_api = BatchGenerationApiService(db, data_provider=data, world=scheduler.world)
-library_service = GlobalLibraryService(data)
+library_service = GlobalLibraryService(data, world=scheduler.world)
 world_clone = WorldCloneService(scheduler.world)
 current_user_context: ContextVar[AuthUser | None] = ContextVar("current_user", default=None)
 BUILD_VERSION = "0.17.0-environment"
@@ -631,6 +633,52 @@ async def update_library_children(resource_id: str, request: LibraryChildrenUpda
         raise HTTPException(404, "Library resource not found")
     try:
         data.library.set_children(resource_id, request.children)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/library/favorite-preview")
+async def preview_library_favorite(project_id: str, request: LibraryFavoritePreviewRequest) -> dict[str, Any]:
+    require_project(project_id)
+    if request.source_story_node_id:
+        node = db.fetch_one(
+            "SELECT id FROM story_nodes WHERE id=? AND project_id=?",
+            (request.source_story_node_id, project_id),
+        )
+        if not node:
+            raise HTTPException(422, "Source story node does not belong to this project")
+    try:
+        return library_service.favorite_preview(
+            project_id,
+            source_kind=request.source_kind,
+            source_key=request.source_key,
+            source_story_node_id=request.source_story_node_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/api/projects/{project_id}/library/favorite", status_code=201)
+async def publish_library_favorite(project_id: str, request: LibraryFavoritePublishRequest) -> dict[str, Any]:
+    require_project(project_id)
+    if request.source_story_node_id:
+        node = db.fetch_one(
+            "SELECT id FROM story_nodes WHERE id=? AND project_id=?",
+            (request.source_story_node_id, project_id),
+        )
+        if not node:
+            raise HTTPException(422, "Source story node does not belong to this project")
+    try:
+        return library_service.favorite_resource_tree(
+            project_id,
+            source_kind=request.source_kind,
+            source_key=request.source_key,
+            source_story_node_id=request.source_story_node_id,
+            version=request.version,
+            dependency_tokens=request.dependency_tokens,
+            dependency_versions=request.dependency_versions,
+            tags=request.tags,
+        )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 

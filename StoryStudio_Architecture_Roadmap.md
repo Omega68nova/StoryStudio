@@ -1363,6 +1363,13 @@ Expected implementation slices:
 
 ## Phase 7B-C — entity/resource trees
 
+**In progress:** compatible resource editors now expose dependency-aware
+Favorite actions. Character/location/item/faction/lore/fact/plot-beat
+snapshots can publish their initial branch state, latest active-branch state,
+or both as immutable revisions. Stats, effects, abilities, and outfits can
+also be favorited and participate in dependency trees; rule/outfit historical
+version selection remains pending a dedicated canonical revision history.
+
 - Save initial state and explicitly player-approved important updates for
   characters, items, locations, factions, lore systems, outfits, and related
   resources.
@@ -1512,7 +1519,7 @@ Phase 7 — Canonical storage refactor
     IN PROGRESS — typed entities, spatial storage, and canonical rules complete
 
 Phase 7B — Reusability / branch integrity / Global Library
-    IN PROGRESS — revisioned library foundation and reusable stat packs started
+    IN PROGRESS — revisioned foundation, stat packs, and dependency-aware favorites implemented
 
 Phase 8 — Branch-aware context retrieval (RAG)
     FUTURE — depends on Phase 7 canonical records and Phase 7B reusable-resource/media foundations

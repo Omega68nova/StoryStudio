@@ -43,6 +43,26 @@ class LibraryRepository(BaseRepository):
             tuple(params),
         )
 
+    def resource_for_source(
+        self,
+        *,
+        source_project_id: str,
+        source_kind: str,
+        source_key: str,
+    ) -> dict[str, Any] | None:
+        row = self.db.fetch_one(
+            """
+            SELECT r.id
+            FROM library_resources r
+            JOIN library_resource_revisions v ON v.resource_id=r.id
+            WHERE v.source_project_id=? AND v.source_kind=? AND v.source_key=?
+            ORDER BY v.created_at DESC
+            LIMIT 1
+            """,
+            (source_project_id, source_kind, source_key),
+        )
+        return self.resource(row["id"]) if row else None
+
     def resource(self, resource_id: str) -> dict[str, Any] | None:
         row = self.db.fetch_one(
             """
@@ -127,6 +147,18 @@ class LibraryRepository(BaseRepository):
                     (resource_id, tag, now),
                 )
         return self.resource(resource_id) or {}
+
+    def set_current_revision(self, resource_id: str, revision_id: str) -> None:
+        row = self.db.fetch_one(
+            "SELECT 1 FROM library_resource_revisions WHERE id=? AND resource_id=?",
+            (revision_id, resource_id),
+        )
+        if not row:
+            raise ValueError("Revision does not belong to library resource")
+        self.db.execute(
+            "UPDATE library_resources SET current_revision_id=?,updated_at=? WHERE id=?",
+            (revision_id, utc_now(), resource_id),
+        )
 
     def revisions(self, resource_id: str) -> list[dict[str, Any]]:
         rows = self.db.fetch_all(
