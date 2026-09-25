@@ -700,7 +700,7 @@ export function LocationMapStudio({
     if (dragLocation.footprint.length) {
       next.footprint = {
         location_id: layerId,
-        kind: dragLocation.footprint.length >= 3 ? "polygon" : dragLocation.footprint.length === 1 ? "point" : "polyline",
+        kind: next.spatial_kind === "area" ? "polygon" : "point",
         points: dragLocation.footprint.map(point => ({
           x: clamp(round(point.x + dragOffset.x)),
           y: clamp(round(point.y + dragOffset.y)),
