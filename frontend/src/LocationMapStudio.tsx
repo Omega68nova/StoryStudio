@@ -336,7 +336,7 @@ export function LocationMapStudio({
       minigameKey: selectedConnection.lock?.minigame_key ?? "",
       difficulty: Number(selectedConnection.lock?.difficulty ?? 1),
     });
-  }, [selectedConnection?.id, selectedConnection?.travel_minutes, selectedConnection?.bidirectional, selectedConnection?.hidden, selectedConnection?.discovered, selectedConnection?.enabled]);
+  }, [selectedConnection]);
 
   const backgroundAsset = useMemo<MediaAsset | null>(() => {
     if (!selectedLocation || !backgrounds.length) return null;
@@ -554,9 +554,9 @@ export function LocationMapStudio({
 
   async function createConfiguredRoute() {
     if (!routeDialog || !layerId) return;
-    const choices = routeDialog.selections.map((key, index) =>
-      routeDialog.options[index as 0 | 1].find(item => item.key === key) ?? routeDialog.options[index as 0 | 1][0]
-    ) as [EndpointChoice, EndpointChoice];
+    const sourceChoice = routeDialog.options[0].find(item => item.key === routeDialog.selections[0]) ?? routeDialog.options[0][0];
+    const targetChoice = routeDialog.options[1].find(item => item.key === routeDialog.selections[1]) ?? routeDialog.options[1][0];
+    const choices: [EndpointChoice, EndpointChoice] = [sourceChoice, targetChoice];
 
     const makeAnchor = async (choice: EndpointChoice, side: "A" | "B") => {
       const target = choice.targetId ? world?.entities[choice.targetId] : null;
@@ -584,7 +584,9 @@ export function LocationMapStudio({
         source_anchor_id: sourceAnchor.id,
         target_anchor_id: targetAnchor.id,
         travel_minutes: Math.max(0, Math.round(routeDialog.travelMinutes)),
-        modes: routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean),
+        modes: routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean).length
+          ? routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean)
+          : ["walk"],
         bidirectional: routeDialog.bidirectional,
       }),
     });
@@ -635,7 +637,9 @@ export function LocationMapStudio({
         source_anchor_id: connection.source_anchor_id,
         target_anchor_id: connection.target_anchor_id,
         travel_minutes: Math.max(0, Math.round(connectionDraft.travelMinutes)),
-        modes: connectionDraft.modes.split(",").map(item => item.trim()).filter(Boolean),
+        modes: connectionDraft.modes.split(",").map(item => item.trim()).filter(Boolean).length
+          ? connectionDraft.modes.split(",").map(item => item.trim()).filter(Boolean)
+          : ["walk"],
         bidirectional: connectionDraft.bidirectional,
         requirements: connection.requirements ?? null,
         lock: connectionDraft.locked ? {
@@ -798,7 +802,7 @@ export function LocationMapStudio({
   }
 
   function canvasClick(event: MouseEvent<HTMLDivElement>) {
-    if (event.target !== event.currentTarget && (event.target as HTMLElement).closest("button")) return;
+    if (tool !== "route" && event.target !== event.currentTarget && (event.target as HTMLElement).closest("button")) return;
     const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
     if (tool === "spot") void createSpot(point);
     if (tool === "route") {
@@ -951,12 +955,17 @@ export function LocationMapStudio({
       >
         <div className="location-map-world" style={{ transform: `scale(${zoom})` }}>
           <svg className="location-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {localBoundsPoints.length >= 2
+            {localBoundsPoints.length >= 3
               ? <polygon
                   points={localBoundsPoints.map(point => `${point.x},${point.y}`).join(" ")}
                   className="location-map-space-boundary"
                 />
-              : <rect x=".45" y=".45" width="99.1" height="99.1" className="location-map-space-boundary" />}
+              : localBoundsPoints.length === 2
+                ? <polyline
+                    points={localBoundsPoints.map(point => `${point.x},${point.y}`).join(" ")}
+                    className="location-map-space-boundary"
+                  />
+                : <rect x=".45" y=".45" width="99.1" height="99.1" className="location-map-space-boundary" />}
             {priorityOrderedAreas.map(item => {
               const entity = world?.entities[item.id];
               const points = geometryPoints(entity);
