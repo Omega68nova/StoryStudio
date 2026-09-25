@@ -1980,7 +1980,12 @@ def _route_anchor_rebind_mutations(projection: dict[str, Any], location_id: str,
     return result
 
 
-def _canonical_map_location_patch(state: dict[str, Any], request: MapLocationPlacementUpdate, location_id: str) -> dict[str, Any]:
+def _canonical_map_location_patch(
+    state: dict[str, Any],
+    request: MapLocationPlacementUpdate,
+    location_id: str,
+    projection: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     from app.domain.world import LocationState
     from app.services.spatial import validate_geometry, SpatialValidationError
 
@@ -2001,13 +2006,28 @@ def _canonical_map_location_patch(state: dict[str, Any], request: MapLocationPla
                 return False
         return fallback
 
+    entities = (projection or {}).get("entities", {})
     raw_parent = state.get("parent_location_id")
-    parent_location_id = raw_parent.strip() if isinstance(raw_parent, str) else None
-    if not parent_location_id or parent_location_id == location_id:
+    legacy_parent = raw_parent.strip() if isinstance(raw_parent, str) else None
+    footprint = dict(request.footprint)
+    requested_space = str(footprint.get("location_id") or "").strip() or None
+
+    def valid_parent(candidate: str | None) -> bool:
+        if not candidate or candidate == location_id:
+            return False
+        parent = entities.get(candidate)
+        return bool(parent and parent.get("kind") == "location" and not parent.get("state", {}).get("archived"))
+
+    # The map layer used for this placement is authoritative for legacy
+    # locations whose stored parent points at a removed/nonexistent location.
+    if valid_parent(requested_space):
+        parent_location_id = requested_space
+    elif valid_parent(legacy_parent):
+        parent_location_id = legacy_parent
+    else:
         parent_location_id = None
 
-    footprint = dict(request.footprint)
-    footprint["location_id"] = footprint.get("location_id") or parent_location_id or location_id
+    footprint["location_id"] = requested_space if valid_parent(requested_space) else parent_location_id or location_id
     try:
         footprint = validate_geometry(footprint)
     except SpatialValidationError as exc:
@@ -2078,7 +2098,7 @@ async def place_spatial_location(project_id: str, location_id: str, request: Map
     current = projection.get("entities", {}).get(location_id)
     if not current or current.get("kind") != "location" or current.get("state", {}).get("archived"):
         raise HTTPException(404, "Location not found")
-    patch = _canonical_map_location_patch(current.get("state", {}), request, location_id)
+    patch = _canonical_map_location_patch(current.get("state", {}), request, location_id, projection)
     try:
         mutations = scheduler.world.normalize_mutations(
             project_id,
