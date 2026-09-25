@@ -172,10 +172,11 @@ function RuleList({
     remove: () => void;
   }>;
 }) {
+  const singular = title === "Abilities" ? "ability" : title.slice(0, -1).toLowerCase();
   return <section className="panel rule-library">
     <header className="rule-library-header">
       <div><span>{kicker}</span><h2>{title}</h2></div>
-      <Button variant="outlined" onClick={add}>Add {title.slice(0, -1).toLowerCase()}</Button>
+      <Button variant="outlined" onClick={add}>Add {singular}</Button>
     </header>
     <div className="rule-library-list">
       {rows.length === 0 && <div className="rule-library-empty"><b>No {title.toLowerCase()} yet</b><small>Create one to make it available across this story.</small></div>}
