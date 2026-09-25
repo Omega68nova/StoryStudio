@@ -63,10 +63,10 @@ CREATE TABLE library_project_imports (
 CREATE INDEX idx_library_imports_project ON library_project_imports(project_id,created_at);
 CREATE INDEX idx_library_imports_resource ON library_project_imports(resource_id,project_id);
 
-CREATE TRIGGER library_revision_belongs_to_resource_insert
-BEFORE INSERT ON library_resource_revisions
-WHEN EXISTS (
+CREATE TRIGGER library_current_revision_belongs_to_resource
+BEFORE UPDATE OF current_revision_id ON library_resources
+WHEN NEW.current_revision_id IS NOT NULL AND NOT EXISTS (
   SELECT 1 FROM library_resource_revisions r
-  WHERE r.id=NEW.id AND r.resource_id<>NEW.resource_id
+  WHERE r.id=NEW.current_revision_id AND r.resource_id=NEW.id
 )
-BEGIN SELECT RAISE(ABORT,'library revision resource mismatch'); END;
+BEGIN SELECT RAISE(ABORT,'library current revision resource mismatch'); END;
