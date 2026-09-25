@@ -627,6 +627,7 @@ class EnvironmentLocationUpdate(BaseModel):
     occupancy: Literal["direct_allowed", "child_required"] = "direct_allowed"
     boundary_access: Literal["free", "connection_required"] = "free"
     spatial_kind: Literal["spot", "area"] = "spot"
+    priority_layer: float = 0
     minutes_per_unit: float = Field(default=1, gt=0)
     base_visibility_units: float | None = Field(default=None, ge=0)
     encounter_rate: float = Field(default=0, ge=0, le=1)
@@ -652,6 +653,8 @@ class MapAnchorUpdate(BaseModel):
     id: str | None = None
     location_id: str
     coordinate_space_id: str | None = None
+    binding_kind: Literal["coordinate", "area", "area_border", "spot"] = "coordinate"
+    binding_target_id: str | None = None
     name: str = Field(min_length=1, max_length=200)
     kind: Literal["landmark", "entrance", "exit", "waypoint", "encounter"] = "waypoint"
     x: float | None = None
@@ -732,7 +735,7 @@ class MapGeometryUpdate(BaseModel):
 
     @model_validator(mode="after")
     def require_enough_points(self) -> "MapGeometryUpdate":
-        minimum = {"point": 1, "polyline": 2, "polygon": 3}[self.kind]
+        minimum = {"point": 1, "polyline": 2, "polygon": 2}[self.kind]
         if len(self.points) < minimum:
             raise ValueError(f"{self.kind} geometry requires at least {minimum} point(s)")
         for point in self.points:

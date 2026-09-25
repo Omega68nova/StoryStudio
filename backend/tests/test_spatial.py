@@ -27,6 +27,44 @@ def test_location_topology_and_occupancy_are_independent() -> None:
     assert state.boundary_access == "connection_required"
 
 
+def test_two_point_area_is_valid_authoring_geometry() -> None:
+    geometry = validate_geometry({
+        "location_id": "world",
+        "kind": "polygon",
+        "points": [{"x": 2, "y": 3}, {"x": 8, "y": 9}],
+    })
+    assert geometry["kind"] == "polygon"
+    assert len(geometry["points"]) == 2
+
+
+def test_overlapping_area_priority_uses_layer_name_then_id() -> None:
+    world = location("world", "World", topology="open")
+    footprint = {
+        "location_id": "world",
+        "kind": "polygon",
+        "points": [
+            {"x": 0, "y": 0}, {"x": 10, "y": 0},
+            {"x": 10, "y": 10}, {"x": 0, "y": 10},
+        ],
+    }
+    low_priority = location(
+        "z-id", "Zulu", "world", spatial_kind="area",
+        priority_layer=4, footprint=footprint,
+    )
+    high_priority = location(
+        "a-id", "Alpha", "world", spatial_kind="area",
+        priority_layer=1, footprint=footprint,
+    )
+    service = SpatialService(projection(world, low_priority, high_priority))
+    assert service.resolve_area_at("world", 5, 5)["id"] == "a-id"
+
+    high_priority["state"]["priority_layer"] = 4
+    assert service.resolve_area_at("world", 5, 5)["id"] == "a-id"
+
+    high_priority["name"] = "Zulu"
+    assert service.resolve_area_at("world", 5, 5)["id"] == "a-id"
+
+
 def test_geometry_rejects_self_intersecting_polygon() -> None:
     with pytest.raises(SpatialValidationError):
         validate_geometry({"location_id": "world", "kind": "polygon", "points": [{"x": 0, "y": 0}, {"x": 2, "y": 2}, {"x": 0, "y": 2}, {"x": 2, "y": 0}]})
@@ -45,6 +83,31 @@ def test_open_map_resolves_scaled_free_travel() -> None:
     result = SpatialService(view).preview("hero", "b", "walk")
     assert result["available"] is True
     assert result["travel_minutes"] == 10
+
+
+def test_route_validation_uses_endpoint_coordinate_space() -> None:
+    world = location("world", "World", topology="closed", occupancy="direct_allowed")
+    area = location("area", "Area", "world", spatial_kind="area")
+    spot = location("spot", "Spot", "world", spatial_kind="spot")
+    view = projection(world, area, spot)
+    view["map_anchors"] = {
+        "free": {
+            "id": "free", "location_id": "world", "coordinate_space_id": "world",
+            "name": "Free", "kind": "waypoint", "x": 20, "y": 20,
+        },
+        "spot-anchor": {
+            "id": "spot-anchor", "location_id": "spot", "coordinate_space_id": "world",
+            "binding_kind": "spot", "binding_target_id": "spot",
+            "name": "Spot", "kind": "waypoint", "x": 30, "y": 30,
+        },
+    }
+    normalized = SpatialService(view).validate_connection({
+        "id": "route", "kind": "route",
+        "source_anchor_id": "free", "target_anchor_id": "spot-anchor",
+        "travel_minutes": 1, "modes": ["walk"], "bidirectional": True,
+    })
+    assert normalized["source_anchor_id"] == "free"
+    assert normalized["target_anchor_id"] == "spot-anchor"
 
 
 def test_closed_map_needs_a_connection() -> None:

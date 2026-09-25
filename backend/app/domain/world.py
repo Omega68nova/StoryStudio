@@ -389,7 +389,7 @@ class MapGeometry(DomainModel):
 
     @model_validator(mode="after")
     def validate_points(self) -> "MapGeometry":
-        minimum = {"point": 1, "polyline": 2, "polygon": 3}[str(self.kind)]
+        minimum = {"point": 1, "polyline": 2, "polygon": 2}[str(self.kind)]
         if len(self.points) < minimum:
             raise ValueError(f"{self.kind} geometry needs at least {minimum} point(s)")
         if self.kind == GeometryKind.POINT and len(self.points) != 1:
@@ -409,6 +409,7 @@ class LocationState(DomainModel):
     occupancy: LocationOccupancy = LocationOccupancy.DIRECT_ALLOWED
     boundary_access: BoundaryAccess = BoundaryAccess.FREE
     spatial_kind: SpatialKind = SpatialKind.SPOT
+    priority_layer: float = 0
     minutes_per_unit: float = Field(default=1, gt=0)
     base_visibility_units: float | None = Field(default=None, ge=0)
     footprint: MapGeometry | None = None
@@ -777,6 +778,8 @@ class MapAnchor(DomainModel):
     id: DomainId
     location_id: DomainId
     coordinate_space_id: DomainId | None = None
+    binding_kind: Literal["coordinate", "area", "area_border", "spot"] = "coordinate"
+    binding_target_id: DomainId | None = None
     name: str = Field(min_length=1)
     kind: AnchorKind = AnchorKind.WAYPOINT
     x: Number | None = None

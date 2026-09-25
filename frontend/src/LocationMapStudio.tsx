@@ -4,7 +4,12 @@ import {
   Button,
   ButtonGroup,
   Chip,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControlLabel,
+  Menu,
   MenuItem,
   Paper,
   Switch,
@@ -31,6 +36,7 @@ type SpatialLocation = {
   occupancy?: string;
   boundary_access?: string;
   spatial_kind?: string;
+  priority_layer?: number;
   x?: number | null;
   y?: number | null;
   discovered?: boolean;
@@ -38,6 +44,9 @@ type SpatialLocation = {
 type SpatialAnchor = {
   id: string;
   location_id: string;
+  coordinate_space_id?: string | null;
+  binding_kind?: "coordinate" | "area" | "area_border" | "spot";
+  binding_target_id?: string | null;
   name: string;
   kind: string;
   x?: number | null;
@@ -51,8 +60,15 @@ type SpatialConnection = {
   source_anchor_id: string;
   target_anchor_id: string;
   travel_minutes: number;
+  modes?: string[];
   bidirectional?: boolean;
-  lock?: { locked?: boolean };
+  requirements?: Record<string, unknown> | null;
+  lock?: { locked?: boolean; minigame_key?: string | null; difficulty?: number; success_behavior?: string } | null;
+  hidden?: boolean;
+  discovered?: boolean;
+  enabled?: boolean;
+  source_location_id?: string;
+  target_location_id?: string;
 };
 type SpatialBarrier = {
   id: string;
@@ -91,6 +107,34 @@ type DragLocation = {
   footprint: Point[];
 };
 type VertexDrag = { locationId: string; index: number };
+type VertexMenuState = { mouseX: number; mouseY: number; locationId: string; index: number } | null;
+type EndpointKind = "coordinate" | "area" | "area_border" | "spot";
+type EndpointChoice = {
+  key: string;
+  kind: EndpointKind;
+  label: string;
+  targetId?: string | null;
+  point: Point;
+};
+type RouteDialogState = {
+  points: [Point, Point];
+  options: [EndpointChoice[], EndpointChoice[]];
+  selections: [string, string];
+  travelMinutes: number;
+  modes: string;
+  bidirectional: boolean;
+} | null;
+type ConnectionDraft = {
+  travelMinutes: number;
+  modes: string;
+  bidirectional: boolean;
+  hidden: boolean;
+  discovered: boolean;
+  enabled: boolean;
+  locked: boolean;
+  minigameKey: string;
+  difficulty: number;
+};
 
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 const round = (value: number) => Math.round(value * 10) / 10;
@@ -102,6 +146,41 @@ const centroid = (points: Point[]): Point => {
   };
 };
 const distance = (left: Point, right: Point) => Math.hypot(left.x - right.x, left.y - right.y);
+const pointInPolygon = (point: Point, polygon: Point[]) => {
+  if (polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const a = polygon[i], b = polygon[j];
+    const intersects = ((a.y > point.y) !== (b.y > point.y))
+      && point.x < ((b.x - a.x) * (point.y - a.y)) / ((b.y - a.y) || Number.EPSILON) + a.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+};
+const closestPointOnSegment = (point: Point, a: Point, b: Point): Point => {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const lengthSq = dx * dx + dy * dy;
+  if (!lengthSq) return a;
+  const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq));
+  return { x: round(a.x + t * dx), y: round(a.y + t * dy) };
+};
+const closestBorderPoint = (point: Point, points: Point[]): { point: Point; distance: number } | null => {
+  if (points.length < 2) return null;
+  let best: { point: Point; distance: number } | null = null;
+  for (let index = 0; index < points.length; index++) {
+    const candidate = closestPointOnSegment(point, points[index], points[(index + 1) % points.length]);
+    const candidateDistance = distance(point, candidate);
+    if (!best || candidateDistance < best.distance) best = { point: candidate, distance: candidateDistance };
+  }
+  return best;
+};
+const areaPriority = (entity?: WorldEntity | null) => Number(entity?.state.priority_layer ?? 0);
+const compareAreaPriority = (left: WorldEntity, right: WorldEntity) => {
+  const priority = areaPriority(left) - areaPriority(right);
+  if (priority) return priority;
+  if (left.name !== right.name) return left.name < right.name ? -1 : 1;
+  return left.id === right.id ? 0 : left.id < right.id ? -1 : 1;
+};
 const geometryPoints = (entity?: WorldEntity | null): Point[] => {
   const raw = entity?.state.footprint as Geometry | null | undefined;
   return Array.isArray(raw?.points)
@@ -129,6 +208,7 @@ const locationDraft = (entity: WorldEntity): EnvironmentLocation => {
     occupancy: state.occupancy === "child_required" ? "child_required" : "direct_allowed",
     boundary_access: state.boundary_access === "connection_required" ? "connection_required" : "free",
     spatial_kind: state.spatial_kind === "area" ? "area" : "spot",
+    priority_layer: typeof state.priority_layer === "number" ? state.priority_layer : 0,
     minutes_per_unit: typeof state.minutes_per_unit === "number" ? state.minutes_per_unit : 1,
     base_visibility_units: typeof state.base_visibility_units === "number" ? state.base_visibility_units : null,
     encounter_rate: typeof state.encounter_rate === "number" ? state.encounter_rate : 0,
@@ -152,7 +232,9 @@ export function LocationMapStudio({
   const [layerId, setLayerId] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [routeStartId, setRouteStartId] = useState<string | null>(null);
+  const [routePoints, setRoutePoints] = useState<Point[]>([]);
+  const [routeDialog, setRouteDialog] = useState<RouteDialogState>(null);
+  const [vertexMenu, setVertexMenu] = useState<VertexMenuState>(null);
   const [areaDraft, setAreaDraft] = useState<Point[]>([]);
   const [zoom, setZoom] = useState(1);
   const [dragLocation, setDragLocation] = useState<DragLocation | null>(null);
@@ -162,6 +244,7 @@ export function LocationMapStudio({
   const [editorDraft, setEditorDraft] = useState<EnvironmentLocation | null>(null);
   const [backgrounds, setBackgrounds] = useState<BackgroundRecord[]>([]);
   const [imageBusy, setImageBusy] = useState(false);
+  const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
 
   const load = useCallback(async () => {
     const [nextMap, nextWorld, nextSettings] = await Promise.all([
@@ -235,6 +318,25 @@ export function LocationMapStudio({
     ?? map?.barriers.find(item => item.id === selectedId)
     ?? map?.connections.find(item => item.id === selectedId)
     ?? null;
+  const selectedConnection = map?.connections.find(item => item.id === selectedId) ?? null;
+
+  useEffect(() => {
+    if (!selectedConnection) {
+      setConnectionDraft(null);
+      return;
+    }
+    setConnectionDraft({
+      travelMinutes: selectedConnection.travel_minutes,
+      modes: (selectedConnection.modes ?? ["walk"]).join(", "),
+      bidirectional: selectedConnection.bidirectional !== false,
+      hidden: Boolean(selectedConnection.hidden),
+      discovered: selectedConnection.discovered !== false,
+      enabled: selectedConnection.enabled !== false,
+      locked: Boolean(selectedConnection.lock?.locked),
+      minigameKey: selectedConnection.lock?.minigame_key ?? "",
+      difficulty: Number(selectedConnection.lock?.difficulty ?? 1),
+    });
+  }, [selectedConnection]);
 
   const backgroundAsset = useMemo<MediaAsset | null>(() => {
     if (!selectedLocation || !backgrounds.length) return null;
@@ -298,6 +400,7 @@ export function LocationMapStudio({
         occupancy: "direct_allowed",
         boundary_access: "free",
         spatial_kind: "spot",
+        priority_layer: 0,
         minutes_per_unit: 1,
         base_visibility_units: null,
         encounter_rate: 0,
@@ -324,7 +427,6 @@ export function LocationMapStudio({
         }),
       });
     } else {
-      if (areaDraft.length < 3) return;
       const name = window.prompt("Area name")?.trim();
       if (!name) return;
       const center = centroid(areaDraft);
@@ -348,6 +450,7 @@ export function LocationMapStudio({
           occupancy: "direct_allowed",
           boundary_access: "free",
           spatial_kind: "area",
+          priority_layer: 0,
           minutes_per_unit: 1,
           base_visibility_units: null,
           encounter_rate: 0,
@@ -370,75 +473,200 @@ export function LocationMapStudio({
     await load();
   }
 
-  async function createRoute(sourceId: string, targetId: string) {
-    const source = world?.entities[sourceId];
-    const target = world?.entities[targetId];
-    if (!source || !target) return;
-    const sourcePoints = geometryPoints(source);
-    const targetPoints = geometryPoints(target);
-    const sourcePoint = sourcePoints.length ? centroid(sourcePoints) : {
-      x: Number(source.state.x ?? 50),
-      y: Number(source.state.y ?? 50),
-    };
-    const targetPoint = targetPoints.length ? centroid(targetPoints) : {
-      x: Number(target.state.x ?? 50),
-      y: Number(target.state.y ?? 50),
-    };
-    const [sourceAnchor, targetAnchor] = await Promise.all([
-      api<{ id: string }>(`/projects/${projectId}/spatial/anchors`, {
+  function routeEndpointOptions(point: Point): EndpointChoice[] {
+    if (!layerId || !world || !map) return [{
+      key: "coordinate",
+      kind: "coordinate",
+      label: `Free coordinates (${point.x}, ${point.y})`,
+      point,
+    }];
+    const options: EndpointChoice[] = [{
+      key: "coordinate",
+      kind: "coordinate",
+      label: `Free coordinates (${point.x}, ${point.y})`,
+      point,
+    }];
+    const areaEntities = map.locations
+      .map(item => world.entities[item.id])
+      .filter((item): item is WorldEntity => Boolean(item && item.kind === "location" && item.state.spatial_kind === "area"))
+      .sort(compareAreaPriority);
+
+    for (const entity of areaEntities) {
+      const points = geometryPoints(entity);
+      if (pointInPolygon(point, points)) {
+        options.push({
+          key: `area:${entity.id}`,
+          kind: "area",
+          targetId: entity.id,
+          label: `Inside area · ${entity.name} (priority ${areaPriority(entity)})`,
+          point,
+        });
+      }
+      const border = closestBorderPoint(point, points);
+      if (border && border.distance <= 2.2) {
+        options.push({
+          key: `area_border:${entity.id}`,
+          kind: "area_border",
+          targetId: entity.id,
+          label: `Area border · ${entity.name}`,
+          point: border.point,
+        });
+      }
+    }
+
+    for (const item of map.locations) {
+      const entity = world.entities[item.id];
+      if (!entity || entity.state.spatial_kind === "area") continue;
+      const points = geometryPoints(entity);
+      const spot = points[0] ?? { x: Number(item.x ?? entity.state.x ?? 0), y: Number(item.y ?? entity.state.y ?? 0) };
+      if (distance(point, spot) <= 2.6) {
+        options.push({
+          key: `spot:${entity.id}`,
+          kind: "spot",
+          targetId: entity.id,
+          label: `Spot · ${entity.name}`,
+          point: { x: round(spot.x), y: round(spot.y) },
+        });
+      }
+    }
+    return options;
+  }
+
+  function preferredEndpoint(options: EndpointChoice[]) {
+    return options.find(item => item.kind === "spot")
+      ?? options.find(item => item.kind === "area_border")
+      ?? options.find(item => item.kind === "area")
+      ?? options[0];
+  }
+
+  function beginRouteDialog(first: Point, second: Point) {
+    const firstOptions = routeEndpointOptions(first);
+    const secondOptions = routeEndpointOptions(second);
+    setRouteDialog({
+      points: [first, second],
+      options: [firstOptions, secondOptions],
+      selections: [preferredEndpoint(firstOptions).key, preferredEndpoint(secondOptions).key],
+      travelMinutes: 0,
+      modes: "walk",
+      bidirectional: true,
+    });
+  }
+
+  async function createConfiguredRoute() {
+    if (!routeDialog || !layerId) return;
+    const sourceChoice = routeDialog.options[0].find(item => item.key === routeDialog.selections[0]) ?? routeDialog.options[0][0];
+    const targetChoice = routeDialog.options[1].find(item => item.key === routeDialog.selections[1]) ?? routeDialog.options[1][0];
+    const choices: [EndpointChoice, EndpointChoice] = [sourceChoice, targetChoice];
+
+    const makeAnchor = async (choice: EndpointChoice, side: "A" | "B") => {
+      const target = choice.targetId ? world?.entities[choice.targetId] : null;
+      return api<{ id: string }>(`/projects/${projectId}/spatial/anchors`, {
         method: "PUT",
         body: JSON.stringify({
-          location_id: sourceId,
-          name: `${source.name} route`,
+          location_id: choice.targetId ?? layerId,
+          coordinate_space_id: layerId,
+          binding_kind: choice.kind,
+          binding_target_id: choice.targetId ?? null,
+          name: `${target?.name ?? currentLayer?.name ?? "Map"} route ${side}`,
           kind: "waypoint",
-          x: sourcePoint.x,
-          y: sourcePoint.y,
+          x: choice.point.x,
+          y: choice.point.y,
         }),
-      }),
-      api<{ id: string }>(`/projects/${projectId}/spatial/anchors`, {
-        method: "PUT",
-        body: JSON.stringify({
-          location_id: targetId,
-          name: `${target.name} route`,
-          kind: "waypoint",
-          x: targetPoint.x,
-          y: targetPoint.y,
-        }),
-      }),
-    ]);
-    const direction = window.prompt("Route direction", "bidirectional")?.trim().toLocaleLowerCase();
-    if (direction == null) return;
-    await api(`/projects/${projectId}/spatial/connections`, {
+      });
+    };
+
+    const sourceAnchor = await makeAnchor(choices[0], "A");
+    const targetAnchor = await makeAnchor(choices[1], "B");
+    const connection = await api<{ id: string }>(`/projects/${projectId}/spatial/connections`, {
       method: "PUT",
       body: JSON.stringify({
         kind: "route",
         source_anchor_id: sourceAnchor.id,
         target_anchor_id: targetAnchor.id,
-        travel_minutes: 0,
-        modes: ["walk"],
-        bidirectional: direction !== "one-way" && direction !== "oneway",
+        travel_minutes: Math.max(0, Math.round(routeDialog.travelMinutes)),
+        modes: routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean).length
+          ? routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean)
+          : ["walk"],
+        bidirectional: routeDialog.bidirectional,
       }),
     });
-    setRouteStartId(null);
+    setRouteDialog(null);
+    setRoutePoints([]);
     setTool("select");
+    setSelectedId(connection.id);
     await load();
   }
 
-  async function chooseLocation(id: string) {
-    if (tool !== "route") {
-      setSelectedId(id);
-      return;
+  async function removeVertex(locationId: string, index: number) {
+    if (!world) return;
+    const entity = world.entities[locationId];
+    if (!entity) return;
+    const points = geometryPoints(entity);
+    if (points.length <= 2) return;
+    points.splice(index, 1);
+    const next = locationDraft(entity);
+    const center = centroid(points);
+    next.x = round(center.x);
+    next.y = round(center.y);
+    next.footprint = { location_id: layerId, kind: "polygon", points };
+    setVertexMenu(null);
+    await saveLocation(next);
+  }
+
+  async function createConnectedVertex() {
+    if (!vertexMenu || !world) return;
+    const entity = world.entities[vertexMenu.locationId];
+    if (!entity) return;
+    const points = geometryPoints(entity);
+    if (!points.length) return;
+    const point = points[vertexMenu.index];
+    const next = points[(vertexMenu.index + 1) % points.length];
+    const middle = { x: round((point.x + next.x) / 2), y: round((point.y + next.y) / 2) };
+    const { locationId, index } = vertexMenu;
+    setVertexMenu(null);
+    await insertVertex(locationId, index, middle);
+  }
+
+  async function saveConnection(connection: SpatialConnection) {
+    if (!connectionDraft) return;
+    await api(`/projects/${projectId}/spatial/connections`, {
+      method: "PUT",
+      body: JSON.stringify({
+        id: connection.id,
+        kind: connection.kind,
+        source_anchor_id: connection.source_anchor_id,
+        target_anchor_id: connection.target_anchor_id,
+        travel_minutes: Math.max(0, Math.round(connectionDraft.travelMinutes)),
+        modes: connectionDraft.modes.split(",").map(item => item.trim()).filter(Boolean).length
+          ? connectionDraft.modes.split(",").map(item => item.trim()).filter(Boolean)
+          : ["walk"],
+        bidirectional: connectionDraft.bidirectional,
+        requirements: connection.requirements ?? null,
+        lock: connectionDraft.locked ? {
+          locked: true,
+          minigame_key: connectionDraft.minigameKey || null,
+          difficulty: Math.max(0, Math.round(connectionDraft.difficulty)),
+          success_behavior: connection.lock?.success_behavior ?? "persistent",
+        } : null,
+        hidden: connectionDraft.hidden,
+        discovered: connectionDraft.discovered,
+        enabled: connectionDraft.enabled,
+      }),
+    });
+    await load();
+  }
+
+  async function deleteConnection(connection: SpatialConnection) {
+    await api(`/projects/${projectId}/spatial/connection/${connection.id}`, { method: "DELETE" });
+    for (const anchorId of [connection.source_anchor_id, connection.target_anchor_id]) {
+      await api(`/projects/${projectId}/spatial/anchor/${anchorId}`, { method: "DELETE" }).catch(() => undefined);
     }
-    if (!routeStartId) {
-      setRouteStartId(id);
-      setSelectedId(id);
-      return;
-    }
-    if (routeStartId === id) {
-      setRouteStartId(null);
-      return;
-    }
-    await createRoute(routeStartId, id);
+    setSelectedId(null);
+    await load();
+  }
+
+  function chooseLocation(id: string) {
+    setSelectedId(id);
   }
 
   async function beginLocationDrag(event: ReactPointerEvent<HTMLElement>, id: string) {
@@ -472,7 +700,7 @@ export function LocationMapStudio({
     if (dragLocation.footprint.length) {
       next.footprint = {
         location_id: layerId,
-        kind: dragLocation.footprint.length >= 3 ? "polygon" : dragLocation.footprint.length === 1 ? "point" : "polyline",
+        kind: next.spatial_kind === "area" ? "polygon" : "point",
         points: dragLocation.footprint.map(point => ({
           x: clamp(round(point.x + dragOffset.x)),
           y: clamp(round(point.y + dragOffset.y)),
@@ -574,9 +802,16 @@ export function LocationMapStudio({
   }
 
   function canvasClick(event: MouseEvent<HTMLDivElement>) {
-    if (event.target !== event.currentTarget && (event.target as HTMLElement).closest("button")) return;
+    if (tool !== "route" && event.target !== event.currentTarget && (event.target as HTMLElement).closest("button")) return;
     const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
     if (tool === "spot") void createSpot(point);
+    if (tool === "route") {
+      if (routePoints.length === 0) setRoutePoints([point]);
+      else {
+        beginRouteDialog(routePoints[0], point);
+        setRoutePoints([]);
+      }
+    }
     if (tool === "area") {
       if (areaDraft.length >= 3 && distance(point, areaDraft[0]) < 2.5) {
         void finishArea(true);
@@ -589,10 +824,37 @@ export function LocationMapStudio({
   function changeTool(next: Tool) {
     setTool(next);
     setAreaDraft([]);
-    setRouteStartId(null);
+    setRoutePoints([]);
+    setRouteDialog(null);
     setDragLocation(null);
     setVertexDrag(null);
   }
+
+  const areaContents = useMemo(() => {
+    const result: Record<string, SpatialLocation[]> = {};
+    if (!map || !world) return result;
+    for (const area of map.locations) {
+      const entity = world.entities[area.id];
+      if (!entity || entity.state.spatial_kind !== "area") continue;
+      result[area.id] = Object.values(world.entities)
+        .filter(item =>
+          item.kind === "location"
+          && !item.state.archived
+          && String(item.state.parent_location_id || "") === area.id
+        )
+        .map(item => ({
+          id: item.id,
+          name: item.name,
+          parent_location_id: area.id,
+          spatial_kind: item.state.spatial_kind === "area" ? "area" : "spot",
+          priority_layer: Number(item.state.priority_layer ?? 0),
+          x: typeof item.state.x === "number" ? item.state.x : null,
+          y: typeof item.state.y === "number" ? item.state.y : null,
+        }))
+        .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : left.id < right.id ? -1 : 1);
+    }
+    return result;
+  }, [map, world]);
 
   if (!map) return <p>Loading location map…</p>;
   if (!map.enabled) {
@@ -606,6 +868,16 @@ export function LocationMapStudio({
 
   const parentId = String(currentLayer?.state.parent_location_id || "");
   const anchors = new Map(map.anchors.map(anchor => [anchor.id, anchor]));
+  const localBoundsRaw = currentLayer?.state.local_bounds as Geometry | null | undefined;
+  const localBoundsPoints = Array.isArray(localBoundsRaw?.points) ? localBoundsRaw.points : [];
+  const priorityOrderedAreas = map.locations
+    .filter(item => world?.entities[item.id]?.state.spatial_kind === "area")
+    .sort((left, right) => {
+      const leftEntity = world?.entities[left.id];
+      const rightEntity = world?.entities[right.id];
+      if (!leftEntity || !rightEntity) return 0;
+      return compareAreaPriority(rightEntity, leftEntity);
+    });
   const toolLabels: Array<{ id: Tool; label: string }> = [
     { id: "select", label: "Select" },
     { id: "drag", label: "Drag" },
@@ -643,7 +915,7 @@ export function LocationMapStudio({
         {tool === "area" && areaDraft.length >= 2 && <Button size="small" onClick={() => void finishArea(false)}>
           Finish as wall
         </Button>}
-        {tool === "area" && areaDraft.length >= 3 && <Button size="small" variant="outlined" onClick={() => void finishArea(true)}>
+        {tool === "area" && areaDraft.length >= 2 && <Button size="small" variant="outlined" onClick={() => void finishArea(true)}>
           Close as area
         </Button>}
         {tool === "area" && areaDraft.length > 0 && <Button size="small" onClick={() => setAreaDraft([])}>Cancel drawing</Button>}
@@ -685,20 +957,37 @@ export function LocationMapStudio({
       >
         <div className="location-map-world" style={{ transform: `scale(${zoom})` }}>
           <svg className="location-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {map.locations.map(item => {
+            {localBoundsPoints.length >= 3
+              ? <polygon
+                  points={localBoundsPoints.map(point => `${point.x},${point.y}`).join(" ")}
+                  className="location-map-space-boundary"
+                />
+              : localBoundsPoints.length === 2
+                ? <polyline
+                    points={localBoundsPoints.map(point => `${point.x},${point.y}`).join(" ")}
+                    className="location-map-space-boundary"
+                  />
+                : <rect x=".45" y=".45" width="99.1" height="99.1" className="location-map-space-boundary" />}
+            {priorityOrderedAreas.map(item => {
               const entity = world?.entities[item.id];
               const points = geometryPoints(entity);
-              if (points.length < 3) return null;
+              if (points.length < 2) return null;
               const offset = dragLocation?.id === item.id ? dragOffset : { x: 0, y: 0 };
               const rendered = points.map(point => ({
                 x: clamp(point.x + offset.x),
                 y: clamp(point.y + offset.y),
               }));
-              return <polygon
-                key={item.id}
-                points={rendered.map(point => `${point.x},${point.y}`).join(" ")}
-                className={`location-map-area${selectedId === item.id ? " selected" : ""}`}
-              />;
+              return rendered.length >= 3
+                ? <polygon
+                    key={item.id}
+                    points={rendered.map(point => `${point.x},${point.y}`).join(" ")}
+                    className={`location-map-area${selectedId === item.id ? " selected" : ""}`}
+                  />
+                : <polyline
+                    key={item.id}
+                    points={rendered.map(point => `${point.x},${point.y}`).join(" ")}
+                    className={`location-map-area degenerate${selectedId === item.id ? " selected" : ""}`}
+                  />;
             })}
             {map.barriers.map(item => item.geometry?.points?.length ? <polyline
               key={item.id}
@@ -716,12 +1005,17 @@ export function LocationMapStudio({
                 x2={target.x}
                 y2={target.y}
                 className={`location-map-connection ${item.kind}${selectedId === item.id ? " selected" : ""}`}
+                onClick={event => {
+                  event.stopPropagation();
+                  setSelectedId(item.id);
+                }}
               />;
             })}
             {areaDraft.length > 1 && <polyline
               points={areaDraft.map(point => `${point.x},${point.y}`).join(" ")}
               className="location-map-draft"
             />}
+            {routePoints.length === 1 && <circle cx={routePoints[0].x} cy={routePoints[0].y} r="1.1" className="location-map-route-draft-point" />}
           </svg>
 
           {map.locations.map((item, index) => {
@@ -734,11 +1028,12 @@ export function LocationMapStudio({
             const point = { x: clamp(base.x + offset.x), y: clamp(base.y + offset.y) };
             return <button
               key={item.id}
-              className={`location-map-node ${points.length >= 3 ? "area-node" : "spot-node"}${selectedId === item.id ? " selected" : ""}${routeStartId === item.id ? " route-start" : ""}`}
+              className={`location-map-node ${entity?.state.spatial_kind === "area" ? "area-node" : "spot-node"}${selectedId === item.id ? " selected" : ""}`}
               style={{ left: `${point.x}%`, top: `${point.y}%` }}
               onClick={event => {
+                if (tool === "route") return;
                 event.stopPropagation();
-                void chooseLocation(item.id);
+                chooseLocation(item.id);
               }}
               onDoubleClick={event => {
                 event.stopPropagation();
@@ -747,7 +1042,15 @@ export function LocationMapStudio({
               onPointerDown={event => void beginLocationDrag(event, item.id)}
             >
               <b>{item.name}</b>
-              <small>{item.spatial_kind ?? "spot"}{entity?.state.parent_location_id ? "" : " · root"}</small>
+              <small>
+                {item.spatial_kind ?? "spot"}
+                {entity?.state.spatial_kind === "area" ? ` · p${areaPriority(entity)} · ${areaContents[item.id]?.length ?? 0} inside` : ""}
+                {entity?.state.parent_location_id ? "" : " · root"}
+              </small>
+              {entity?.state.spatial_kind === "area" && (areaContents[item.id]?.length ?? 0) > 0 && <span className="location-map-node-contents">
+                {areaContents[item.id].slice(0, 3).map(child => child.name).join(" · ")}
+                {areaContents[item.id].length > 3 ? ` +${areaContents[item.id].length - 3}` : ""}
+              </span>}
             </button>;
           })}
 
@@ -760,6 +1063,7 @@ export function LocationMapStudio({
               style={{ left: `${x}%`, top: `${y}%` }}
               title={item.name}
               onClick={event => {
+                if (tool === "route") return;
                 event.stopPropagation();
                 setSelectedId(item.id);
               }}
@@ -769,7 +1073,7 @@ export function LocationMapStudio({
           {tool === "edit" && map.locations.flatMap(item => {
             const entity = world?.entities[item.id];
             const points = geometryPoints(entity);
-            if (points.length < 3) return [];
+            if (points.length < 2) return [];
             return points.flatMap((point, index) => {
               const next = points[(index + 1) % points.length];
               const shownPoint = vertexDrag?.locationId === item.id && vertexDrag.index === index && vertexPreview ? vertexPreview : point;
@@ -781,11 +1085,18 @@ export function LocationMapStudio({
                   style={{ left: `${shownPoint.x}%`, top: `${shownPoint.y}%` }}
                   title="Drag vertex"
                   onPointerDown={event => {
+                    if (event.button !== 0) return;
                     event.stopPropagation();
                     setSelectedId(item.id);
                     setVertexDrag({ locationId: item.id, index });
                     setVertexPreview(point);
                     event.currentTarget.setPointerCapture?.(event.pointerId);
+                  }}
+                  onContextMenu={event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setSelectedId(item.id);
+                    setVertexMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, locationId: item.id, index });
                   }}
                 />,
                 <button
@@ -891,6 +1202,14 @@ export function LocationMapStudio({
               <TextField size="small" type="number" label="Minutes per map unit" value={editorDraft.minutes_per_unit} onChange={event => setEditorDraft({ ...editorDraft, minutes_per_unit: Number(event.target.value) })} />
               <TextField size="small" type="number" label="Visibility radius" value={editorDraft.base_visibility_units ?? ""} onChange={event => setEditorDraft({ ...editorDraft, base_visibility_units: event.target.value === "" ? null : Number(event.target.value) })} />
               <TextField size="small" type="number" label="Encounter rate" value={editorDraft.encounter_rate} onChange={event => setEditorDraft({ ...editorDraft, encounter_rate: Number(event.target.value) })} />
+              {editorDraft.spatial_kind === "area" && <TextField
+                size="small"
+                type="number"
+                label="Priority layer"
+                helperText="Lower wins overlaps; ties use raw name, then id."
+                value={editorDraft.priority_layer}
+                onChange={event => setEditorDraft({ ...editorDraft, priority_layer: Number(event.target.value) })}
+              />}
             </div>
             <div className="location-map-switches">
               <FormControlLabel control={<Switch size="small" checked={editorDraft.enabled} onChange={event => setEditorDraft({ ...editorDraft, enabled: event.target.checked })} />} label="Enabled" />
@@ -898,9 +1217,61 @@ export function LocationMapStudio({
               <FormControlLabel control={<Switch size="small" checked={editorDraft.random_encounter} onChange={event => setEditorDraft({ ...editorDraft, random_encounter: event.target.checked })} />} label="Random encounter" />
             </div>
           </div>
+          {editorDraft.spatial_kind === "area" && <section className="location-map-contents">
+            <div className="location-map-contents-heading">
+              <div><p className="eyebrow">CONTENTS</p><h4>Resolved contents</h4></div>
+              <Chip size="small" label={areaContents[selectedLocation.id]?.length ?? 0} />
+            </div>
+            {(areaContents[selectedLocation.id] ?? []).length
+              ? (areaContents[selectedLocation.id] ?? []).map(item => <div className="location-map-content-row" key={item.id}>
+                  <span><b>{item.name}</b><small>{item.spatial_kind ?? "spot"}</small></span>
+                  <small>Read only · double-click area to enter</small>
+                </div>)
+              : <p className="location-map-content-empty">No child locations are configured inside this area.</p>}
+          </section>}
           <div className="location-map-inspector-actions">
             <Button onClick={() => setEditorDraft(locationDraft(selectedLocation))}>Reset</Button>
             <Button variant="contained" onClick={() => void saveLocation(editorDraft)}>Save</Button>
+          </div>
+        </> : selectedConnection && connectionDraft ? <>
+          <section className="location-map-inspector-heading">
+            <div><p className="eyebrow">ROUTE</p><h3>{selectedConnection.kind === "route" ? "Travel route" : selectedConnection.kind}</h3></div>
+            <Chip size="small" label={connectionDraft.bidirectional ? "two-way" : "one-way"} />
+          </section>
+          <div className="location-map-route-endpoints">
+            {([
+              ["A", anchors.get(selectedConnection.source_anchor_id)],
+              ["B", anchors.get(selectedConnection.target_anchor_id)],
+            ] as const).map(([side, anchor]) => <div className="location-map-route-endpoint" key={side}>
+              <b>Endpoint {side}</b>
+              <span>{anchor?.name ?? "Missing anchor"}</span>
+              <small>{(anchor?.binding_kind ?? "coordinate").replaceAll("_", " ")}{anchor?.binding_target_id && world?.entities[anchor.binding_target_id] ? ` · ${world.entities[anchor.binding_target_id].name}` : ""}</small>
+              {anchor?.x != null && anchor?.y != null && <small>{round(anchor.x)}, {round(anchor.y)}</small>}
+            </div>)}
+          </div>
+          <div className="location-map-inspector-form">
+            <TextField size="small" type="number" label="Travel minutes" value={connectionDraft.travelMinutes} onChange={event => setConnectionDraft({ ...connectionDraft, travelMinutes: Number(event.target.value) })} />
+            <TextField size="small" label="Travel modes" helperText="Comma separated, e.g. walk, fly" value={connectionDraft.modes} onChange={event => setConnectionDraft({ ...connectionDraft, modes: event.target.value })} />
+            <div className="location-map-switches">
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.bidirectional} onChange={event => setConnectionDraft({ ...connectionDraft, bidirectional: event.target.checked })} />} label="Bidirectional" />
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.enabled} onChange={event => setConnectionDraft({ ...connectionDraft, enabled: event.target.checked })} />} label="Enabled" />
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.discovered} onChange={event => setConnectionDraft({ ...connectionDraft, discovered: event.target.checked })} />} label="Discovered" />
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.hidden} onChange={event => setConnectionDraft({ ...connectionDraft, hidden: event.target.checked })} />} label="Hidden" />
+              <FormControlLabel control={<Switch size="small" checked={connectionDraft.locked} onChange={event => setConnectionDraft({ ...connectionDraft, locked: event.target.checked })} />} label="Locked" />
+            </div>
+            {connectionDraft.locked && <div className="location-map-two-column">
+              <TextField size="small" label="Lock minigame" value={connectionDraft.minigameKey} onChange={event => setConnectionDraft({ ...connectionDraft, minigameKey: event.target.value })} />
+              <TextField size="small" type="number" label="Difficulty" value={connectionDraft.difficulty} onChange={event => setConnectionDraft({ ...connectionDraft, difficulty: Number(event.target.value) })} />
+            </div>}
+          </div>
+          <div className="location-map-object-summary">
+            <p><b>Source owner</b><span>{world?.entities[selectedConnection.source_location_id ?? ""]?.name ?? selectedConnection.source_location_id ?? "Map"}</span></p>
+            <p><b>Target owner</b><span>{world?.entities[selectedConnection.target_location_id ?? ""]?.name ?? selectedConnection.target_location_id ?? "Map"}</span></p>
+            <small>Endpoint bindings preserve whether each point is free, inside an area, on an area border, or attached to a spot.</small>
+          </div>
+          <div className="location-map-inspector-actions">
+            <Button color="error" onClick={() => void deleteConnection(selectedConnection)}>Delete route</Button>
+            <Button variant="contained" onClick={() => void saveConnection(selectedConnection)}>Save route</Button>
           </div>
         </> : selectedSpatial ? <>
           <section className="location-map-inspector-heading">
@@ -908,9 +1279,8 @@ export function LocationMapStudio({
           </section>
           <div className="location-map-object-summary">
             {"kind" in selectedSpatial && <p><b>Type</b><span>{selectedSpatial.kind}</span></p>}
-            {"travel_minutes" in selectedSpatial && <p><b>Travel</b><span>{selectedSpatial.travel_minutes} min</span></p>}
-            {"blocked_modes" in selectedSpatial && <p><b>Blocks</b><span>{String((selectedSpatial as any).blocked_modes ?? "walk")}</span></p>}
-            <small>Detailed route, door, portal, barrier and lock editors can plug into this inspector without changing the map canvas.</small>
+            {"blocked_modes" in selectedSpatial && <p><b>Blocks</b><span>{String((selectedSpatial as SpatialBarrier).blocked_modes ?? "walk")}</span></p>}
+            {"binding_kind" in selectedSpatial && <p><b>Binding</b><span>{String((selectedSpatial as SpatialAnchor).binding_kind ?? "coordinate").replaceAll("_", " ")}</span></p>}
           </div>
         </> : <>
           <section className="location-map-inspector-heading">
@@ -931,5 +1301,55 @@ export function LocationMapStudio({
         </section>
       </aside>
     </div>
+
+    <Menu
+      open={Boolean(vertexMenu)}
+      onClose={() => setVertexMenu(null)}
+      anchorReference="anchorPosition"
+      anchorPosition={vertexMenu ? { top: vertexMenu.mouseY, left: vertexMenu.mouseX } : undefined}
+    >
+      <MenuItem onClick={() => void createConnectedVertex()}>Create connected point</MenuItem>
+      <MenuItem
+        disabled={!vertexMenu || geometryPoints(world?.entities[vertexMenu.locationId]).length <= 2}
+        onClick={() => vertexMenu && void removeVertex(vertexMenu.locationId, vertexMenu.index)}
+      >
+        Remove point
+      </MenuItem>
+    </Menu>
+
+    <Dialog open={Boolean(routeDialog)} onClose={() => { setRouteDialog(null); setRoutePoints([]); }} fullWidth maxWidth="sm">
+      <DialogTitle>Configure route endpoints</DialogTitle>
+      <DialogContent>
+        <div className="location-map-route-dialog">
+          <p className="location-map-route-dialog-intro">Only map objects colliding with each placed endpoint are offered. Overlapping areas are ordered by priority, then raw name, then id.</p>
+          {routeDialog && ([0, 1] as const).map(index => <section className="location-map-endpoint-choice" key={index}>
+            <div><p className="eyebrow">ENDPOINT {index === 0 ? "A" : "B"}</p><b>{routeDialog.points[index].x}, {routeDialog.points[index].y}</b></div>
+            <TextField
+              select
+              fullWidth
+              size="small"
+              label="Lock endpoint to"
+              value={routeDialog.selections[index]}
+              onChange={event => {
+                const selections: [string, string] = [routeDialog.selections[0], routeDialog.selections[1]];
+                selections[index] = event.target.value;
+                setRouteDialog({ ...routeDialog, selections });
+              }}
+            >
+              {routeDialog.options[index].map(option => <MenuItem key={option.key} value={option.key}>{option.label}</MenuItem>)}
+            </TextField>
+          </section>)}
+          {routeDialog && <div className="location-map-route-dialog-settings">
+            <TextField size="small" type="number" label="Travel minutes" value={routeDialog.travelMinutes} onChange={event => setRouteDialog({ ...routeDialog, travelMinutes: Number(event.target.value) })} />
+            <TextField size="small" label="Modes" value={routeDialog.modes} onChange={event => setRouteDialog({ ...routeDialog, modes: event.target.value })} />
+            <FormControlLabel control={<Switch checked={routeDialog.bidirectional} onChange={event => setRouteDialog({ ...routeDialog, bidirectional: event.target.checked })} />} label="Bidirectional" />
+          </div>}
+        </div>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => { setRouteDialog(null); setRoutePoints([]); }}>Cancel</Button>
+        <Button variant="contained" onClick={() => void createConfiguredRoute()}>Create route</Button>
+      </DialogActions>
+    </Dialog>
   </div>;
 }

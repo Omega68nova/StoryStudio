@@ -1726,6 +1726,7 @@ def _location_state(request: EnvironmentLocationUpdate) -> dict[str, Any]:
         "x": request.x, "y": request.y,
         "topology": request.topology, "occupancy": request.occupancy,
         "boundary_access": request.boundary_access, "spatial_kind": request.spatial_kind,
+        "priority_layer": request.priority_layer,
         "minutes_per_unit": request.minutes_per_unit,
         "base_visibility_units": request.base_visibility_units,
         "encounter_rate": request.encounter_rate,
