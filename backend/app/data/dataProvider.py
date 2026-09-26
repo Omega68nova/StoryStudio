@@ -19,6 +19,7 @@ from app.data.runtimeRepository import RuntimeRepository
 from app.data.batchGenerationRepository import BatchGenerationRepository
 from app.data.authRepository import AuthRepository
 from app.data.rulesRepository import RulesRepository
+from app.data.spatialV3Repository import SpatialV3Repository
 
 
 class DataProvider:
@@ -43,3 +44,4 @@ class DataProvider:
         self.runtime = RuntimeRepository(db)
         self.batch_generation = BatchGenerationRepository(db)
         self.rules = RulesRepository(db)
+        self.spatial_v3 = SpatialV3Repository(db)

@@ -1542,6 +1542,218 @@ async def get_spatial_map(project_id: str, location_id: str | None = None) -> di
     )
 
 
+@app.get("/api/projects/{project_id}/spatial-v3/migration-preview")
+async def preview_spatial_v3_migration(project_id: str) -> dict[str, Any]:
+    """Preview legacy -> V3 conversion without writing V3 rows."""
+    require_project(project_id)
+    from app.services.spatial_v3_migration import SpatialV3Migration
+
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    return SpatialV3Migration(data.spatial_v3).preview(project_id, projection)
+
+
+def _synchronize_spatial_v3_projection(project_id: str) -> dict[str, int]:
+    from app.services.spatial_v3_projection import SpatialV3ProjectionMaterializer
+
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    return SpatialV3ProjectionMaterializer(data.spatial_v3).synchronize(
+        project_id,
+        projection,
+    )
+
+
+@app.post("/api/projects/{project_id}/spatial-v3/materialize")
+async def materialize_spatial_v3(project_id: str) -> dict[str, Any]:
+    """Migrate legacy spatial state into branch-authoritative Spatial V3 events."""
+    project = require_project(project_id)
+    from app.services.spatial_v3_migration import SpatialV3Migration
+    from app.services.spatial_v3_projection import SpatialV3ProjectionMaterializer
+
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    migration = SpatialV3Migration(data.spatial_v3)
+    preview, raw = migration.branch_replacement_mutations(project_id, projection)
+    try:
+        mutations = scheduler.world.normalize_mutations(
+            project_id,
+            project.get("active_node_id"),
+            raw,
+            provenance="author",
+        )
+        transaction = (
+            scheduler.world.commit_to_existing_node(
+                project_id,
+                project["active_node_id"],
+                mutations,
+                provenance="author",
+                summary="Materialize branch-authoritative Spatial V3",
+            )
+            if project.get("active_node_id")
+            else scheduler.world.commit_root(
+                project_id,
+                mutations,
+                provenance="author",
+                summary="Materialize branch-authoritative Spatial V3",
+            )
+        )
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+    branch_projection = scheduler.world.projection(project_id, use_cache=False)
+    materialized_counts = SpatialV3ProjectionMaterializer(
+        data.spatial_v3
+    ).synchronize(project_id, branch_projection)
+    return {
+        **preview,
+        "branch_authoritative": True,
+        "transaction_id": transaction["id"],
+        "materialized_counts": materialized_counts,
+    }
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/spaces")
+async def list_spatial_v3_spaces(project_id: str) -> list[dict[str, Any]]:
+    require_project(project_id)
+    _synchronize_spatial_v3_projection(project_id)
+    return [
+        item.model_dump(mode="json")
+        for item in data.spatial_v3.spaces(project_id)
+    ]
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}")
+async def get_spatial_v3_space(project_id: str, space_id: str) -> dict[str, Any]:
+    require_project(project_id)
+    _synchronize_spatial_v3_projection(project_id)
+    space = data.spatial_v3.space(space_id)
+    if not space or space.project_id != project_id:
+        raise HTTPException(404, "Navigation space not found")
+    return {
+        "space": space.model_dump(mode="json"),
+        "features": [
+            item.model_dump(mode="json")
+            for item in data.spatial_v3.features(project_id, space_id)
+        ],
+        "layers": [
+            item.model_dump(mode="json")
+            for item in data.spatial_v3.layers(space_id)
+        ],
+        "encounter_policies": [
+            item.model_dump(mode="json")
+            for item in data.spatial_v3.encounter_policies(project_id, space_id)
+        ],
+    }
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/resolve")
+async def resolve_spatial_v3_point(
+    project_id: str,
+    space_id: str,
+    x: float,
+    y: float,
+    distance: float = 0,
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3 import SpatialV3Error, SpatialV3Service
+
+    _synchronize_spatial_v3_projection(project_id)
+    service = SpatialV3Service(data.spatial_v3)
+    try:
+        movement = service.movement_context(
+            project_id=project_id,
+            navigation_space_id=space_id,
+            x=x,
+            y=y,
+        )
+        encounters = service.encounter_context(
+            project_id=project_id,
+            navigation_space_id=space_id,
+            x=x,
+            y=y,
+            distance=distance,
+        )
+    except SpatialV3Error as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"movement": movement, "encounters": encounters}
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/path")
+async def plan_spatial_v3_path(
+    project_id: str,
+    start_space_id: str,
+    start_x: float,
+    start_y: float,
+    target_space_id: str,
+    target_x: float,
+    target_y: float,
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3 import SpatialV3Error
+    from app.services.spatial_v3_pathfinding import SpatialV3Pathfinder
+
+    _synchronize_spatial_v3_projection(project_id)
+    try:
+        return SpatialV3Pathfinder(data.spatial_v3).plan(
+            project_id=project_id,
+            start_space_id=start_space_id,
+            start=(start_x, start_y),
+            target_space_id=target_space_id,
+            target=(target_x, target_y),
+        )
+    except SpatialV3Error as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/travel-preview")
+async def preview_spatial_v3_travel(
+    project_id: str,
+    start_space_id: str,
+    start_x: float,
+    start_y: float,
+    target_space_id: str,
+    target_x: float,
+    target_y: float,
+    seed: str,
+    resume_cursor: str | None = None,
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3 import SpatialV3Error
+    from app.services.spatial_v3_travel import SpatialV3TravelPreview
+
+    _synchronize_spatial_v3_projection(project_id)
+    try:
+        return SpatialV3TravelPreview(data.spatial_v3).preview(
+            project_id=project_id,
+            start_space_id=start_space_id,
+            start=(start_x, start_y),
+            target_space_id=target_space_id,
+            target=(target_x, target_y),
+            seed=seed,
+            resume_cursor=resume_cursor,
+        )
+    except SpatialV3Error as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/transitions/{feature_id}/encounter")
+async def resolve_spatial_v3_transition_encounter(
+    project_id: str,
+    space_id: str,
+    feature_id: str,
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3 import SpatialV3Error, SpatialV3Service
+
+    _synchronize_spatial_v3_projection(project_id)
+    try:
+        return SpatialV3Service(data.spatial_v3).transition_encounter_context(
+            project_id=project_id,
+            navigation_space_id=space_id,
+            feature_id=feature_id,
+        )
+    except SpatialV3Error as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/spatial/storage")
 async def get_spatial_storage_status(project_id: str) -> dict[str, Any]:
     require_project(project_id)
