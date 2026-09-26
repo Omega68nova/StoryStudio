@@ -119,14 +119,6 @@ const formatCsv = (value: unknown) => Array.isArray(value) ? value.join(", ") : 
 const locationName = (world: WorldProjection | null, id?: string | null) =>
   id ? world?.entities[id]?.name ?? id : "Unbound";
 
-function normalizePoint(event: React.MouseEvent<SVGSVGElement>): Point {
-  const rect = event.currentTarget.getBoundingClientRect();
-  return [
-    round(((event.clientX - rect.left) / rect.width) * 100),
-    round(((event.clientY - rect.top) / rect.height) * 100),
-  ];
-}
-
 function defaultProperties(kind: FeatureKind): Record<string, any> {
   if (kind === "surface") return { traversal: emptyTraversal(true), ambience_tags: [], environment_tags: [] };
   if (kind === "corridor") return { width: 4, traversal: emptyTraversal(true), ambience_tags: [] };
@@ -244,6 +236,7 @@ export function LocationMapStudio({
   const [connectorTargetPoint, setConnectorTargetPoint] = useState<Point>([50, 50]);
   const [migration, setMigration] = useState<MigrationPreview | null>(null);
   const [encounterDraft, setEncounterDraft] = useState<EncounterPolicy | null>(null);
+  const [vertexDrag, setVertexDrag] = useState<number | null>(null);
 
   const locations = useMemo(
     () => Object.values(world?.entities ?? {}).filter((item: WorldEntity) => item.kind === "location" && !item.state.archived),
@@ -331,9 +324,36 @@ export function LocationMapStudio({
     } catch (cause) { fail(String(cause)); }
   }
 
+  function canvasPoint(clientX: number, clientY: number, element: SVGSVGElement): Point {
+    const rect = element.getBoundingClientRect();
+    return [
+      round(((clientX - rect.left) / rect.width) * 100),
+      round(((clientY - rect.top) / rect.height) * 100),
+    ];
+  }
+
+  function updateFeatureVertex(index: number, point: Point) {
+    if (!featureDraft) return;
+    const geometry = structuredClone(featureDraft.geometry);
+    if (geometry.type === "Point") geometry.coordinates = point;
+    else if (geometry.type === "LineString") geometry.coordinates[index] = point;
+    else if (geometry.type === "Polygon") {
+      const ring = geometry.coordinates[0];
+      if (!ring?.length) return;
+      ring[index] = point;
+      if (index === 0) ring[ring.length - 1] = point;
+    } else return;
+    setFeatureDraft({ ...featureDraft, geometry });
+  }
+
+  function canvasPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (vertexDrag == null) return;
+    updateFeatureVertex(vertexDrag, canvasPoint(event.clientX, event.clientY, event.currentTarget));
+  }
+
   function canvasClick(event: React.MouseEvent<SVGSVGElement>) {
     if (tool === "select") return;
-    const point = normalizePoint(event);
+    const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
     if (tool === "spot") {
       void createFeature("spot", [point]);
       return;
@@ -533,29 +553,51 @@ export function LocationMapStudio({
         </Paper>
 
         <Paper className="panel" sx={{ p: 1, overflow: "hidden" }}>
-          <svg viewBox="0 0 100 100" onClick={canvasClick} style={{ width: "100%", aspectRatio: "1.6", background: "var(--surface, #16191f)", cursor: tool === "select" ? "default" : "crosshair", display: "block" }}>
+          <svg
+            viewBox="0 0 100 100"
+            onClick={canvasClick}
+            onPointerMove={canvasPointerMove}
+            onPointerUp={() => setVertexDrag(null)}
+            onPointerLeave={() => setVertexDrag(null)}
+            style={{ width: "100%", aspectRatio: "1.6", background: "var(--surface, #16191f)", cursor: vertexDrag != null ? "grabbing" : tool === "select" ? "default" : "crosshair", display: "block", touchAction: "none" }}
+          >
             <defs>
               <pattern id="v3grid" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M 5 0 L 0 0 0 5" fill="none" stroke="currentColor" strokeOpacity=".08" strokeWidth=".2"/></pattern>
             </defs>
             <rect width="100" height="100" fill="url(#v3grid)"/>
             {visibleFeatures.map(feature => {
               const selected = feature.id === selectedFeatureId;
+              const rendered = selected && featureDraft ? featureDraft : feature;
               const common = { onClick: (event: React.MouseEvent) => { event.stopPropagation(); setTool("select"); setSelectedFeatureId(feature.id); } };
-              if (feature.geometry.type === "Polygon") {
-                const points = (feature.geometry.coordinates[0] ?? []).map(point => point.join(",")).join(" ");
+              if (rendered.geometry.type === "Polygon") {
+                const points = (rendered.geometry.coordinates[0] ?? []).map(point => point.join(",")).join(" ");
                 return <polygon key={feature.id} {...common} points={points} fill={selected ? "rgba(255,255,255,.24)" : "rgba(255,255,255,.11)"} stroke="currentColor" strokeWidth={selected ? .8 : .35}/>;
               }
-              if (feature.geometry.type === "LineString") {
-                const points = feature.geometry.coordinates.map(point => point.join(",")).join(" ");
-                const width = feature.feature_kind === "corridor" ? Math.max(.8, Number(feature.properties.width ?? 4)) : feature.feature_kind === "barrier" ? 1 : .7;
+              if (rendered.geometry.type === "LineString") {
+                const points = rendered.geometry.coordinates.map(point => point.join(",")).join(" ");
+                const width = rendered.feature_kind === "corridor" ? Math.max(.8, Number(rendered.properties.width ?? 4)) : rendered.feature_kind === "barrier" ? 1 : .7;
                 return <polyline key={feature.id} {...common} points={points} fill="none" stroke="currentColor" strokeOpacity={selected ? 1 : .7} strokeWidth={selected ? width + .5 : width} strokeLinecap="round" strokeLinejoin="round"/>;
               }
-              if (feature.geometry.type === "Point") {
-                const [x, y] = feature.geometry.coordinates;
-                return <g key={feature.id} {...common}><circle cx={x} cy={y} r={selected ? 2.1 : 1.5} fill="currentColor"/>{feature.name && <text x={x + 2} y={y - 2} fontSize="2.2" fill="currentColor">{feature.name}</text>}</g>;
+              if (rendered.geometry.type === "Point") {
+                const [x, y] = rendered.geometry.coordinates;
+                return <g key={feature.id} {...common}><circle cx={x} cy={y} r={selected ? 2.1 : 1.5} fill="currentColor"/>{rendered.name && <text x={x + 2} y={y - 2} fontSize="2.2" fill="currentColor">{rendered.name}</text>}</g>;
               }
               return null;
             })}
+            {featureDraft && featureDraft.geometry.type !== "MultiLineString" && featureDraft.geometry.type !== "MultiPolygon" && featurePoints(featureDraft)
+              .filter((_point, index) => featureDraft.geometry.type !== "Polygon" || index < featurePoints(featureDraft).length - 1)
+              .map((point, index) => <circle
+                key={`handle-${index}`}
+                cx={point[0]}
+                cy={point[1]}
+                r="1.15"
+                fill="var(--background, #111)"
+                stroke="currentColor"
+                strokeWidth=".45"
+                style={{ cursor: "grab" }}
+                onClick={event => event.stopPropagation()}
+                onPointerDown={event => { event.stopPropagation(); (event.currentTarget as SVGCircleElement).setPointerCapture(event.pointerId); setVertexDrag(index); }}
+              />)}
             {draftPoints.length > 0 && <>
               <polyline points={draftPoints.map(point => point.join(",")).join(" ")} fill={tool === "surface" ? "rgba(255,255,255,.08)" : "none"} stroke="currentColor" strokeDasharray="1 1" strokeWidth=".5"/>
               {draftPoints.map((point, index) => <circle key={index} cx={point[0]} cy={point[1]} r=".8" fill="currentColor"/>)}
