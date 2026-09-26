@@ -1390,6 +1390,80 @@ export function LocationMapStudio({
     }}
   />;
 
+  const renderAmbientEditor = () => {
+    if (!selectedLocation || !environmentSettings) return null;
+    const baseIndex = ambientSets.findIndex(item => item.selector_type === "default" && !item.weather_id && !item.time_phase_id);
+    const base = baseIndex >= 0 ? ambientSets[baseIndex] : emptyAmbientSet();
+    const custom = ambientSets.map((item, index) => ({ item, index })).filter(({ index }) => index !== baseIndex);
+    return <section className="location-map-ambient-editor">
+      <div className="location-map-section-heading">
+        <div><p className="eyebrow">AMBIENCE</p><h4>Location sound sets</h4></div>
+        <Chip size="small" label={ambientDirty ? "Unsaved" : "Saved"} />
+      </div>
+      <p className="location-map-ambient-help">The toolbar preview resolves these draft sets immediately against the selected weather and time. You do not need to save before listening.</p>
+      {ambientSoundPicker(base, baseIndex, "Default ambient sounds")}
+      {custom.map(({ item, index }) => <div className="location-map-ambient-set" key={`${index}-${item.selector_type}`}>
+        <div className="location-map-ambient-condition-row">
+          <TextField
+            select
+            size="small"
+            label="Applies in"
+            value={item.selector_type}
+            onChange={event => updateAmbientSet(index, { selector_type: event.target.value as AmbientSoundSet["selector_type"], selector_value: null })}
+          >
+            <MenuItem value="default">Every exposure</MenuItem>
+            <MenuItem value="outdoor">Outdoor</MenuItem>
+            <MenuItem value="indoor">Indoor</MenuItem>
+            <MenuItem value="isolated">Sealed</MenuItem>
+            <MenuItem value="tag">Location tag</MenuItem>
+          </TextField>
+          {item.selector_type === "tag" && <TextField
+            size="small"
+            label="Location tag"
+            value={item.selector_value ?? ""}
+            onChange={event => updateAmbientSet(index, { selector_value: event.target.value })}
+          />}
+          <TextField
+            select
+            size="small"
+            label="Weather"
+            value={item.weather_id ?? ""}
+            onChange={event => updateAmbientSet(index, { weather_id: event.target.value || null })}
+          >
+            <MenuItem value="">Any weather</MenuItem>
+            {environmentSettings.weather.map(weather => <MenuItem key={weather.id} value={weather.id}>{weather.name}</MenuItem>)}
+          </TextField>
+          <TextField
+            select
+            size="small"
+            label="Time"
+            value={item.time_phase_id ?? ""}
+            onChange={event => updateAmbientSet(index, { time_phase_id: event.target.value || null })}
+          >
+            <MenuItem value="">Any time</MenuItem>
+            {environmentSettings.time_phases.map(phase => <MenuItem key={phase.id} value={phase.id}>{phase.name}</MenuItem>)}
+          </TextField>
+          <Button color="error" size="small" onClick={() => setAmbientSets(current => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</Button>
+        </div>
+        {ambientSoundPicker(item, index, "Sounds")}
+      </div>)}
+      <div className="location-map-ambient-actions">
+        <Button size="small" onClick={() => setAmbientSets(current => [...current, emptyAmbientSet()])}>Add conditional sound set</Button>
+        <span />
+        <Button
+          size="small"
+          disabled={!ambientDirty}
+          onClick={() => {
+            const saved = ambientSetsFor(ambient.assignments, selectedLocation.id);
+            setAmbientSets(saved);
+            setAmbientSavedSnapshot(JSON.stringify(saved));
+          }}
+        >Reset ambience</Button>
+        <Button size="small" variant="contained" disabled={!ambientDirty} onClick={() => void saveLocationAmbient()}>Save ambience</Button>
+      </div>
+    </section>;
+  };
+
   const toolLabels: Array<{ id: Tool; label: string }> = [
     { id: "select", label: "Select" },
     { id: "drag", label: "Drag" },
@@ -1891,6 +1965,7 @@ export function LocationMapStudio({
               <FormControlLabel control={<Switch size="small" checked={editorDraft.random_encounter} onChange={event => setEditorDraft({ ...editorDraft, random_encounter: event.target.checked })} />} label="Random encounter" />
             </div>
           </div>
+          {renderAmbientEditor()}
           {editorDraft.spatial_kind === "area" && <section className="location-map-contents">
             <div className="location-map-contents-heading">
               <div><p className="eyebrow">CONTENTS</p><h4>Resolved contents</h4></div>
