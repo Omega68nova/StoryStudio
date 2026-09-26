@@ -33,6 +33,37 @@ def _target_box(space: NavigationSpace) -> tuple[float, float, float, float]:
     return tuple(float(value) for value in geom.bounds)  # type: ignore[return-value]
 
 
+def transform_point(
+    point: tuple[float, float],
+    source_bounds: tuple[float, float, float, float],
+    target_bounds: tuple[float, float, float, float],
+) -> tuple[float, float]:
+    source_min_x, source_min_y, source_max_x, source_max_y = source_bounds
+    target_min_x, target_min_y, target_max_x, target_max_y = target_bounds
+    source_width = max(source_max_x - source_min_x, 1e-9)
+    source_height = max(source_max_y - source_min_y, 1e-9)
+    return (
+        target_min_x + ((float(point[0]) - source_min_x) / source_width) * (target_max_x - target_min_x),
+        target_min_y + ((float(point[1]) - source_min_y) / source_height) * (target_max_y - target_min_y),
+    )
+
+
+def parent_to_child_point(context: dict[str, Any], point: tuple[float, float]) -> tuple[float, float]:
+    return transform_point(
+        point,
+        tuple(context["source_bounds"]),
+        tuple(context["target_bounds"]),
+    )
+
+
+def child_to_parent_point(context: dict[str, Any], point: tuple[float, float]) -> tuple[float, float]:
+    return transform_point(
+        point,
+        tuple(context["target_bounds"]),
+        tuple(context["source_bounds"]),
+    )
+
+
 def _transform_geometry(geometry: Any, source_bounds: tuple[float, float, float, float], target_bounds: tuple[float, float, float, float]) -> Any:
     source_min_x, source_min_y, source_max_x, source_max_y = source_bounds
     target_min_x, target_min_y, target_max_x, target_max_y = target_bounds
@@ -185,6 +216,8 @@ def inherited_parent_context(
         "source_space_id": source_space_id,
         "source_location_id": owner_location_id,
         "source_feature_ids": [item.id for item in owner_surfaces],
+        "source_bounds": list(source_bounds),
+        "target_bounds": list(target_bounds),
         "boundary": mapping(projected_boundary),
         "features": context_features,
     }
