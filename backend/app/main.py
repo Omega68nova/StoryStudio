@@ -1542,6 +1542,108 @@ async def get_spatial_map(project_id: str, location_id: str | None = None) -> di
     )
 
 
+@app.get("/api/projects/{project_id}/spatial-v3/migration-preview")
+async def preview_spatial_v3_migration(project_id: str) -> dict[str, Any]:
+    """Preview legacy -> V3 conversion without writing V3 rows."""
+    require_project(project_id)
+    from app.services.spatial_v3_migration import SpatialV3Migration
+
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    return SpatialV3Migration(data.spatial_v3).preview(project_id, projection)
+
+
+@app.post("/api/projects/{project_id}/spatial-v3/materialize")
+async def materialize_spatial_v3(project_id: str) -> dict[str, Any]:
+    """Rebuild the experimental V3 materialization from active branch state."""
+    require_project(project_id)
+    from app.services.spatial_v3_migration import SpatialV3Migration
+
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    return SpatialV3Migration(data.spatial_v3).materialize(project_id, projection)
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/spaces")
+async def list_spatial_v3_spaces(project_id: str) -> list[dict[str, Any]]:
+    require_project(project_id)
+    return [
+        item.model_dump(mode="json")
+        for item in data.spatial_v3.spaces(project_id)
+    ]
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}")
+async def get_spatial_v3_space(project_id: str, space_id: str) -> dict[str, Any]:
+    require_project(project_id)
+    space = data.spatial_v3.space(space_id)
+    if not space or space.project_id != project_id:
+        raise HTTPException(404, "Navigation space not found")
+    return {
+        "space": space.model_dump(mode="json"),
+        "features": [
+            item.model_dump(mode="json")
+            for item in data.spatial_v3.features(project_id, space_id)
+        ],
+        "layers": [
+            item.model_dump(mode="json")
+            for item in data.spatial_v3.layers(space_id)
+        ],
+        "encounter_policies": [
+            item.model_dump(mode="json")
+            for item in data.spatial_v3.encounter_policies(project_id, space_id)
+        ],
+    }
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/resolve")
+async def resolve_spatial_v3_point(
+    project_id: str,
+    space_id: str,
+    x: float,
+    y: float,
+    distance: float = 0,
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3 import SpatialV3Error, SpatialV3Service
+
+    service = SpatialV3Service(data.spatial_v3)
+    try:
+        movement = service.movement_context(
+            project_id=project_id,
+            navigation_space_id=space_id,
+            x=x,
+            y=y,
+        )
+        encounters = service.encounter_context(
+            project_id=project_id,
+            navigation_space_id=space_id,
+            x=x,
+            y=y,
+            distance=distance,
+        )
+    except SpatialV3Error as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return {"movement": movement, "encounters": encounters}
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/transitions/{feature_id}/encounter")
+async def resolve_spatial_v3_transition_encounter(
+    project_id: str,
+    space_id: str,
+    feature_id: str,
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3 import SpatialV3Error, SpatialV3Service
+
+    try:
+        return SpatialV3Service(data.spatial_v3).transition_encounter_context(
+            project_id=project_id,
+            navigation_space_id=space_id,
+            feature_id=feature_id,
+        )
+    except SpatialV3Error as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/spatial/storage")
 async def get_spatial_storage_status(project_id: str) -> dict[str, Any]:
     require_project(project_id)
