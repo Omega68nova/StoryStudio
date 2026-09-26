@@ -58,6 +58,49 @@ export function blankConditionExpression(
   return { kind, selector, location_id: "" };
 }
 
+export function conditionExpressionFromPayload(
+  payload: Record<string, unknown>,
+  stats: StatDefinition[] = [],
+): ConditionExpression {
+  const kind = String(payload.kind ?? "compare") as ConditionExpression["kind"];
+  if (kind === "and" || kind === "or") {
+    return {
+      kind,
+      children: Array.isArray(payload.children)
+        ? payload.children.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object").map(item => conditionExpressionFromPayload(item, stats))
+        : [blankConditionExpression("compare", stats)],
+    };
+  }
+  if (kind === "not") {
+    const child = payload.child && typeof payload.child === "object"
+      ? conditionExpressionFromPayload(payload.child as Record<string, unknown>, stats)
+      : blankConditionExpression("compare", stats);
+    return { kind, child };
+  }
+  if (kind === "compare") {
+    if (payload.left && payload.right) return payload as unknown as ConditionExpression;
+    const target = payload.target === "target" ? "target" : "actor";
+    return {
+      kind,
+      left: { kind: "stat", selector: blankSelector(target), stat_key: String(payload.stat_key ?? stats[0]?.stat_key ?? "") },
+      comparison: (payload.comparison as ConditionExpression["comparison"]) ?? "gte",
+      right: { kind: "constant", value: Number(payload.value ?? 0) },
+    };
+  }
+  if (kind === "time") return { kind, time_phase_id: String(payload.time_phase_id ?? "") };
+  if (kind === "weather") return { kind, weather_id: String(payload.weather_id ?? "") };
+  if (kind === "exists") return payload as unknown as ConditionExpression;
+
+  if (payload.selector) return payload as unknown as ConditionExpression;
+  const selector = blankSelector(payload.target === "target" ? "target" : "actor");
+  if (kind === "has_tag") return { kind, selector, tag: String(payload.tag ?? "") };
+  if (kind === "has_item") return { kind, selector, item_id: String(payload.item_id ?? "") };
+  if (kind === "has_ability") return { kind, selector, ability_key: String(payload.ability_key ?? "") };
+  if (kind === "relationship") return { kind, selector, relation: String(payload.relation ?? "") };
+  if (kind === "location") return { kind, selector, location_id: String(payload.location_id ?? "") };
+  return blankConditionExpression("compare", stats);
+}
+
 export function SelectorEditor({
   selector,
   onChange,

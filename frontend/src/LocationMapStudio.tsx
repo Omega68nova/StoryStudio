@@ -16,8 +16,8 @@ import {
   TextField,
 } from "@mui/material";
 import { api } from "./api";
-import type { AbilityDefinition, ConditionExpression, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
-import { blankConditionExpression, ConditionExpressionEditor } from "./RuleConditionEditor";
+import type { AbilityDefinition, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
+import { blankConditionExpression, conditionExpressionFromPayload, ConditionExpressionEditor } from "./RuleConditionEditor";
 
 type Point = [number, number];
 type Tool = "select" | "surface" | "corridor" | "barrier" | "spot" | "connector";
@@ -204,7 +204,7 @@ function TraversalEditor({
       </Stack>
       <div style={{ marginTop: 8 }}>
         {option.requirements
-          ? <ConditionExpressionEditor node={option.requirements as ConditionExpression} stats={stats} abilities={abilities} locations={locations} onChange={requirements => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })} onRemove={() => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: null } : item) })}/>
+          ? <ConditionExpressionEditor node={conditionExpressionFromPayload(option.requirements as Record<string, unknown>, stats)} stats={stats} abilities={abilities} locations={locations} onChange={requirements => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })} onRemove={() => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: null } : item) })}/>
           : <Button size="small" onClick={() => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: blankConditionExpression("compare", stats) } : item) })}>Add requirement</Button>}
       </div>
     </Paper>)}
@@ -798,7 +798,7 @@ export function LocationMapStudio({
         <div>
           <h3>Policy condition</h3>
           {encounterDraft.conditions
-            ? <ConditionExpressionEditor node={encounterDraft.conditions as ConditionExpression} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={conditions => setEncounterDraft({ ...encounterDraft, conditions })} onRemove={() => setEncounterDraft({ ...encounterDraft, conditions: null })}/>
+            ? <ConditionExpressionEditor node={conditionExpressionFromPayload(encounterDraft.conditions as Record<string, unknown>, ruleData.stats)} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={conditions => setEncounterDraft({ ...encounterDraft, conditions })} onRemove={() => setEncounterDraft({ ...encounterDraft, conditions: null })}/>
             : <Button onClick={() => setEncounterDraft({ ...encounterDraft, conditions: blankConditionExpression("compare", ruleData.stats) })}>Add condition</Button>}
         </div>
         <h3>Candidates</h3>
@@ -810,7 +810,7 @@ export function LocationMapStudio({
           </Stack>
           <div style={{ marginTop: 8 }}>
             {candidate.requirements
-              ? <ConditionExpressionEditor node={candidate.requirements as ConditionExpression} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={requirements => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })} onRemove={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: null } : item) })}/>
+              ? <ConditionExpressionEditor node={conditionExpressionFromPayload(candidate.requirements as Record<string, unknown>, ruleData.stats)} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={requirements => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })} onRemove={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: null } : item) })}/>
               : <Button size="small" onClick={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: blankConditionExpression("compare", ruleData.stats) } : item) })}>Add requirement</Button>}
           </div>
         </Paper>)}
