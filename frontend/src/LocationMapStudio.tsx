@@ -16,7 +16,8 @@ import {
   TextField,
 } from "@mui/material";
 import { api } from "./api";
-import type { WorkflowPreset, WorldEntity, WorldProjection } from "./types";
+import type { AbilityDefinition, ConditionExpression, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
+import { blankConditionExpression, ConditionExpressionEditor } from "./RuleConditionEditor";
 
 type Point = [number, number];
 type Tool = "select" | "surface" | "corridor" | "barrier" | "spot" | "connector";
@@ -154,37 +155,17 @@ function featurePoints(feature: MapFeature): Point[] {
   return feature.geometry.coordinates.flat(2) as Point[];
 }
 
-function JsonConditionField({
-  label,
-  value,
-  onChange,
-}: {
-  label: string;
-  value?: Record<string, unknown> | null;
-  onChange: (value: Record<string, unknown> | null) => void;
-}) {
-  const [text, setText] = useState(value ? JSON.stringify(value, null, 2) : "");
-  useEffect(() => setText(value ? JSON.stringify(value, null, 2) : ""), [value]);
-  return <TextField
-    fullWidth
-    multiline
-    minRows={3}
-    label={label}
-    value={text}
-    helperText="Rules V2 condition JSON. Leave blank for unconditional."
-    onChange={event => setText(event.target.value)}
-    onBlur={() => {
-      if (!text.trim()) return onChange(null);
-      try { onChange(JSON.parse(text) as Record<string, unknown>); } catch { /* keep draft for correction */ }
-    }}
-  />;
-}
-
 function TraversalEditor({
   value,
+  stats,
+  abilities,
+  locations,
   onChange,
 }: {
   value: TraversalPolicy;
+  stats: StatDefinition[];
+  abilities: AbilityDefinition[];
+  locations: Array<{ id: string; name: string }>;
   onChange: (value: TraversalPolicy) => void;
 }) {
   return <section className="panel">
@@ -202,7 +183,11 @@ function TraversalEditor({
         <TextField size="small" type="number" label="Fixed minutes" value={option.fixed_minutes ?? ""} onChange={event => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, fixed_minutes: event.target.value === "" ? null : Math.max(0, Number(event.target.value)) } : item) })}/>
         <Button color="error" onClick={() => onChange({ ...value, options: value.options.filter((_, itemIndex) => itemIndex !== index) })}>Remove</Button>
       </Stack>
-      <JsonConditionField label="Requirements" value={option.requirements} onChange={requirements => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })}/>
+      <div style={{ marginTop: 8 }}>
+        {option.requirements
+          ? <ConditionExpressionEditor node={option.requirements as ConditionExpression} stats={stats} abilities={abilities} locations={locations} onChange={requirements => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })} onRemove={() => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: null } : item) })}/>
+          : <Button size="small" onClick={() => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: blankConditionExpression("compare", stats) } : item) })}>Add requirement</Button>}
+      </div>
     </Paper>)}
     <Button onClick={() => onChange({ ...value, options: [...value.options, { key: `option_${value.options.length + 1}`, label: "Alternative", requirements: null, travel_multiplier: 1, fixed_minutes: null }] })}>Add traversal option</Button>
   </section>;
@@ -220,6 +205,7 @@ export function LocationMapStudio({
   fail: (message: string) => void;
 }) {
   const [world, setWorld] = useState<WorldProjection | null>(null);
+  const [ruleData, setRuleData] = useState<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>({ stats: [], abilities: [] });
   const [spaces, setSpaces] = useState<NavigationSpace[]>([]);
   const [spaceId, setSpaceId] = useState("");
   const [details, setDetails] = useState<SpaceDetails | null>(null);
@@ -244,12 +230,14 @@ export function LocationMapStudio({
   );
 
   const loadSpaces = useCallback(async () => {
-    const [nextWorld, nextSpaces] = await Promise.all([
+    const [nextWorld, nextSpaces, nextRules] = await Promise.all([
       api<WorldProjection>(`/projects/${projectId}/world`),
       api<NavigationSpace[]>(`/projects/${projectId}/spatial-v3/spaces`),
+      api<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>(`/projects/${projectId}/rules`),
     ]);
     setWorld(nextWorld);
     setSpaces(nextSpaces);
+    setRuleData({ stats: nextRules.stats ?? [], abilities: nextRules.abilities ?? [] });
     setSpaceId(current => current && nextSpaces.some(item => item.id === current) ? current : nextSpaces[0]?.id ?? "");
     if (!nextSpaces.length) {
       try { setMigration(await api<MigrationPreview>(`/projects/${projectId}/spatial-v3/migration-preview`)); }
@@ -709,7 +697,12 @@ export function LocationMapStudio({
           <TextField fullWidth type="number" label="Priority" value={encounterDraft.priority} onChange={event => setEncounterDraft({ ...encounterDraft, priority: Number(event.target.value) })}/>
         </Stack>
         {encounterDraft.trigger_kind === "distance" ? <Stack direction="row" spacing={1}><TextField fullWidth type="number" label="Rate / 100 units" value={encounterDraft.rate_per_100_units} onChange={event => setEncounterDraft({ ...encounterDraft, rate_per_100_units: Math.max(0, Number(event.target.value)) })}/><TextField fullWidth type="number" label="Minimum distance" value={encounterDraft.minimum_distance} onChange={event => setEncounterDraft({ ...encounterDraft, minimum_distance: Math.max(0, Number(event.target.value)) })}/></Stack> : <TextField type="number" label="Probability per transition (0–1)" value={encounterDraft.probability_per_transition ?? 1} onChange={event => setEncounterDraft({ ...encounterDraft, probability_per_transition: Math.max(0, Math.min(1, Number(event.target.value))) })}/>}
-        <JsonConditionField label="Policy condition" value={encounterDraft.conditions} onChange={conditions => setEncounterDraft({ ...encounterDraft, conditions })}/>
+        <div>
+          <h3>Policy condition</h3>
+          {encounterDraft.conditions
+            ? <ConditionExpressionEditor node={encounterDraft.conditions as ConditionExpression} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={conditions => setEncounterDraft({ ...encounterDraft, conditions })} onRemove={() => setEncounterDraft({ ...encounterDraft, conditions: null })}/>
+            : <Button onClick={() => setEncounterDraft({ ...encounterDraft, conditions: blankConditionExpression("compare", ruleData.stats) })}>Add condition</Button>}
+        </div>
         <h3>Candidates</h3>
         {encounterDraft.candidates.map((candidate, index) => <Paper key={index} variant="outlined" sx={{ p: 1 }}>
           <Stack direction="row" spacing={1}>
@@ -717,7 +710,11 @@ export function LocationMapStudio({
             <TextField type="number" label="Weight" value={candidate.weight} onChange={event => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, weight: Math.max(.01, Number(event.target.value) || 1) } : item) })}/>
             <Button color="error" onClick={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.filter((_, itemIndex) => itemIndex !== index) })}>Remove</Button>
           </Stack>
-          <JsonConditionField label="Candidate requirement" value={candidate.requirements} onChange={requirements => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })}/>
+          <div style={{ marginTop: 8 }}>
+            {candidate.requirements
+              ? <ConditionExpressionEditor node={candidate.requirements as ConditionExpression} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={requirements => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })} onRemove={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: null } : item) })}/>
+              : <Button size="small" onClick={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: blankConditionExpression("compare", ruleData.stats) } : item) })}>Add requirement</Button>}
+          </div>
         </Paper>)}
         <Button onClick={() => setEncounterDraft({ ...encounterDraft, candidates: [...encounterDraft.candidates, { location_id: locations[0]?.id ?? "", weight: 1, requirements: null }] })}>Add candidate</Button>
         <FormControlLabel control={<Switch checked={encounterDraft.enabled} onChange={event => setEncounterDraft({ ...encounterDraft, enabled: event.target.checked })}/>} label="Enabled"/>

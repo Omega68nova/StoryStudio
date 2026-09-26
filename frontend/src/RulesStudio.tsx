@@ -4,10 +4,10 @@ import { api } from "./api";
 import type { BulletCatalog } from "./BulletHellStudio";
 import { RuleIcon } from "./RuleIcon";
 import { FavoriteLibraryButton, type FavoriteSourceKind } from "./FavoriteLibraryButton";
-import type { AbilityAction, AbilityActionTarget, AbilityCost, AbilityDefinition, EffectDefinition, FormulaNode, RequirementExpression, RuleCost, RuleMigrationWarning, RuleObjectSelector, RuleOwnerKind, RuleSelectorKind, StatDefinition, ValueExpression } from "./types";
+import type { AbilityAction, AbilityActionTarget, AbilityCost, AbilityDefinition, EffectDefinition, FormulaNode, RequirementExpression, RuleCost, RuleMigrationWarning, RuleOwnerKind, StatDefinition } from "./types";
+import { blankConditionExpression, blankSelector, blankValueExpression, ConditionExpressionEditor, SelectorEditor, ValueExpressionEditor } from "./RuleConditionEditor";
 
 const ownerKinds: RuleOwnerKind[] = ["character", "item", "location", "faction", "lore_system", "fact", "plot_beat", "relationship", "ability", "effect", "weather", "outfit", "navigation_space", "map_feature"];
-const selectorKinds: RuleSelectorKind[] = ["actor", "source", "target", "current_location", "ability", "effect", "explicit", "relationship_target"];
 const actionTargets: AbilityActionTarget[] = ["actor", "target", "party", "location", "nearby_enemies", "faction_members", "relationship_target", "allies", "enemies", "all", "random"];
 const entityKinds = ["character", "location", "faction", "item", "lore_system", "fact", "plot_beat"];
 const blankStat: StatDefinition = { stat_key: "", label: "", description: "", compatible_owner_kinds: ["character"], default_value: 0, minimum: 0, maximum: 100, minimum_stat_key: null, maximum_stat_key: null, color: null, minimum_color: null, maximum_color: null, icon: null, display_style: "compact", integer_only: true, visibility: "public" };
@@ -49,37 +49,6 @@ function retargetAction(ability: AbilityDefinition, action: AbilityAction, targe
   return compatible.some(effect => effect.effect_key === next.effect_key) ? next : { ...next, effect_key: compatible[0]?.effect_key ?? "" };
 }
 
-function blankSelector(kind: RuleSelectorKind = "target"): RuleObjectSelector {
-  return kind === "explicit" ? { kind, object_kind: "location", object_id: "" } : { kind };
-}
-function blankValueExpression(kind: ValueExpression["kind"] = "constant", stats: StatDefinition[] = []): ValueExpression {
-  if (kind === "constant") return { kind, value: 0 };
-  if (kind === "stat") return { kind, selector: blankSelector("target"), stat_key: stats[0]?.stat_key ?? "" };
-  if (kind === "negate") return { kind, children: [{ kind: "constant", value: 0 }] };
-  return { kind, children: [{ kind: "constant", value: 0 }, { kind: "constant", value: 0 }] };
-}
-function SelectorEditor({ selector, onChange }: { selector: RuleObjectSelector; onChange: (value: RuleObjectSelector) => void }) {
-  return <Stack direction="row" spacing={1} flexWrap="wrap">
-    <TextField select size="small" label="Object" value={selector.kind} onChange={event => onChange(blankSelector(event.target.value as RuleSelectorKind))}>
-      {selectorKinds.map(value => <MenuItem key={value} value={value}>{value.replaceAll("_", " ")}</MenuItem>)}
-    </TextField>
-    {selector.kind === "explicit" && <><TextField select size="small" label="Object kind" value={selector.object_kind ?? "location"} onChange={event => onChange({ ...selector, object_kind: event.target.value as RuleOwnerKind })}>
-      {ownerKinds.map(value => <MenuItem key={value} value={value}>{value.replaceAll("_", " ")}</MenuItem>)}
-    </TextField><TextField size="small" label="Object ID/key" value={selector.object_id ?? ""} onChange={event => onChange({ ...selector, object_id: event.target.value })}/></>}
-  </Stack>;
-}
-function ValueExpressionEditor({ node, stats, onChange }: { node: ValueExpression; stats: StatDefinition[]; onChange: (value: ValueExpression) => void }) {
-  return <section className="panel formula-node">
-    <TextField select size="small" label="Value node" value={node.kind} onChange={event => onChange(blankValueExpression(event.target.value as ValueExpression["kind"], stats))}>
-      {["constant", "stat", "add", "subtract", "multiply", "divide", "minimum", "maximum", "negate"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
-    </TextField>
-    {node.kind === "constant" && <TextField size="small" type="number" label="Value" value={node.value} onChange={event => onChange({ ...node, value: Number(event.target.value) })}/>}
-    {node.kind === "stat" && <Stack spacing={1}><SelectorEditor selector={node.selector} onChange={selector => onChange({ ...node, selector })}/><TextField select size="small" label="Stat" value={node.stat_key} onChange={event => onChange({ ...node, stat_key: event.target.value })}>
-      {stats.map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label} · {item.compatible_owner_kinds.join(", ")}</MenuItem>)}
-    </TextField></Stack>}
-    {"children" in node && node.children.map((child, index) => <ValueExpressionEditor key={index} node={child} stats={stats} onChange={next => onChange({ ...node, children: node.children.map((value, childIndex) => childIndex === index ? next : value) } as ValueExpression)}/>)}
-  </section>;
-}
 function StatOverridesEditor({ ownerKind, stats, values, onChange }: { ownerKind: RuleOwnerKind; stats: StatDefinition[]; values: Record<string, number>; onChange: (value: Record<string, number>) => void }) {
   const compatible = stats.filter(item => item.compatible_owner_kinds.includes(ownerKind));
   if (!compatible.length) return null;
@@ -300,7 +269,11 @@ function AbilityDialog({ ability, editing, stats, effects, abilities, bulletSkil
   const updateAction = (index: number, patch: Partial<AbilityAction>) => setAbility({ ...ability, actions: ability.actions.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) });
   return <Dialog open onClose={close} maxWidth="lg" fullWidth><DialogTitle>{editing ? "Edit" : "Add"} ability</DialogTitle><DialogContent className="music-dialog"><TextField label="Stable key" disabled={editing} value={ability.ability_key} onChange={event => setAbility({ ...ability, ability_key: event.target.value })}/><TextField label="Name" value={ability.name} onChange={event => setAbility({ ...ability, name: event.target.value })}/><TextField multiline label="Description" value={ability.description} onChange={event => setAbility({ ...ability, description: event.target.value })}/><div className="rule-editor-icon-row"><RuleIcon icon={ability.icon} label={ability.name || ability.ability_key || "Ability"} fallback="A" size="large"/><TextField fullWidth label="Icon" helperText="Optional emoji, short semantic token, URL, or media path." value={ability.icon ?? ""} onChange={event => setAbility({ ...ability, icon: event.target.value || null })}/></div><Stack direction="row" spacing={1}><TextField select label="Kind" value={ability.ability_kind} onChange={event => setAbility({ ...ability, ability_kind: event.target.value as "active" | "passive" })}><MenuItem value="active">Active</MenuItem><MenuItem value="passive">Passive</MenuItem></TextField><TextField select label="Target" value={ability.target_type} onChange={event => setAbility({ ...ability, target_type: event.target.value as AbilityDefinition["target_type"] })}>{["self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>{(["character", "item"] as const).map(kind => <FormControlLabel key={kind} control={<Checkbox checked={ability.compatible_owner_kinds.includes(kind)} onChange={event => setAbility({ ...ability, compatible_owner_kinds: event.target.checked ? [...ability.compatible_owner_kinds, kind] : ability.compatible_owner_kinds.filter(value => value !== kind) })}/>} label={kind}/>)}</Stack>
     <StatOverridesEditor ownerKind="ability" stats={stats} values={ability.stats ?? {}} onChange={nextStats => setAbility({ ...ability, stats: nextStats })}/>
-    <h3>Requirements</h3>{ability.requirements?.kind ? <RequirementEditor node={ability.requirements} stats={stats} abilities={abilities} onChange={requirements => setAbility({ ...ability, requirements })} onRemove={() => setAbility({ ...ability, requirements: {} })}/> : <Button onClick={() => setAbility({ ...ability, requirements: blankRequirement("and", stats) })}>Add requirement tree</Button>}
+    <h3>Phase 8 conditions</h3>
+    {ability.condition_expression
+      ? <ConditionExpressionEditor node={ability.condition_expression} stats={stats} abilities={abilities} onChange={condition_expression => setAbility({ ...ability, condition_expression })} onRemove={() => setAbility({ ...ability, condition_expression: null })}/>
+      : <Button onClick={() => setAbility({ ...ability, condition_expression: blankConditionExpression("and", stats) })}>Add Rules V2 condition tree</Button>}
+    <h3>Legacy requirements</h3>{ability.requirements?.kind ? <RequirementEditor node={ability.requirements} stats={stats} abilities={abilities} onChange={requirements => setAbility({ ...ability, requirements })} onRemove={() => setAbility({ ...ability, requirements: {} })}/> : <Button onClick={() => setAbility({ ...ability, requirements: blankRequirement("and", stats) })}>Add requirement tree</Button>}
     <h3>Costs</h3>{ability.costs.map((cost, index) => <Stack key={index} direction="row" spacing={1}><TextField select label="Cost" value={cost.kind} onChange={event => setAbility({ ...ability, costs: ability.costs.map((item, itemIndex) => itemIndex === index ? blankCost(event.target.value as AbilityCost["kind"], stats) : item) })}>{["stat", "consume_source", "consume_fuel"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>{cost.kind === "stat" && <TextField select label="Stat" value={cost.stat_key ?? ""} onChange={event => updateCost(index, { stat_key: event.target.value })}>{stats.filter(item => item.compatible_owner_kinds.includes("character")).map(item => <MenuItem key={item.stat_key} value={item.stat_key}>{item.label}</MenuItem>)}</TextField>}{cost.kind === "consume_fuel" && <TextField label="Fuel item ID" value={cost.item_id ?? ""} onChange={event => updateCost(index, { item_id: event.target.value })}/>}<TextField type="number" label="Amount" value={cost.amount} onChange={event => updateCost(index, { amount: Number(event.target.value) })}/><Button onClick={() => setAbility({ ...ability, costs: ability.costs.filter((_, itemIndex) => itemIndex !== index) })}>Remove</Button></Stack>)}<Button disabled={!stats.length} onClick={() => setAbility({ ...ability, costs: [...ability.costs, blankCost("stat", stats)] })}>Add legacy cost</Button>
     <h3>Phase 8 generalized stat costs</h3>
     <p>Choose which object pays the cost; the amount itself can be a value expression.</p>
