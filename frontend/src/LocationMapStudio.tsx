@@ -75,6 +75,8 @@ type NavigationLayer = {
   label: string;
   position: number;
   visible: boolean;
+  textured: boolean;
+  editable: boolean;
   labels_mode: LabelsMode;
 };
 type EncounterCandidate = {
@@ -332,7 +334,7 @@ export function LocationMapStudio({
     } catch (cause) { fail(String(cause)); }
   }
 
-  async function createFeature(kind: FeatureKind, points = draftPoints) {
+  async function createFeature(kind: FeatureKind, points = draftPoints, closeLine = false) {
     if (!spaceId) return;
     if (kind === "surface" && points.length < 3) return;
     if ((kind === "corridor" || kind === "barrier") && points.length < 2) return;
@@ -343,7 +345,10 @@ export function LocationMapStudio({
       const ring = [...points, points[0]];
       geometry = { type: "Polygon", coordinates: [ring] };
     } else if (kind === "spot") geometry = { type: "Point", coordinates: points[0] };
-    else geometry = { type: "LineString", coordinates: points };
+    else {
+      const line = closeLine && points.length >= 3 ? [...points, points[0]] : points;
+      geometry = { type: "LineString", coordinates: line };
+    }
     const feature: MapFeature = {
       id,
       project_id: projectId,
@@ -517,6 +522,14 @@ export function LocationMapStudio({
     } catch (cause) { fail(String(cause)); }
   }
 
+  const layerSettings = useMemo(
+    () => Object.fromEntries((details?.layers ?? []).map(layer => [layer.layer_key, {
+      textured: layer.textured !== false,
+      editable: layer.editable !== false,
+      labels_mode: layer.labels_mode,
+    }])),
+    [details?.layers],
+  );
   const visibleFeatures = useMemo(() => {
     const visibility = new Map((details?.layers ?? []).map(layer => [layer.layer_key, layer.visible]));
     return (details?.features ?? []).filter(feature => feature.enabled && visibility.get(feature.render_layer) !== false);
@@ -574,6 +587,19 @@ export function LocationMapStudio({
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 390px", gap: 16, alignItems: "start" }}>
       <Stack spacing={1.5}>
         <Paper className="panel" sx={{ p: 1.5 }}>
+          <details>
+            <summary style={{ cursor: "pointer", fontWeight: 700 }}>How this map works</summary>
+            <div style={{ marginTop: 10, lineHeight: 1.5 }}>
+              <p><b>Navigation Space</b> is the coordinate canvas you are editing. A building interior can have its own separate space.</p>
+              <p><b>Semantic Location</b> is story meaning: City, Market, House, Room. A Surface or Spot can be assigned to one without making geometry and story identity the same object.</p>
+              <p><b>Surface</b> is an area you can stand in. <b>Corridor</b> is a thick traversable route such as a road or river. <b>Barrier</b> blocks crossing. <b>Connector</b> links positions/spaces such as doors, gates or portals.</p>
+              <p><b>Layers</b> only organize display/editing. Put roads on Roads, walls on Barriers, buildings/regions on Regions or Places. Changing a layer does not change traversal semantics.</p>
+              <p><b>Select</b> moves whole features. <b>Edit</b> changes vertices. Midpoint diamonds add vertices. Hold <b>E</b> and click a Corridor junction to grow a linked branch in the same road; moving that junction moves every branch endpoint attached there.</p>
+              <p><b>FREE</b> spaces allow movement unless blocked. <b>ROUTED</b> spaces require authored traversable surfaces/corridors.</p>
+            </div>
+          </details>
+        </Paper>
+        <Paper className="panel" sx={{ p: 1.5 }}>
           <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
             <ButtonGroup size="small">
               {(["select", "edit", "surface", "corridor", "barrier", "spot", "connector"] as Tool[]).map(value =>
@@ -593,6 +619,8 @@ export function LocationMapStudio({
               <Chip label={`${draftPoints.length} point${draftPoints.length === 1 ? "" : "s"}`}/>
               {(tool === "surface" && draftPoints.length >= 3 || (tool === "corridor" || tool === "barrier") && draftPoints.length >= 2) &&
                 <Button variant="contained" onClick={() => void createFeature(tool as FeatureKind)}>Finish</Button>}
+              {tool === "barrier" && draftPoints.length >= 3 &&
+                <Button variant="outlined" onClick={() => void createFeature("barrier", draftPoints, true)}>Close barrier</Button>}
               <Button onClick={() => setDraftPoints([])}>Cancel drawing</Button>
             </>}
           </Stack>
@@ -613,18 +641,33 @@ export function LocationMapStudio({
               setConnectorTargetSpace(spaces.find(item => item.id !== spaceId)?.id ?? spaceId);
               setConnectorTargetPoint(point);
             }}
+            layerSettings={layerSettings}
           />
         </Paper>
 
         <Paper className="panel" sx={{ p: 2 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center"><h2 style={{ margin: 0 }}>Layers</h2><small>Rendering only; not feature types.</small></Stack>
+          <div>
+            <h2 style={{ margin: 0 }}>Layers</h2>
+            <small>Layers are editor/display groups. They do not change what a feature means or how traversal works.</small>
+          </div>
+          <Alert severity="info" sx={{ mt: 1 }}>
+            Visible = draw the layer. Textured = use filled/thick styling instead of wireframe. Editable = allow selection, dragging and vertex editing. Labels controls map labels only.
+          </Alert>
           <Stack spacing={1} sx={{ mt: 1 }}>
-            {(details?.layers ?? []).map(layer => <Stack key={layer.layer_key} direction="row" spacing={1} alignItems="center">
-              <FormControlLabel control={<Switch checked={layer.visible} onChange={event => void saveLayer({ ...layer, visible: event.target.checked })}/>} label={layer.label}/>
-              <TextField select size="small" label="Labels" value={layer.labels_mode} onChange={event => void saveLayer({ ...layer, labels_mode: event.target.value as LabelsMode })}>
-                {(["hidden", "important", "all"] as LabelsMode[]).map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
-              </TextField>
-            </Stack>)}
+            {(details?.layers ?? []).map(layer => <Paper key={layer.layer_key} variant="outlined" sx={{ p: 1 }}>
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                <div style={{ minWidth: 145 }}><b>{layer.label}</b><div><small>{layer.layer_key}</small></div></div>
+                <FormControlLabel control={<Switch size="small" checked={layer.visible} onChange={event => void saveLayer({ ...layer, visible: event.target.checked })}/>} label="Visible"/>
+                <FormControlLabel control={<Switch size="small" checked={layer.textured !== false} onChange={event => void saveLayer({ ...layer, textured: event.target.checked })}/>} label="Textured"/>
+                <FormControlLabel control={<Switch size="small" checked={layer.editable !== false} onChange={event => {
+                  if (!event.target.checked && featureDraft?.render_layer === layer.layer_key) setSelectedFeatureId(null);
+                  void saveLayer({ ...layer, editable: event.target.checked });
+                }}/>} label="Editable"/>
+                <TextField select size="small" label="Labels" value={layer.labels_mode} onChange={event => void saveLayer({ ...layer, labels_mode: event.target.value as LabelsMode })}>
+                  {(["hidden", "important", "all"] as LabelsMode[]).map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+                </TextField>
+              </Stack>
+            </Paper>)}
           </Stack>
         </Paper>
 
@@ -690,6 +733,22 @@ export function LocationMapStudio({
               <TextField size="small" type="number" label="Travel minutes override" value={featureDraft.properties.travel_minutes ?? ""} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, travel_minutes: event.target.value === "" ? null : Math.max(0, Number(event.target.value)) } })}/>
               <FormControlLabel control={<Switch checked={featureDraft.properties.bidirectional !== false} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, bidirectional: event.target.checked } })}/>} label="Bidirectional"/>
             </>}
+            {featureDraft.feature_kind === "barrier" && (featureDraft.geometry.type === "LineString" || featureDraft.geometry.type === "MultiLineString") && <Stack direction="row" spacing={1}>
+              <Button size="small" onClick={() => {
+                const next = structuredClone(featureDraft);
+                const close = (line: Point[]) => line.length >= 3 && (line[0][0] !== line[line.length - 1][0] || line[0][1] !== line[line.length - 1][1]) ? [...line, line[0]] : line;
+                if (next.geometry.type === "LineString") next.geometry.coordinates = close(next.geometry.coordinates);
+                else next.geometry.coordinates = next.geometry.coordinates.map(close);
+                setFeatureDraft(next);
+              }}>Close loop</Button>
+              <Button size="small" onClick={() => {
+                const next = structuredClone(featureDraft);
+                const open = (line: Point[]) => line.length > 2 && line[0][0] === line[line.length - 1][0] && line[0][1] === line[line.length - 1][1] ? line.slice(0, -1) : line;
+                if (next.geometry.type === "LineString") next.geometry.coordinates = open(next.geometry.coordinates);
+                else next.geometry.coordinates = next.geometry.coordinates.map(open);
+                setFeatureDraft(next);
+              }}>Open loop</Button>
+            </Stack>}
             {traversalOf(featureDraft) && <TraversalEditor value={traversalOf(featureDraft)!} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={traversal => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, traversal } })}/>}
             <Button variant="contained" onClick={() => void saveFeature()}>Save feature</Button>
             {featureDraft.semantic_location_id && !spaces.some(space => space.owner_location_id === featureDraft.semantic_location_id) && <Button onClick={() => { setCreateSpaceLocation(featureDraft.semantic_location_id!); setCreateSpaceMode("routed"); setCreateSpaceOpen(true); }}>Create ROUTED interior for this location</Button>}
