@@ -11,6 +11,7 @@ from app.domain.world import (
     DomainModel,
     FormulaNode,
     RequirementExpression,
+    resolve_stat_bounds,
 )
 
 
@@ -366,6 +367,88 @@ class ConditionEvaluator:
             )
         raise RuleEvaluationError(f"Unsupported condition node: {kind}")
 
+
+
+
+class RuleCostKind(StrEnum):
+    STAT = "stat"
+
+
+class RuleCost(DomainModel):
+    kind: RuleCostKind = RuleCostKind.STAT
+    owner: RuleObjectSelector
+    stat_key: str
+    amount: ValueExpression
+
+
+class RuleCostExecutor:
+    def __init__(
+        self,
+        resolver: RuleObjectResolver | None = None,
+        values: ValueExpressionEvaluator | None = None,
+    ) -> None:
+        self.resolver = resolver or RuleObjectResolver()
+        self.values = values or ValueExpressionEvaluator(self.resolver)
+
+    def normalize(
+        self,
+        costs: list[RuleCost],
+        context: RuleEvaluationContext,
+        *,
+        stat_lookup: StatDefinitionLookup,
+    ) -> list[dict[str, Any]]:
+        working = context.model_copy(deep=True)
+        events: list[dict[str, Any]] = []
+
+        def update_snapshot(owner: RuleObjectSnapshot, stat_key: str, value: float) -> None:
+            owner.stats[stat_key] = value
+            for snapshot in working.bindings.values():
+                if snapshot.id == owner.id and snapshot.kind == owner.kind:
+                    snapshot.stats[stat_key] = value
+            collection = "relations" if owner.kind == "relationship" else "entities"
+            raw = working.projection.get(collection, {}).get(owner.id)
+            if isinstance(raw, dict):
+                raw.setdefault("stats", {})[stat_key] = value
+
+        for cost in costs:
+            owner = self.resolver.resolve(cost.owner, working)
+            if owner is None:
+                raise RuleEvaluationError(f"Cost owner {cost.owner.kind} is unavailable")
+            definition = stat_lookup(cost.stat_key, owner.kind)
+            if definition is None:
+                raise RuleEvaluationError(
+                    f"{owner.kind} is incompatible with cost stat {cost.stat_key}"
+                )
+            amount, inputs = self.values.evaluate(
+                cost.amount,
+                working,
+                stat_lookup=stat_lookup,
+            )
+            if amount < 0:
+                raise RuleEvaluationError("Rule cost amount cannot be negative")
+            current = float(owner.stats.get(cost.stat_key, definition.default_value))
+            owner_values = dict(owner.stats)
+            owner_values[cost.stat_key] = current
+            bounds = resolve_stat_bounds(
+                definition,
+                owner_values,
+                lambda key: stat_lookup(key, owner.kind),
+            )
+            result = current - amount
+            if result < float(bounds.minimum) - 1e-9:
+                raise RuleEvaluationError(f"{owner.id} lacks enough {definition.label}")
+            value: int | float = int(round(result)) if definition.integer_only else result
+            events.append({
+                "relation_id" if owner.kind == "relationship" else "entity_id": owner.id,
+                "stat_key": cost.stat_key,
+                "previous_value": current,
+                "value": value,
+                "cost_owner_kind": owner.kind,
+                "resolved_cost_inputs": inputs,
+                "resolved_cost_amount": amount,
+            })
+            update_snapshot(owner, cost.stat_key, float(value))
+        return events
 
 def value_expression_from_formula(node: FormulaNode) -> ValueExpression:
     kind = str(node.kind)

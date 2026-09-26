@@ -961,6 +961,7 @@ class EffectDefinition(DomainModel):
     target_stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     operation: EffectOperation = EffectOperation.ADD
     formula: FormulaNode
+    value_expression: dict[str, Any] | None = None
     clock: EffectClock = EffectClock.WORLD_ACTIONS
     duration: int = Field(default=0, ge=-1)
     tick_interval: int = Field(default=0, ge=0)
@@ -1094,6 +1095,7 @@ class Ability(DomainModel):
     target_type: AbilityTarget = AbilityTarget.SELF
     requirements: RequirementExpression = Field(default_factory=RequirementExpression)
     costs: list[AbilityCost] = Field(default_factory=list)
+    rule_costs: list[dict[str, Any]] = Field(default_factory=list)
     actions: list[AbilityAction] = Field(default_factory=list)
     passive_triggers: list[PassiveTrigger] = Field(default_factory=list)
     icon: str | None = None

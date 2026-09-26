@@ -305,3 +305,92 @@ def test_runtime_condition_can_read_explicit_location_stats() -> None:
             "right": {"kind": "constant", "value": 20},
         },
     )
+
+
+def test_generalized_stat_cost_can_charge_source_item() -> None:
+    from app.domain.rules_v2 import RuleCost, RuleCostExecutor
+    from app.domain.world import Stat
+
+    durability = Stat.model_validate({
+        "project_id": "project", "stat_key": "durability", "label": "Durability",
+        "compatible_owner_kinds": ["item"], "default_value": 10, "minimum": 0, "maximum": 10,
+    })
+    context = RuleEvaluationContext(bindings={
+        "source": snapshot("wand", "item", {"durability": 4}),
+    })
+    events = RuleCostExecutor().normalize(
+        [RuleCost.model_validate({
+            "owner": {"kind": "source"},
+            "stat_key": "durability",
+            "amount": {"kind": "constant", "value": 1},
+        })],
+        context,
+        stat_lookup=lambda key, owner: durability if key == "durability" and owner == "item" else None,
+    )
+    assert events[0]["entity_id"] == "wand"
+    assert events[0]["previous_value"] == 4
+    assert events[0]["value"] == 3
+
+
+def test_generalized_costs_are_cumulative() -> None:
+    import pytest
+    from app.domain.rules_v2 import RuleCost, RuleCostExecutor, RuleEvaluationError
+    from app.domain.world import Stat
+
+    mana = Stat.model_validate({
+        "project_id": "project", "stat_key": "mana", "label": "Mana",
+        "compatible_owner_kinds": ["location"], "default_value": 5, "minimum": 0, "maximum": 5,
+    })
+    context = RuleEvaluationContext(projection={"entities": {
+        "shrine": {"id": "shrine", "kind": "location", "name": "Shrine", "stats": {"mana": 5}, "state": {}}
+    }, "relations": {}})
+    costs = [RuleCost.model_validate({
+        "owner": {"kind": "explicit", "object_id": "shrine", "object_kind": "location"},
+        "stat_key": "mana",
+        "amount": {"kind": "constant", "value": amount},
+    }) for amount in (3, 3)]
+    with pytest.raises(RuleEvaluationError, match="lacks enough"):
+        RuleCostExecutor().normalize(
+            costs, context,
+            stat_lookup=lambda key, owner: mana if key == "mana" and owner == "location" else None,
+        )
+
+
+def test_phase8_effect_and_rule_costs_round_trip_repository(tmp_path) -> None:
+    from app.database import Database
+    from app.data import DataProvider
+    from app.domain.world import Ability, EffectDefinition, Stat
+
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    project_id = db.create_project("phase8 persistence")["id"]
+    data.rules.save_stat(Stat.model_validate({
+        "project_id": project_id, "stat_key": "power", "label": "Power",
+        "compatible_owner_kinds": ["character", "item", "location"],
+        "default_value": 0, "minimum": 0, "maximum": 100,
+    }))
+    data.rules.save_effect(EffectDefinition.model_validate({
+        "project_id": project_id, "effect_key": "scaled", "name": "Scaled",
+        "target_stat_key": "power", "formula": {"kind": "constant", "value": 1},
+        "value_expression": {
+            "kind": "add",
+            "children": [
+                {"kind": "stat", "selector": {"kind": "source"}, "stat_key": "power"},
+                {"kind": "stat", "selector": {"kind": "current_location"}, "stat_key": "power"},
+            ],
+        },
+    }))
+    data.rules.save_ability(Ability.model_validate({
+        "project_id": project_id, "ability_key": "channel", "name": "Channel",
+        "compatible_owner_kinds": ["item"], "target_type": "character",
+        "rule_costs": [{
+            "owner": {"kind": "source"}, "stat_key": "power",
+            "amount": {"kind": "constant", "value": 2},
+        }],
+        "actions": [{"kind": "apply_effect", "target": "target", "effect_key": "scaled"}],
+    }))
+    loaded_effect = data.rules.effect(project_id, "scaled")
+    loaded_ability = data.rules.ability(project_id, "channel")
+    assert loaded_effect is not None and loaded_effect.value_expression["kind"] == "add"
+    assert loaded_ability is not None and loaded_ability.rule_costs[0]["owner"]["kind"] == "source"
