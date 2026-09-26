@@ -433,25 +433,7 @@ class WorldEngine:
                 continue
 
             major, reason = False, None
-            if tool == "upsertSpatialV3Space":
-            return [("spatial_v3.space_upserted", None, args)]
-        if tool == "removeSpatialV3Space":
-            return [("spatial_v3.space_removed", None, args)]
-        if tool == "upsertSpatialV3Feature":
-            return [("spatial_v3.feature_upserted", None, args)]
-        if tool == "removeSpatialV3Feature":
-            return [("spatial_v3.feature_removed", None, args)]
-        if tool == "upsertSpatialV3Encounter":
-            return [("spatial_v3.encounter_upserted", None, args)]
-        if tool == "removeSpatialV3Encounter":
-            return [("spatial_v3.encounter_removed", None, args)]
-        if tool == "updateSpatialV3Layer":
-            return [("spatial_v3.layer_updated", None, args)]
-        if tool == "bindSpatialV3LocationSpace":
-            return [("spatial_v3.location_space_bound", None, args)]
-        if tool == "unbindSpatialV3LocationSpace":
-            return [("spatial_v3.location_space_unbound", None, args)]
-        if tool == "createEntity":
+            if tool == "createEntity":
                 kind = arguments.get("kind")
                 name = str(arguments.get("name", "")).strip()
                 if kind not in ENTITY_KINDS or not name:
@@ -1081,6 +1063,24 @@ class WorldEngine:
         rule_events = RuleEventProjector.mutation_events(tool, args)
         if rule_events is not None:
             return rule_events
+        if tool == "upsertSpatialV3Space":
+            return [("spatial_v3.space_upserted", None, args)]
+        if tool == "removeSpatialV3Space":
+            return [("spatial_v3.space_removed", None, args)]
+        if tool == "upsertSpatialV3Feature":
+            return [("spatial_v3.feature_upserted", None, args)]
+        if tool == "removeSpatialV3Feature":
+            return [("spatial_v3.feature_removed", None, args)]
+        if tool == "upsertSpatialV3Encounter":
+            return [("spatial_v3.encounter_upserted", None, args)]
+        if tool == "removeSpatialV3Encounter":
+            return [("spatial_v3.encounter_removed", None, args)]
+        if tool == "updateSpatialV3Layer":
+            return [("spatial_v3.layer_updated", None, args)]
+        if tool == "bindSpatialV3LocationSpace":
+            return [("spatial_v3.location_space_bound", None, args)]
+        if tool == "unbindSpatialV3LocationSpace":
+            return [("spatial_v3.location_space_unbound", None, args)]
         if tool == "createEntity":
             entity = {
                 "id": args["entity_id"], "kind": args["kind"], "name": args["name"],
