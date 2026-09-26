@@ -225,6 +225,7 @@ class SpatialV3Service:
                 navigation_space_id,
             )
             if policy.enabled
+            and str(policy.trigger_kind) == "distance"
             and (
                 policy.navigation_space_id == navigation_space_id
                 or policy.feature_id in active_feature_ids
@@ -291,6 +292,96 @@ class SpatialV3Service:
             "enabled": bool(unconditional),
             "rate_per_100_units": rate,
             "probability": probability,
+            "candidates": candidates,
+            "policy_ids": [policy.id for policy in contributors],
+            "unresolved_conditions": unresolved,
+        }
+
+
+    def transition_encounter_context(
+        self,
+        *,
+        project_id: str,
+        navigation_space_id: str,
+        feature_id: str,
+    ) -> dict[str, Any]:
+        """Resolve a one-roll encounter for a connector/feature transition."""
+        feature = self.repository.feature(feature_id)
+        if (
+            not feature
+            or feature.project_id != project_id
+            or feature.navigation_space_id != navigation_space_id
+        ):
+            raise SpatialV3Error("Transition feature not found")
+
+        policies = [
+            policy
+            for policy in self.repository.encounter_policies(
+                project_id,
+                navigation_space_id,
+            )
+            if policy.enabled
+            and str(policy.trigger_kind) == "transition"
+            and (
+                policy.navigation_space_id == navigation_space_id
+                or policy.feature_id == feature_id
+            )
+        ]
+        policies.sort(key=lambda item: (float(item.priority), str(item.id)))
+
+        contributors: list[EncounterPolicy] = []
+        disabled = False
+        for policy in policies:
+            mode = str(policy.mode)
+            if mode == "disabled":
+                contributors = []
+                disabled = True
+                continue
+            if mode == "replace":
+                contributors = []
+                disabled = False
+            if mode in {"replace", "augment"}:
+                contributors.append(policy)
+
+        if disabled and not contributors:
+            return {
+                "enabled": False,
+                "probability": 0,
+                "candidates": [],
+                "policy_ids": [policy.id for policy in policies],
+                "unresolved_conditions": [],
+            }
+
+        unconditional = [policy for policy in contributors if not policy.conditions]
+        unresolved = [
+            policy.model_dump(mode="json")
+            for policy in contributors
+            if policy.conditions
+        ]
+
+        # Multiple augmenting transition probabilities are independent chances.
+        no_encounter = 1.0
+        candidate_weights: dict[str, float] = defaultdict(float)
+        candidate_sources: dict[str, list[str]] = defaultdict(list)
+        for policy in unconditional:
+            probability = float(policy.probability_per_transition or 0)
+            no_encounter *= 1 - probability
+            for candidate in policy.candidates:
+                candidate_weights[candidate.location_id] += float(candidate.weight)
+                candidate_sources[candidate.location_id].append(policy.id)
+
+        candidates = [
+            {
+                "location_id": location_id,
+                "weight": weight,
+                "policy_ids": candidate_sources[location_id],
+            }
+            for location_id, weight in candidate_weights.items()
+        ]
+        candidates.sort(key=lambda item: (-item["weight"], item["location_id"]))
+        return {
+            "enabled": bool(unconditional),
+            "probability": 1 - no_encounter,
             "candidates": candidates,
             "policy_ids": [policy.id for policy in contributors],
             "unresolved_conditions": unresolved,
