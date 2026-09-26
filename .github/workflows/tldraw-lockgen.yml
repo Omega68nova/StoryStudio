@@ -16,6 +16,7 @@ jobs:
       - name: Generate lockfile
         working-directory: frontend
         run: npm install --package-lock-only --ignore-scripts
-      - name: Emit compressed lockfile
-        working-directory: frontend
-        run: gzip -9c package-lock.json | base64 -w0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tldraw-package-lock
+          path: frontend/package-lock.json
