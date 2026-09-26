@@ -113,6 +113,34 @@ class SpatialV3Service:
             raise SpatialV3Error(f"Invalid geometry for feature {feature.id}")
         return geometry
 
+    def space_bounds_geometry(self, space: NavigationSpace) -> BaseGeometry | None:
+        """Return explicit bounds or the derived inherited parent footprint."""
+        _require_geometry()
+        if space.owner_location_id:
+            from app.services.spatial_v3_context import (
+                SpatialV3ContextError,
+                inherited_parent_context,
+            )
+            try:
+                context = inherited_parent_context(
+                    self.repository,
+                    project_id=space.project_id,
+                    space=space,
+                )
+            except SpatialV3ContextError as exc:
+                raise SpatialV3Error(str(exc)) from exc
+            if context is not None:
+                geometry = shape(context["boundary"])
+                if geometry.is_empty or not geometry.is_valid:
+                    raise SpatialV3Error(f"Invalid inherited bounds for navigation space {space.id}")
+                return geometry
+        if space.bounds is None:
+            return None
+        geometry = shape(space.bounds.model_dump(mode="json"))
+        if geometry.is_empty or not geometry.is_valid:
+            raise SpatialV3Error(f"Invalid bounds for navigation space {space.id}")
+        return geometry
+
     def point_membership(
         self,
         *,
@@ -201,6 +229,10 @@ class SpatialV3Service:
             x=x,
             y=y,
         )
+        bounds_geometry = self.space_bounds_geometry(space)
+        point = Point(float(x), float(y))
+        within_bounds = bounds_geometry is None or bounds_geometry.covers(point)
+
         traversable = [
             *membership["surfaces"],
             *membership["corridors"],
@@ -217,12 +249,12 @@ class SpatialV3Service:
 
         # Free maps permit unassigned base space. Routed maps are void unless a
         # surface/corridor explicitly supplies occupiable space.
-        allowed = str(space.navigation_mode) == "free"
+        allowed = within_bounds and str(space.navigation_mode) == "free"
         multiplier = float(space.base_travel_multiplier)
         source_feature_id: str | None = None
         alternatives: list[dict[str, Any]] = []
 
-        if features:
+        if features and within_bounds:
             winner = features[0]
             props = winner.properties
             if isinstance(props, (SurfaceProperties, CorridorProperties)):
@@ -242,6 +274,7 @@ class SpatialV3Service:
                 "travel_multiplier": multiplier,
                 "source_feature_id": source_feature_id,
                 "conditional_options": alternatives,
+                "within_bounds": within_bounds,
             },
         }
 
