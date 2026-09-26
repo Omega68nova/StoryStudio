@@ -298,6 +298,11 @@ class RulesRuntime:
                 inventory_quantities[item_id] = current - quantity
             effects: list[dict[str, Any]] = []
             participants = {"actor": self.participant(project_id, actor_raw), "source": self.participant(project_id, source_raw)}
+            timing_projection = copy.deepcopy(projection)
+            timing_projection["world_action_count"] = int(projection.get("world_action_count", 0)) + 1
+            target_counts = dict(projection.get("target_action_counts", {}))
+            target_counts[str(actor.id)] = int(target_counts.get(str(actor.id), 0)) + 1
+            timing_projection["target_action_counts"] = target_counts
             proposed_names = {str(entity.get("name", "")).casefold() for entity in projection["entities"].values() if not entity.get("state", {}).get("archived")}
             for action in ability.actions:
                 if action.destination_id: self.entity(projection, action.destination_id, "location")
@@ -311,7 +316,7 @@ class RulesRuntime:
                 if str(action.kind) == "apply_effect":
                     definition = self.data.rules.effect(project_id, str(action.effect_key))
                     if not definition or not definition.enabled: raise DomainOperationError(f"Unknown effect: {action.effect_key}")
-                    effects.extend(self.normalize_effect(project_id, projection, definition, target, participants, action.duration_override, action.tick_override) for target in resolved)
+                    effects.extend(self.normalize_effect(project_id, timing_projection, definition, target, participants, action.duration_override, action.tick_override) for target in resolved)
                 else: effects.extend(self.normalize_action(action, target, actor) for target in (resolved[:1] if str(action.kind) in {"advance_time", "play_noise", "create"} else resolved))
         except DomainOperationError as exc: raise RulesRuntimeError(str(exc)) from exc
         return {"actor_id": actor.id, "target_id": primary.id, "ability_key": ability.ability_key, "ability_name": ability.name, "source_item_id": source_item_id, "costs": execution.costs, "inventory_changes": inventory_changes, "effects": effects}
@@ -374,8 +379,12 @@ class RulesRuntime:
         working, emitted, queue = copy.deepcopy(projection), [], []
         for event_type, entity_id, payload in events:
             self.apply_event(working, event_type, payload, entity_id)
-            hook = "damage" if event_type == "stat.changed" and payload.get("operation") == "subtract" else hooks.get(event_type)
-            if hook: queue.append((hook, entity_id or payload.get("entity_id"), payload, 1, ()))
+            owner = entity_id or payload.get("entity_id")
+            hook = hooks.get(event_type)
+            if hook:
+                queue.append((hook, owner, payload, 1, ()))
+            if event_type == "stat.changed" and payload.get("operation") == "subtract":
+                queue.append(("damage", owner, payload, 1, ()))
         definitions = self.data.rules.abilities(project_id); by_key = {item.ability_key: item for item in definitions}
         while queue:
             hook, owner_id, payload, depth, ancestry = queue.pop(0)
@@ -444,7 +453,11 @@ class RulesRuntime:
                                 if not effect: raise RulesRuntimeError(f"Passive ability references missing effect {action.effect_key}")
                                 row = self.normalize_effect(project_id, working, effect, target, participants, action.duration_override, action.tick_override)
                             else: row = self.normalize_action(action, target, actor)
-                            emitted.append(row); event_type = str(row["event_type"]); event_payload = {key: value for key, value in row.items() if key != "event_type"}; self.apply_event(working, event_type, event_payload, row.get("entity_id")); next_hook = "damage" if event_type == "stat.changed" and row.get("operation") == "subtract" else hooks.get(event_type)
-                            if next_hook: queue.append((next_hook, row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                            emitted.append(row); event_type = str(row["event_type"]); event_payload = {key: value for key, value in row.items() if key != "event_type"}; self.apply_event(working, event_type, event_payload, row.get("entity_id"))
+                            next_hook = hooks.get(event_type)
+                            if next_hook:
+                                queue.append((next_hook, row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
+                            if event_type == "stat.changed" and row.get("operation") == "subtract":
+                                queue.append(("damage", row.get("entity_id"), row, depth + 1, (*ancestry, marker)))
                             if len(emitted) > 64: raise RulesRuntimeError("Passive ability cascade exceeds 64 derived events")
         return emitted

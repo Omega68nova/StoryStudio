@@ -339,3 +339,19 @@ The experimental Spatial V3 pathfinder now accepts a shared condition evaluator.
   traversal requirements against that branch projection.
 
 This is the first cross-system consumer of the shared Phase 8 condition engine.
+
+
+### Regressions salvaged from PR #13
+
+The imported regression suite exposed four still-relevant defects on current
+master. Phase 8 now ports only those fixes:
+
+- active timed effects created by an ability start after the committing action;
+- NOT requirement migration preserves the `not_child` edge;
+- damage stat changes trigger both general `stat_changed` and `damage`
+  passive hooks, restoring recursive-loop detection;
+- legacy persisted ability ID/display-name references are rewritten to canonical
+  `ability_key` values.
+
+The focused CI now also runs Spatial V3 pathfinding tests because Phase 8 shares
+its condition evaluator with conditional traversal.
