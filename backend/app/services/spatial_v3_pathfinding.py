@@ -6,10 +6,10 @@ from dataclasses import dataclass
 from typing import Any
 
 try:
-    from shapely.geometry import LineString, Point
+    from shapely.geometry import LineString, Point, shape
     from shapely.geometry.base import BaseGeometry
 except ImportError:  # pragma: no cover
-    LineString = Point = None  # type: ignore[assignment]
+    LineString = Point = shape = None  # type: ignore[assignment]
     BaseGeometry = Any  # type: ignore[misc,assignment]
 
 from app.data.spatialV3Repository import SpatialV3Repository
