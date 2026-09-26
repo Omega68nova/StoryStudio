@@ -354,14 +354,24 @@ export function LocationMapStudio({
   }, []);
 
   const load = useCallback(async () => {
-    const [nextMap, nextWorld, nextSettings] = await Promise.all([
+    const [nextMap, nextWorld, nextSettings, nextAmbient] = await Promise.all([
       api<SpatialMap>(`/projects/${projectId}/spatial/map${layerId ? `?location_id=${layerId}` : ""}`),
       api<WorldProjection>(`/projects/${projectId}/world`),
       api<EnvironmentSettings>(`/projects/${projectId}/environment/settings`),
+      api<AmbientData>(`/projects/${projectId}/environment/ambient`),
     ]);
     setMap(nextMap);
     setWorld(nextWorld);
     setEnvironmentSettings(nextSettings);
+    setAmbient(nextAmbient);
+    setPreviewWeatherId(current => nextSettings.weather.some(item => item.id === current && item.enabled)
+      ? current
+      : (nextSettings.weather.find(item => item.id === nextSettings.initial_weather_id && item.enabled)?.id
+        ?? nextSettings.weather.find(item => item.enabled)?.id
+        ?? ""));
+    setPreviewTimePhaseId(current => nextSettings.time_phases.some(item => item.id === current && item.enabled)
+      ? current
+      : (nextSettings.time_phases.find(item => item.enabled)?.id ?? ""));
     if (!layerId && nextMap.root_location_id) setLayerId(nextMap.root_location_id);
   }, [projectId, layerId]);
 
@@ -375,7 +385,10 @@ export function LocationMapStudio({
 
   useEffect(() => {
     setEditorDraft(selectedLocation ? locationDraft(selectedLocation) : null);
-  }, [selectedLocation?.id, world]);
+    const nextSets = ambientSetsFor(ambient.assignments, selectedLocation?.id);
+    setAmbientSets(nextSets);
+    setAmbientSavedSnapshot(JSON.stringify(nextSets));
+  }, [selectedLocation?.id, world, ambient.assignments]);
 
   const loadBackgrounds = useCallback(async (locationId: string) => {
     const rows = await api<BackgroundRecord[]>(`/projects/${projectId}/environment/locations/${locationId}/backgrounds`);
