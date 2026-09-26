@@ -237,7 +237,13 @@ function renderGeometry(
       <polyline
         points={line.map(point => point.join(",")).join(" ")}
         fill="none"
-        className={feature.feature_kind === "barrier" ? "location-map-barrier" : "location-map-connection"}
+        className={
+          feature.feature_kind === "barrier"
+            ? "location-map-barrier"
+            : feature.feature_kind === "corridor"
+              ? "location-map-corridor"
+              : "location-map-connection"
+        }
         strokeWidth={width}
         strokeLinecap="round"
         strokeLinejoin="round"

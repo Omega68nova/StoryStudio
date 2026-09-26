@@ -1182,6 +1182,13 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   pointer-events: stroke;
   cursor: pointer;
 }
+.location-map-corridor {
+  fill: none;
+  stroke: #8f877d;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
 .location-map-connection.door {
   stroke: #527f98;
 }
