@@ -246,7 +246,6 @@ class SpatialFeatureShapeUtil extends ShapeUtil<SpatialShape> {
   }
 
   override canResize() { return false; }
-  override canRotate() { return false; }
 
   override getGeometry(shape: SpatialShape) {
     return geometry2d(shape);
@@ -327,7 +326,7 @@ class SpatialFeatureShapeUtil extends ShapeUtil<SpatialShape> {
   }
 
   override onHandleDrag(shape: SpatialShape, { handle, initial }: TLHandleDragInfo<SpatialShape>) {
-    const editable = simpleEditablePoints(initial);
+    const editable = simpleEditablePoints(initial ?? shape);
     if (!editable) return;
     const points = editable.points.map(point => [...point] as SpatialCanvasPoint);
     const [kind, rawIndex] = handle.id.split(":");
@@ -338,7 +337,11 @@ class SpatialFeatureShapeUtil extends ShapeUtil<SpatialShape> {
     } else if (kind === "create") {
       points.splice(index + 1, 0, [handle.x, handle.y]);
     } else return;
-    return { props: { geometryJson: replaceSimplePoints(shape, points, editable.closed) } };
+    return {
+      id: shape.id,
+      type: SPATIAL_SHAPE,
+      props: { geometryJson: replaceSimplePoints(shape, points, editable.closed) },
+    };
   }
 }
 
@@ -496,7 +499,7 @@ export function SpatialTldrawCanvas({
       }
     }, { source: "user", scope: "document" });
 
-    const unlistenEvent = editor.on("event", info => {
+    const handleEditorEvent = (info: Parameters<Parameters<Editor["on"]>[1]>[0]) => {
       if (info.type === "keyboard") {
         if (info.key?.toLowerCase() === "e") eHeldRef.current = info.name !== "key_up";
         return;
@@ -569,13 +572,14 @@ export function SpatialTldrawCanvas({
           });
         }
       }
-    });
+    };
+    editor.on("event", handleEditorEvent);
 
     editor.zoomToFit({ animation: { duration: 0 } });
 
     return () => {
       unlistenStore();
-      unlistenEvent();
+      editor.off("event", handleEditorEvent);
       for (const timer of timersRef.current.values()) window.clearTimeout(timer);
       timersRef.current.clear();
       editorRef.current = null;
