@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Alert, Button, Chip, Paper, Stack } from "@mui/material";
 import { api } from "./api";
-import type { WorldEntity, WorldProjection } from "./types";
+import type { SceneEnvironment, UserAmbientPreferences, WorldEntity, WorldProjection } from "./types";
 
 type Point = [number, number];
 type Geometry =
@@ -32,6 +32,12 @@ type Space = {
 type SpaceDetails = {
   space: Space;
   features: Feature[];
+};
+
+type PlayingAmbient = {
+  audio: HTMLAudioElement;
+  gain: number;
+  target: number;
 };
 
 const PLAYER_RADIUS = 0.65;
@@ -144,8 +150,12 @@ export function SpatialPlaytestPage({
   const [player, setPlayer] = useState<Point>([50, 50]);
   const [message, setMessage] = useState("WASD to move · E to interact");
   const [error, setError] = useState("");
+  const [scene, setScene] = useState<SceneEnvironment | null>(null);
+  const [ambientPrefs, setAmbientPrefs] = useState<UserAmbientPreferences>({ enabled: true, master_volume: 1 });
+  const [audioArmed, setAudioArmed] = useState(false);
   const keys = useRef(new Set<string>());
   const lastTime = useRef<number | null>(null);
+  const activeAmbient = useRef(new Map<string, PlayingAmbient>());
 
   const locations = useMemo(
     () => new Map(Object.values(world?.entities ?? {}).filter((item: WorldEntity) => item.kind === "location").map(item => [item.id, item])),
@@ -153,10 +163,12 @@ export function SpatialPlaytestPage({
   );
 
   const load = useCallback(async () => {
-    const [nextWorld, nextSpaces] = await Promise.all([
+    const [nextWorld, nextSpaces, nextAmbientPrefs] = await Promise.all([
       api<WorldProjection>(`/projects/${projectId}/world`),
       api<Space[]>(`/projects/${projectId}/spatial-v3/spaces`),
+      api<UserAmbientPreferences>("/preferences/ambient"),
     ]);
+    setAmbientPrefs(nextAmbientPrefs);
     const pairs = await Promise.all(nextSpaces.map(async space => [
       space.id,
       await api<SpaceDetails>(`/projects/${projectId}/spatial-v3/spaces/${space.id}`),
@@ -178,6 +190,102 @@ export function SpatialPlaytestPage({
     () => features.filter(feature => feature.feature_kind === "barrier"),
     [features],
   );
+
+  const activeSemanticLocationId = useMemo(() => {
+    if (!current) return null;
+    const containing = features
+      .filter(feature => feature.semantic_location_id)
+      .filter(feature =>
+        feature.feature_kind === "surface"
+          ? pointInGeometry(player, feature.geometry)
+          : feature.feature_kind === "corridor"
+            ? corridorContains(player, feature)
+            : false
+      )
+      .sort((a, b) =>
+        Number(b.properties?.movement_priority ?? (b as any).movement_priority ?? 0)
+        - Number(a.properties?.movement_priority ?? (a as any).movement_priority ?? 0)
+      );
+    return containing[0]?.semantic_location_id
+      ?? current.space.owner_location_id
+      ?? null;
+  }, [current, features, player]);
+
+  useEffect(() => {
+    if (!activeSemanticLocationId) {
+      setScene(null);
+      return;
+    }
+    let cancelled = false;
+    api<SceneEnvironment>(`/projects/${projectId}/environment/locations/${activeSemanticLocationId}/scene`)
+      .then(next => { if (!cancelled) setScene(next); })
+      .catch(cause => { if (!cancelled) setError(String(cause)); });
+    return () => { cancelled = true; };
+  }, [activeSemanticLocationId, projectId]);
+
+  useEffect(() => {
+    const arm = () => setAudioArmed(true);
+    window.addEventListener("pointerdown", arm, { once: true });
+    window.addEventListener("keydown", arm, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", arm);
+      window.removeEventListener("keydown", arm);
+    };
+  }, []);
+
+  useEffect(() => {
+    const desired = new Map(
+      scene?.enabled && ambientPrefs.enabled && audioArmed
+        ? scene.ambient.map(item => [item.id, item] as const)
+        : [],
+    );
+    for (const [id, item] of desired) {
+      let playing = activeAmbient.current.get(id);
+      if (!playing) {
+        const audio = new Audio(item.url);
+        audio.loop = true;
+        audio.preload = "auto";
+        audio.volume = 0;
+        audio.playbackRate = item.playback_rate;
+        playing = {
+          audio,
+          gain: 0,
+          target: item.default_gain * ambientPrefs.master_volume,
+        };
+        activeAmbient.current.set(id, playing);
+        void audio.play().catch(() => undefined);
+      }
+      playing.audio.playbackRate = item.playback_rate;
+      playing.target = item.default_gain * ambientPrefs.master_volume;
+    }
+    for (const [id, playing] of activeAmbient.current) {
+      if (!desired.has(id)) playing.target = 0;
+    }
+  }, [scene, ambientPrefs, audioArmed]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const [id, playing] of activeAmbient.current) {
+        const delta = playing.target - playing.gain;
+        playing.gain += Math.sign(delta) * Math.min(.04, Math.abs(delta));
+        playing.audio.volume = Math.max(0, Math.min(1, playing.gain));
+        if (playing.target === 0 && playing.gain === 0) {
+          playing.audio.pause();
+          playing.audio.src = "";
+          activeAmbient.current.delete(id);
+        }
+      }
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => () => {
+    for (const playing of activeAmbient.current.values()) {
+      playing.audio.pause();
+      playing.audio.src = "";
+    }
+    activeAmbient.current.clear();
+  }, []);
 
   const canOccupy = useCallback((point: Point) => {
     if (!current) return false;
@@ -295,7 +403,16 @@ export function SpatialPlaytestPage({
 
   if (!current) return <div className="page"><h1>Spatial playtest</h1>{error ? <Alert severity="error">{error}</Alert> : <p>Loading map…</p>}</div>;
 
-  return <div className="page spatial-playtest-page" tabIndex={0}>
+  return <div
+    className="page spatial-playtest-page"
+    tabIndex={0}
+    style={scene?.background?.url ? {
+      backgroundImage: `linear-gradient(rgba(244,239,230,.78), rgba(244,239,230,.90)), url(${scene.background.url})`,
+      backgroundSize: "cover",
+      backgroundPosition: "center",
+      backgroundAttachment: "fixed",
+    } : undefined}
+  >
     <header className="page-header">
       <div>
         <p className="eyebrow">SPATIAL V3 PLAYTEST</p>
@@ -304,12 +421,16 @@ export function SpatialPlaytestPage({
       </div>
       <Stack direction="row" spacing={1}>
         <Chip label={current.space.navigation_mode.toUpperCase()} />
+        {scene?.location?.name && <Chip variant="outlined" label={`Area: ${scene.location.name}`} />}
         <Button onClick={() => window.close()}>Close</Button>
       </Stack>
     </header>
 
     {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
-    <Alert severity="info" sx={{ mb: 1 }}>{message}</Alert>
+    <Alert severity="info" sx={{ mb: 1 }}>
+      {message}
+      {scene?.ambient?.length ? ` · ambience: ${scene.ambient.map(item => item.label).join(", ")}` : ""}
+    </Alert>
 
     <Paper className="panel" sx={{ p: 1 }}>
       <div className="spatial-playtest-canvas">
