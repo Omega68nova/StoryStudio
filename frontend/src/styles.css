@@ -1091,8 +1091,15 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 }
 .location-map-canvas.tool-spot,
 .location-map-canvas.tool-area,
-.location-map-canvas.tool-route {
+.location-map-canvas.tool-route,
+.location-map-canvas.tool-surface,
+.location-map-canvas.tool-corridor,
+.location-map-canvas.tool-barrier,
+.location-map-canvas.tool-connector {
   cursor: crosshair;
+}
+.location-map-canvas.tool-edit {
+  cursor: default;
 }
 .location-map-canvas.tool-drag {
   cursor: grab;
@@ -2192,4 +2199,19 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
     grid-template-columns: 1fr;
     gap: 2px;
   }
+}
+
+.location-map-selection-bounds {
+  fill: none;
+  stroke: #6b5740;
+  stroke-width: .8;
+  stroke-dasharray: 2 1.4;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+.location-map-node.v3-feature-node {
+  min-width: 70px;
+  max-width: 130px;
+  padding: 5px 7px;
+  opacity: .92;
 }
