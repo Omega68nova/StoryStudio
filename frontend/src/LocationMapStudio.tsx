@@ -99,8 +99,25 @@ type EncounterPolicy = {
   conditions?: Record<string, unknown> | null;
   enabled: boolean;
 };
+type LocationSpaceBinding = {
+  project_id: string;
+  location_id: string;
+  navigation_space_id: string;
+  entrance_policy: "connectors" | "open";
+  bounds_mode: "inherit_parent" | "independent";
+};
+type InheritedParentContext = {
+  bounds_mode: "inherit_parent";
+  source_space_id: string;
+  source_location_id: string;
+  source_feature_ids: string[];
+  boundary: MapFeature["geometry"];
+  features: MapFeature[];
+};
 type SpaceDetails = {
   space: NavigationSpace;
+  binding?: LocationSpaceBinding | null;
+  inherited_context?: InheritedParentContext | null;
   features: MapFeature[];
   layers: NavigationLayer[];
   encounter_policies: EncounterPolicy[];
@@ -255,6 +272,7 @@ export function LocationMapStudio({
   const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
   const [createSpaceLocation, setCreateSpaceLocation] = useState("");
   const [createSpaceMode, setCreateSpaceMode] = useState<"free" | "routed">("free");
+  const [createBoundsMode, setCreateBoundsMode] = useState<"inherit_parent" | "independent">("inherit_parent");
   const [connectorPoint, setConnectorPoint] = useState<Point | null>(null);
   const [connectorTargetSpace, setConnectorTargetSpace] = useState("");
   const [connectorTargetPoint, setConnectorTargetPoint] = useState<Point>([50, 50]);
@@ -373,7 +391,7 @@ export function LocationMapStudio({
           location_id: createSpaceLocation,
           navigation_space_id: id,
           entrance_policy: createSpaceMode === "routed" ? "connectors" : "open",
-          bounds_mode: "independent",
+          bounds_mode: createBoundsMode,
         }),
       });
       setCreateSpaceOpen(false);
@@ -618,6 +636,10 @@ export function LocationMapStudio({
     const visibility = new Map((details?.layers ?? []).map(layer => [layer.layer_key, layer.visible]));
     return (details?.features ?? []).filter(feature => feature.enabled && visibility.get(feature.render_layer) !== false);
   }, [details]);
+  const visibleInheritedFeatures = useMemo(() => {
+    const visibility = new Map((details?.layers ?? []).map(layer => [layer.layer_key, layer.visible]));
+    return (details?.inherited_context?.features ?? []).filter(feature => feature.enabled && visibility.get(feature.render_layer) !== false);
+  }, [details]);
 
   if (!spaces.length) {
     return <div className="page">
@@ -649,6 +671,13 @@ export function LocationMapStudio({
           <MenuItem value="free">FREE — unassigned space is traversable</MenuItem>
           <MenuItem value="routed">ROUTED — only authored surfaces/corridors are traversable</MenuItem>
         </TextField>
+        <TextField select label="Parent map geometry" value={createBoundsMode} onChange={event => setCreateBoundsMode(event.target.value as "inherit_parent" | "independent")}>
+          <MenuItem value="inherit_parent">INHERIT — use this location's parent-map footprint and show intersecting parent features</MenuItem>
+          <MenuItem value="independent">INDEPENDENT — use a separate local map shape</MenuItem>
+        </TextField>
+        <Alert severity="info">
+          Inherit keeps the child map derived from its footprint in the parent map. Roads, rivers, regions and barriers that cross that footprint are projected into this map as read-only context.
+        </Alert>
       </Stack></DialogContent>
       <DialogActions><Button onClick={() => setCreateSpaceOpen(false)}>Cancel</Button><Button variant="contained" onClick={() => void createSpace()}>Create</Button></DialogActions>
     </Dialog>;
@@ -670,6 +699,10 @@ export function LocationMapStudio({
         window.open(url, "_blank", "noopener,noreferrer");
       }}>Playtest map</Button>
       {spaceDraft && <Chip label={spaceDraft.navigation_mode === "free" ? "FREE map" : "ROUTED map"} color={spaceDraft.navigation_mode === "free" ? "success" : "warning"}/>}
+      {details?.binding && <Chip
+        variant="outlined"
+        label={details.binding.bounds_mode === "inherit_parent" ? "Parent geometry inherited" : "Independent bounds"}
+      />}
     </Stack>
 
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 390px", gap: 16, alignItems: "start" }}>
@@ -684,6 +717,7 @@ export function LocationMapStudio({
               <p><b>Layers</b> only organize display/editing. Put roads on Roads, walls on Barriers, buildings/regions on Regions or Places. Changing a layer does not change traversal semantics.</p>
               <p><b>Select</b> moves whole features. <b>Edit</b> changes vertices. Midpoint diamonds add vertices. Hold <b>E</b> and click a Corridor junction to grow a linked branch in the same road; moving that junction moves every branch endpoint attached there.</p>
               <p><b>FREE</b> spaces allow movement unless blocked. <b>ROUTED</b> spaces require authored traversable surfaces/corridors.</p>
+              <p><b>Inherited parent geometry</b> uses this location's Surface in its parent Navigation Space as the local map boundary. Parent roads, rivers, regions, barriers, spots and connectors that intersect that footprint are clipped and projected here as read-only context, so parent edits remain authoritative.</p>
             </div>
           </details>
         </Paper>
@@ -718,6 +752,8 @@ export function LocationMapStudio({
         <Paper className="panel" sx={{ p: 1, overflow: "hidden" }}>
           <SpatialV2Canvas
             features={visibleFeatures}
+            contextFeatures={visibleInheritedFeatures}
+            contextBoundary={details?.inherited_context?.boundary ?? null}
             tool={tool}
             selectedFeatureId={selectedFeatureId}
             draftPoints={draftPoints}
