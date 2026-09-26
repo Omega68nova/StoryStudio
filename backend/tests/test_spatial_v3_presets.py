@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.database import Database
+from app.database import Database, utc_now
 from app.data import DataProvider
 from app.domain.spatial_v3 import NavigationSpace
 from app.services.spatial_v3_presets import build_spatial_v3_preset, public_spatial_v3_presets
@@ -11,6 +11,10 @@ def setup_space(tmp_path):
     db.initialize()
     data = DataProvider(db)
     project = db.create_project("presets")
+    db.execute(
+        "INSERT INTO world_entities(id,project_id,kind,canonical_name,aliases_json,tags_json,created_at) VALUES(?,?,?,?,?,?,?)",
+        ("world", project["id"], "location", "world", "[]", "[]", utc_now()),
+    )
     data.spatial_v3.save_space(NavigationSpace(
         id="world-space",
         project_id=project["id"],
