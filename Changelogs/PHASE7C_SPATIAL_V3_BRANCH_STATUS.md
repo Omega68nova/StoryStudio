@@ -210,24 +210,41 @@ encounters cannot survive a re-migration.
 Spatial V3 mutation tools are intentionally author-only for now: AI and
 storyteller provenance is rejected until the V3 runtime/editor is stable.
 
-## 2. Full movement/pathfinding runtime
+## 2. Full movement/pathfinding runtime — core implemented
 
-Current V3 resolver can determine:
+Spatial V3 now has an experimental multi-space path planner.
 
-- layered membership at one coordinate;
-- dominant local movement policy;
-- conditional traversal alternatives.
+Implemented:
 
-Still needed:
+- FREE-map geometric visibility routing;
+- routing around finite Barrier geometry;
+- NavigationSpace bounds enforcement;
+- ROUTED maps where un-authored space is void;
+- Surface/Corridor movement precedence along the actual route;
+- corridor/terrain travel multipliers integrated into route cost;
+- route splitting at movement-feature boundaries;
+- explicit Connector traversal;
+- cross-space doors and arbitrary portals;
+- connector fixed travel time;
+- bidirectional/one-way connector handling;
+- road-over-blocked-terrain behavior through movement priority;
+- route output already segmented with active surfaces, corridors, semantic
+  memberships and movement source, ready for encounter integration;
+- diagnostic `GET /api/projects/{project_id}/spatial-v3/path`.
 
-- free-map path search around/through barriers;
-- corridor cost integration;
-- movement across regions with changing costs;
-- requirements evaluation using the shared rules evaluator;
-- connector traversal;
-- routed-space graph/path traversal;
-- portals across arbitrary spaces;
-- travel-time integration along the complete path.
+The pathfinder deliberately does not guess conditional traversal. If a barrier,
+surface or connector is blocked by default and only offers requirement-backed
+alternatives, it remains unavailable until the shared Requirements V2 evaluator
+can resolve those alternatives.
+
+Still needed in this area:
+
+- Requirements V2 evaluation for conditional movement;
+- richer editor-time diagnostics for unreachable/conditional routes;
+- performance indexing for very large maps (the experimental planner currently
+  builds a visibility graph from authored geometry);
+- production travel/itinerary integration after encounter segmentation is
+  completed.
 
 ## 3. Full encounter integration into travel
 
