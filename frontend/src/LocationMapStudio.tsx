@@ -123,7 +123,6 @@ const renderLayers: RenderLayer[] = ["topology", "regions", "roads", "places", "
 const connectorKinds = ["generic", "door", "gate", "stairs", "ladder", "bridge", "climb", "portal"] as const;
 const emptyTraversal = (allowed = true): TraversalPolicy => ({ default_allowed: allowed, travel_multiplier: 1, options: [] });
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
-const round = (value: number) => Math.round(value * 10) / 10;
 const parseCsv = (value: string) => value.split(",").map(item => item.trim()).filter(Boolean);
 const formatCsv = (value: unknown) => Array.isArray(value) ? value.join(", ") : "";
 const presetDefaults = (key: string) => ({
@@ -165,57 +164,6 @@ function defaultLayer(kind: FeatureKind): RenderLayer {
 
 function traversalOf(feature: MapFeature): TraversalPolicy | null {
   return feature.feature_kind === "spot" ? null : feature.properties.traversal ?? emptyTraversal(feature.feature_kind !== "barrier");
-}
-
-function featurePoints(feature: MapFeature): Point[] {
-  if (feature.geometry.type === "Point") return [feature.geometry.coordinates];
-  if (feature.geometry.type === "LineString") return feature.geometry.coordinates;
-  if (feature.geometry.type === "Polygon") return feature.geometry.coordinates[0] ?? [];
-  if (feature.geometry.type === "MultiLineString") return feature.geometry.coordinates.flat();
-  return feature.geometry.coordinates.flat(2) as Point[];
-}
-
-function clampPoint(point: Point): Point {
-  return [Math.max(0, Math.min(100, round(point[0]))), Math.max(0, Math.min(100, round(point[1])))];
-}
-
-function featureBounds(feature: MapFeature): { minX: number; minY: number; maxX: number; maxY: number } {
-  const points = featurePoints(feature);
-  return {
-    minX: Math.min(...points.map(point => point[0])),
-    minY: Math.min(...points.map(point => point[1])),
-    maxX: Math.max(...points.map(point => point[0])),
-    maxY: Math.max(...points.map(point => point[1])),
-  };
-}
-
-function translateFeature(feature: MapFeature, dx: number, dy: number): MapFeature {
-  const bounds = featureBounds(feature);
-  const safeDx = Math.max(-bounds.minX, Math.min(100 - bounds.maxX, dx));
-  const safeDy = Math.max(-bounds.minY, Math.min(100 - bounds.maxY, dy));
-  const move = (point: Point): Point => [round(point[0] + safeDx), round(point[1] + safeDy)];
-  const next = structuredClone(feature);
-  if (next.geometry.type === "Point") next.geometry.coordinates = move(next.geometry.coordinates);
-  else if (next.geometry.type === "LineString") next.geometry.coordinates = next.geometry.coordinates.map(move);
-  else if (next.geometry.type === "MultiLineString") next.geometry.coordinates = next.geometry.coordinates.map(line => line.map(move));
-  else if (next.geometry.type === "Polygon") next.geometry.coordinates = next.geometry.coordinates.map(ring => ring.map(move));
-  else next.geometry.coordinates = next.geometry.coordinates.map(polygon => polygon.map(ring => ring.map(move)));
-  if (next.feature_kind === "connector" && next.geometry.type === "Point") {
-    next.properties = {
-      ...next.properties,
-      source: { ...next.properties.source, point: next.geometry.coordinates },
-    };
-  }
-  return next;
-}
-
-function segmentDistanceSquared(point: Point, a: Point, b: Point): number {
-  const dx = b[0] - a[0], dy = b[1] - a[1];
-  const lengthSquared = dx * dx + dy * dy;
-  if (!lengthSquared) return (point[0] - a[0]) ** 2 + (point[1] - a[1]) ** 2;
-  const t = Math.max(0, Math.min(1, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / lengthSquared));
-  const x = a[0] + t * dx, y = a[1] + t * dy;
-  return (point[0] - x) ** 2 + (point[1] - y) ** 2;
 }
 
 function TraversalEditor({
@@ -289,9 +237,6 @@ export function LocationMapStudio({
   const [presetKey, setPresetKey] = useState("open_region");
   const [presetParams, setPresetParams] = useState(presetDefaults("open_region"));
   const [encounterDraft, setEncounterDraft] = useState<EncounterPolicy | null>(null);
-  const [vertexDrag, setVertexDrag] = useState<number | null>(null);
-  const [objectDrag, setObjectDrag] = useState<{ start: Point; original: MapFeature } | null>(null);
-  const [eHeld, setEHeld] = useState(false);
   const [draftTemplate, setDraftTemplate] = useState<Partial<MapFeature> | null>(null);
   const [locationDialogOpen, setLocationDialogOpen] = useState(false);
   const [locationNameDraft, setLocationNameDraft] = useState("");
@@ -334,17 +279,6 @@ export function LocationMapStudio({
     const next = selectedFeatureId ? details?.features.find(item => item.id === selectedFeatureId) ?? null : null;
     setFeatureDraft(next ? structuredClone(next) : null);
   }, [selectedFeatureId, details]);
-
-  useEffect(() => {
-    const down = (event: KeyboardEvent) => { if (event.key.toLowerCase() === "e") setEHeld(true); };
-    const up = (event: KeyboardEvent) => { if (event.key.toLowerCase() === "e") setEHeld(false); };
-    window.addEventListener("keydown", down);
-    window.addEventListener("keyup", up);
-    return () => {
-      window.removeEventListener("keydown", down);
-      window.removeEventListener("keyup", up);
-    };
-  }, []);
 
   async function refresh() {
     await loadSpaces();
@@ -396,128 +330,6 @@ export function LocationMapStudio({
       await api(`/projects/${projectId}/spatial-v3/materialize`, { method: "POST" });
       await loadSpaces();
     } catch (cause) { fail(String(cause)); }
-  }
-
-  function canvasPoint(clientX: number, clientY: number, element: SVGSVGElement): Point {
-    const matrix = element.getScreenCTM();
-    if (!matrix) return [0, 0];
-    const screenPoint = new DOMPoint(clientX, clientY);
-    const local = screenPoint.matrixTransform(matrix.inverse());
-    return clampPoint([local.x, local.y]);
-  }
-
-  function updateFeatureVertex(index: number, point: Point) {
-    if (!featureDraft) return;
-    const geometry = structuredClone(featureDraft.geometry);
-    if (geometry.type === "Point") {
-      geometry.coordinates = point;
-      const properties = featureDraft.feature_kind === "connector"
-        ? { ...featureDraft.properties, source: { ...featureDraft.properties.source, point } }
-        : featureDraft.properties;
-      setFeatureDraft({ ...featureDraft, geometry, properties });
-      return;
-    }
-    if (geometry.type === "LineString") geometry.coordinates[index] = point;
-    else if (geometry.type === "Polygon") {
-      const ring = geometry.coordinates[0];
-      if (!ring?.length) return;
-      ring[index] = point;
-      if (index === 0) ring[ring.length - 1] = point;
-    } else return;
-    setFeatureDraft({ ...featureDraft, geometry });
-  }
-
-  function canvasPointerMove(event: React.PointerEvent<SVGSVGElement>) {
-    const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
-    if (vertexDrag != null && tool === "edit") {
-      updateFeatureVertex(vertexDrag, point);
-      return;
-    }
-    if (objectDrag && tool === "select") {
-      setFeatureDraft(translateFeature(
-        objectDrag.original,
-        point[0] - objectDrag.start[0],
-        point[1] - objectDrag.start[1],
-      ));
-    }
-  }
-
-  function finishCanvasDrag() {
-    setVertexDrag(null);
-    setObjectDrag(null);
-  }
-
-  function insertVertexAt(point: Point) {
-    if (!featureDraft || tool !== "edit") return;
-    const geometry = structuredClone(featureDraft.geometry);
-    if (geometry.type === "LineString") {
-      if (geometry.coordinates.length < 2) return;
-      let best = 0, bestDistance = Number.POSITIVE_INFINITY;
-      for (let index = 0; index < geometry.coordinates.length - 1; index += 1) {
-        const distance = segmentDistanceSquared(point, geometry.coordinates[index], geometry.coordinates[index + 1]);
-        if (distance < bestDistance) { bestDistance = distance; best = index; }
-      }
-      geometry.coordinates.splice(best + 1, 0, point);
-      setFeatureDraft({ ...featureDraft, geometry });
-    } else if (geometry.type === "Polygon") {
-      const ring = geometry.coordinates[0];
-      if (!ring || ring.length < 4) return;
-      let best = 0, bestDistance = Number.POSITIVE_INFINITY;
-      for (let index = 0; index < ring.length - 1; index += 1) {
-        const distance = segmentDistanceSquared(point, ring[index], ring[index + 1]);
-        if (distance < bestDistance) { bestDistance = distance; best = index; }
-      }
-      ring.splice(best + 1, 0, point);
-      setFeatureDraft({ ...featureDraft, geometry });
-    }
-  }
-
-  function canvasContextMenu(event: React.MouseEvent<SVGSVGElement>) {
-    if (tool !== "edit" || !featureDraft) return;
-    event.preventDefault();
-    insertVertexAt(canvasPoint(event.clientX, event.clientY, event.currentTarget));
-  }
-
-  function extrudeFromVertex(index: number, point: Point) {
-    if (!featureDraft || tool !== "edit") return;
-    if (featureDraft.feature_kind === "corridor" && featureDraft.geometry.type === "LineString") {
-      setDraftTemplate({
-        name: `${featureDraft.name || "Corridor"} branch`,
-        semantic_location_id: featureDraft.semantic_location_id,
-        render_layer: featureDraft.render_layer,
-        render_order: featureDraft.render_order,
-        movement_priority: featureDraft.movement_priority,
-        properties: structuredClone(featureDraft.properties),
-      });
-      setDraftPoints([point]);
-      setTool("corridor");
-      return;
-    }
-    if (featureDraft.geometry.type === "Polygon") {
-      const geometry = structuredClone(featureDraft.geometry);
-      const ring = geometry.coordinates[0];
-      if (!ring?.length) return;
-      const insertAt = Math.min(index + 1, ring.length - 1);
-      ring.splice(insertAt, 0, point);
-      setFeatureDraft({ ...featureDraft, geometry });
-      setVertexDrag(insertAt);
-    }
-  }
-
-  function canvasClick(event: React.MouseEvent<SVGSVGElement>) {
-    if (tool === "select" || tool === "edit") return;
-    const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
-    if (tool === "spot") {
-      void createFeature("spot", [point]);
-      return;
-    }
-    if (tool === "connector") {
-      setConnectorPoint(point);
-      setConnectorTargetSpace(spaces.find(item => item.id !== spaceId)?.id ?? spaceId);
-      setConnectorTargetPoint(point);
-      return;
-    }
-    setDraftPoints(points => [...points, point]);
   }
 
   async function createFeature(kind: FeatureKind, points = draftPoints) {
@@ -783,7 +595,6 @@ export function LocationMapStudio({
                   setTool(value);
                   if (value !== "corridor") setDraftTemplate(null);
                   setDraftPoints([]);
-                  finishCanvasDrag();
                 }}>{value}</Button>
               )}
             </ButtonGroup>
