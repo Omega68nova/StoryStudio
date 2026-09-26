@@ -21,10 +21,10 @@ from app.domain.spatial_v3 import (
 
 
 class SpatialV3Repository(BaseRepository):
-    """Experimental Spatial V3 current-state repository.
+    """Materialized read model for branch-authoritative Spatial V3 state.
 
-    WorldEngine remains branch history. These rows are a parallel materialized
-    model while V3 is evaluated against the legacy spatial implementation.
+    WorldEngine events/projections are canonical. These tables are rebuildable
+    query/index state used by geometry resolution and the experimental editor.
     """
 
     def clear_project(self, project_id: str) -> None:

@@ -509,6 +509,45 @@ class SpatialV3Migration:
             },
         }
 
+    def branch_replacement_mutations(
+        self,
+        project_id: str,
+        projection: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Return a lossless replacement transaction for branch-owned V3 state.
+
+        Existing spaces are removed first. Space removal cascades through the
+        V3 event projection, so stale features, layers, bindings and encounters
+        cannot survive a re-migration.
+        """
+        preview = self.preview(project_id, projection)
+        current = projection.get("spatial_v3") or {}
+        raw: list[dict[str, Any]] = [
+            {"tool": "removeSpatialV3Space", "arguments": {"id": space_id}}
+            for space_id in sorted(current.get("spaces", {}))
+        ]
+        raw.extend(
+            {"tool": "upsertSpatialV3Space", "arguments": item}
+            for item in preview["spaces"]
+        )
+        raw.extend(
+            {"tool": "bindSpatialV3LocationSpace", "arguments": item}
+            for item in preview["location_space_bindings"]
+        )
+        raw.extend(
+            {"tool": "upsertSpatialV3Feature", "arguments": item}
+            for item in preview["features"]
+        )
+        raw.extend(
+            {"tool": "upsertSpatialV3Encounter", "arguments": item}
+            for item in preview["encounter_policies"]
+        )
+        raw.extend(
+            {"tool": "updateSpatialV3Layer", "arguments": item}
+            for item in preview["layers"]
+        )
+        return preview, raw
+
     def materialize(
         self,
         project_id: str,

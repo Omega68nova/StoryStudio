@@ -146,11 +146,11 @@ Encounter conditions are reserved for the shared Requirements V2 evaluator.
 
 Migrations 047-049 add only new Spatial V3 tables.
 
-The old `spatial_*` tables, WorldEngine events and current Map V2 runtime are
-left untouched.
+The old `spatial_*` tables and current Map V2 runtime remain untouched.
 
-The V3 materialization is explicitly rebuildable and may be cleared/rebuilt
-from the active branch while this experiment is in progress.
+Spatial V3 canonical state now lives in branch-aware WorldEngine events and the
+active WorldEngine projection. The V3 SQL tables are explicitly rebuildable
+query/materialization state and may be cleared/rebuilt from the active branch.
 
 ## Legacy migration adapter
 
@@ -186,22 +186,29 @@ These are branch-only diagnostics and are not yet the production map API.
 
 # What remains
 
-## 1. Branch-owned canonical V3 events
+## 1. Branch-owned canonical V3 events — implemented
 
-This is the most important architectural step still missing.
+Spatial V3 now participates in WorldEngine branch history through canonical
+events for:
 
-Current V3 rows are a parallel current-state materialization. Before the V3
-editor becomes authoritative, V3 mutations need branch-aware WorldEngine event
-contracts for:
+- navigation-space upsert/removal;
+- feature upsert/removal (geometry is part of the feature payload);
+- encounter-policy upsert/removal;
+- layer updates;
+- semantic Location <-> NavigationSpace binding/unbinding.
 
-- navigation-space creation/update/removal;
-- feature creation/update/removal;
-- geometry edits;
-- layer settings;
-- encounter policies;
-- semantic Location <-> feature/space links.
+The WorldEngine projection owns canonical V3 state. The
+`navigation_spaces_current` / `map_features_current` family is now treated
+as a rebuildable query/materialization layer and is synchronized from the
+active branch projection before V3 reads/resolution.
 
-Only after those exist should V3 editor writes become canonical.
+Legacy -> V3 materialization now commits a single author transaction containing
+V3 events, then rebuilds the query tables from that branch projection. Existing
+branch V3 spaces are removed first so stale child features/layers/bindings and
+encounters cannot survive a re-migration.
+
+Spatial V3 mutation tools are intentionally author-only for now: AI and
+storyteller provenance is rejected until the V3 runtime/editor is stable.
 
 ## 2. Full movement/pathfinding runtime
 

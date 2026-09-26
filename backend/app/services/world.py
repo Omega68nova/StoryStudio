@@ -36,6 +36,14 @@ WRITE_TOOLS = {
     "createLocationFromPreset",
     "editMapGeometry",
     "removeMapObject",
+    # Spatial V3 authoring is branch-authoritative but intentionally not exposed
+    # to AI tool schemas yet. normalize_mutations additionally rejects AI/storyteller
+    # provenance for these tools until the V3 runtime/editor is stable.
+    "upsertSpatialV3Space", "removeSpatialV3Space",
+    "upsertSpatialV3Feature", "removeSpatialV3Feature",
+    "upsertSpatialV3Encounter", "removeSpatialV3Encounter",
+    "updateSpatialV3Layer",
+    "bindSpatialV3LocationSpace", "unbindSpatialV3LocationSpace",
 }
 MAJOR_PATCH_FIELDS = {"identity", "alive", "permanent_injuries", "core_personality", "player_decision", "world_laws", "destroyed"}
 
@@ -157,6 +165,13 @@ class WorldEngine:
         if use_cache:
             cached = self.repo.cached_projection(cache_key)
             if cached:
+                cached.setdefault("spatial_v3", {
+                    "spaces": {},
+                    "features": {},
+                    "encounter_policies": {},
+                    "layers": {},
+                    "location_space_bindings": {},
+                })
                 return cached
         ancestry = {node["id"] for node in self.db.story_path(head_node_id)} if head_node_id else set()
         transactions = self.repo.committed_transactions(project_id)
@@ -178,6 +193,13 @@ class WorldEngine:
             "travel_connections": {},
             "encounter_rules": {},
             "travel_itineraries": {},
+            "spatial_v3": {
+                "spaces": {},
+                "features": {},
+                "encounter_policies": {},
+                "layers": {},
+                "location_space_bindings": {},
+            },
             "active_effects": {},
             "world_action_count": 0,
             "target_action_counts": {},
@@ -281,6 +303,61 @@ class WorldEngine:
                     collection[payload["id"]]["discovered"] = bool(payload.get("discovered"))
         elif event_type == "map.object_removed":
             projection.get(payload.get("collection"), {}).pop(payload.get("id"), None)
+        elif event_type.startswith("spatial_v3."):
+            spatial_v3 = projection.setdefault("spatial_v3", {
+                "spaces": {},
+                "features": {},
+                "encounter_policies": {},
+                "layers": {},
+                "location_space_bindings": {},
+            })
+            if event_type == "spatial_v3.space_upserted":
+                spatial_v3["spaces"][payload["id"]] = copy.deepcopy(payload)
+            elif event_type == "spatial_v3.space_removed":
+                space_id = str(payload["id"])
+                spatial_v3["spaces"].pop(space_id, None)
+                removed_features = {
+                    feature_id
+                    for feature_id, feature in list(spatial_v3["features"].items())
+                    if feature.get("navigation_space_id") == space_id
+                    or (
+                        feature.get("feature_kind") == "connector"
+                        and (
+                            feature.get("properties", {}).get("source", {}).get("navigation_space_id") == space_id
+                            or feature.get("properties", {}).get("target", {}).get("navigation_space_id") == space_id
+                        )
+                    )
+                }
+                for feature_id in removed_features:
+                    spatial_v3["features"].pop(feature_id, None)
+                for policy_id, policy in list(spatial_v3["encounter_policies"].items()):
+                    if policy.get("navigation_space_id") == space_id or policy.get("feature_id") in removed_features:
+                        spatial_v3["encounter_policies"].pop(policy_id, None)
+                for layer_id, layer in list(spatial_v3["layers"].items()):
+                    if layer.get("navigation_space_id") == space_id:
+                        spatial_v3["layers"].pop(layer_id, None)
+                for location_id, binding in list(spatial_v3["location_space_bindings"].items()):
+                    if binding.get("navigation_space_id") == space_id:
+                        spatial_v3["location_space_bindings"].pop(location_id, None)
+            elif event_type == "spatial_v3.feature_upserted":
+                spatial_v3["features"][payload["id"]] = copy.deepcopy(payload)
+            elif event_type == "spatial_v3.feature_removed":
+                feature_id = str(payload["id"])
+                spatial_v3["features"].pop(feature_id, None)
+                for policy_id, policy in list(spatial_v3["encounter_policies"].items()):
+                    if policy.get("feature_id") == feature_id:
+                        spatial_v3["encounter_policies"].pop(policy_id, None)
+            elif event_type == "spatial_v3.encounter_upserted":
+                spatial_v3["encounter_policies"][payload["id"]] = copy.deepcopy(payload)
+            elif event_type == "spatial_v3.encounter_removed":
+                spatial_v3["encounter_policies"].pop(str(payload["id"]), None)
+            elif event_type == "spatial_v3.layer_updated":
+                layer_id = f"{payload['navigation_space_id']}:{payload['layer_key']}"
+                spatial_v3["layers"][layer_id] = copy.deepcopy(payload)
+            elif event_type == "spatial_v3.location_space_bound":
+                spatial_v3["location_space_bindings"][payload["location_id"]] = copy.deepcopy(payload)
+            elif event_type == "spatial_v3.location_space_unbound":
+                spatial_v3["location_space_bindings"].pop(str(payload["location_id"]), None)
         elif event_type == "travel.itinerary_set":
             projection["travel_itineraries"][payload["id"]] = copy.deepcopy(payload)
 
@@ -303,8 +380,78 @@ class WorldEngine:
             for key, value in list(arguments.items()):
                 if key.endswith("_id") and isinstance(value, str) and value in temporary_ids:
                     arguments[key] = temporary_ids[value]
+            if tool.startswith(("upsertSpatialV3", "removeSpatialV3", "updateSpatialV3", "bindSpatialV3", "unbindSpatialV3")):
+                if provenance in {"ai", "storyteller_inline"}:
+                    raise WorldValidationError("Spatial V3 authoring is not exposed to AI/storyteller mutations yet")
+                from app.domain.spatial_v3 import (
+                    EncounterPolicy,
+                    LocationNavigationSpace,
+                    MapFeature,
+                    NavigationLayer,
+                    NavigationSpace,
+                )
+                try:
+                    if tool == "upsertSpatialV3Space":
+                        model = NavigationSpace.model_validate(arguments)
+                        if model.project_id != project_id:
+                            raise WorldValidationError("Spatial V3 space belongs to another project")
+                        arguments = model.model_dump(mode="json")
+                    elif tool == "upsertSpatialV3Feature":
+                        model = MapFeature.model_validate(arguments)
+                        if model.project_id != project_id:
+                            raise WorldValidationError("Spatial V3 feature belongs to another project")
+                        arguments = model.model_dump(mode="json")
+                    elif tool == "upsertSpatialV3Encounter":
+                        model = EncounterPolicy.model_validate(arguments)
+                        if model.project_id != project_id:
+                            raise WorldValidationError("Spatial V3 encounter belongs to another project")
+                        arguments = model.model_dump(mode="json")
+                    elif tool == "updateSpatialV3Layer":
+                        arguments = NavigationLayer.model_validate(arguments).model_dump(mode="json")
+                    elif tool == "bindSpatialV3LocationSpace":
+                        model = LocationNavigationSpace.model_validate(arguments)
+                        if model.project_id != project_id:
+                            raise WorldValidationError("Spatial V3 binding belongs to another project")
+                        arguments = model.model_dump(mode="json")
+                    elif tool in {"removeSpatialV3Space", "removeSpatialV3Feature", "removeSpatialV3Encounter"}:
+                        object_id = str(arguments.get("id") or "").strip()
+                        if not object_id:
+                            raise WorldValidationError(f"{tool} requires id")
+                        arguments = {"id": object_id}
+                    elif tool == "unbindSpatialV3LocationSpace":
+                        location_id = str(arguments.get("location_id") or "").strip()
+                        if not location_id:
+                            raise WorldValidationError("unbindSpatialV3LocationSpace requires location_id")
+                        arguments = {"location_id": location_id}
+                except WorldValidationError:
+                    raise
+                except ValueError as exc:
+                    raise WorldValidationError(f"Invalid Spatial V3 mutation: {exc}") from exc
+                mutation = NormalizedMutation(tool, arguments, False)
+                normalized.append(mutation)
+                self._apply_mutation_preview(projection, mutation)
+                continue
+
             major, reason = False, None
-            if tool == "createEntity":
+            if tool == "upsertSpatialV3Space":
+            return [("spatial_v3.space_upserted", None, args)]
+        if tool == "removeSpatialV3Space":
+            return [("spatial_v3.space_removed", None, args)]
+        if tool == "upsertSpatialV3Feature":
+            return [("spatial_v3.feature_upserted", None, args)]
+        if tool == "removeSpatialV3Feature":
+            return [("spatial_v3.feature_removed", None, args)]
+        if tool == "upsertSpatialV3Encounter":
+            return [("spatial_v3.encounter_upserted", None, args)]
+        if tool == "removeSpatialV3Encounter":
+            return [("spatial_v3.encounter_removed", None, args)]
+        if tool == "updateSpatialV3Layer":
+            return [("spatial_v3.layer_updated", None, args)]
+        if tool == "bindSpatialV3LocationSpace":
+            return [("spatial_v3.location_space_bound", None, args)]
+        if tool == "unbindSpatialV3LocationSpace":
+            return [("spatial_v3.location_space_unbound", None, args)]
+        if tool == "createEntity":
                 kind = arguments.get("kind")
                 name = str(arguments.get("name", "")).strip()
                 if kind not in ENTITY_KINDS or not name:
@@ -793,6 +940,74 @@ class WorldEngine:
 
     @staticmethod
     def _route(projection: dict[str, Any], source_id: str, target_id: str, mode: str | None = None) -> dict[str, Any] | None:
+        spatial_v3 = projection.get("spatial_v3") or {}
+        if spatial_v3:
+            from app.domain.spatial_v3 import (
+                EncounterPolicy,
+                LocationNavigationSpace,
+                MapFeature,
+                NavigationLayer,
+                NavigationSpace,
+            )
+            try:
+                spaces = {
+                    key: NavigationSpace.model_validate(value)
+                    for key, value in spatial_v3.get("spaces", {}).items()
+                }
+                features = {
+                    key: MapFeature.model_validate(value)
+                    for key, value in spatial_v3.get("features", {}).items()
+                }
+                encounters = {
+                    key: EncounterPolicy.model_validate(value)
+                    for key, value in spatial_v3.get("encounter_policies", {}).items()
+                }
+                layers = [
+                    NavigationLayer.model_validate(value)
+                    for value in spatial_v3.get("layers", {}).values()
+                ]
+                bindings = [
+                    LocationNavigationSpace.model_validate(value)
+                    for value in spatial_v3.get("location_space_bindings", {}).values()
+                ]
+            except ValueError as exc:
+                raise WorldValidationError(f"Invalid Spatial V3 branch state: {exc}") from exc
+
+            for space in spaces.values():
+                if space.project_id != projection["project_id"]:
+                    raise WorldValidationError(f"Spatial V3 space {space.id} belongs to another project")
+                if space.owner_location_id:
+                    owner = entities.get(space.owner_location_id)
+                    if not owner or owner.get("kind") != "location":
+                        raise WorldValidationError(f"Spatial V3 space {space.id} has an invalid owner location")
+            for feature in features.values():
+                if feature.project_id != projection["project_id"] or feature.navigation_space_id not in spaces:
+                    raise WorldValidationError(f"Spatial V3 feature {feature.id} references an invalid navigation space")
+                if feature.semantic_location_id:
+                    semantic = entities.get(feature.semantic_location_id)
+                    if not semantic or semantic.get("kind") != "location":
+                        raise WorldValidationError(f"Spatial V3 feature {feature.id} has an invalid semantic location")
+                if str(feature.feature_kind) == "connector":
+                    props = feature.properties
+                    if props.source.navigation_space_id not in spaces or props.target.navigation_space_id not in spaces:
+                        raise WorldValidationError(f"Spatial V3 connector {feature.id} references an invalid endpoint space")
+            for policy in encounters.values():
+                if policy.project_id != projection["project_id"]:
+                    raise WorldValidationError(f"Spatial V3 encounter {policy.id} belongs to another project")
+                if policy.navigation_space_id and policy.navigation_space_id not in spaces:
+                    raise WorldValidationError(f"Spatial V3 encounter {policy.id} references an invalid navigation space")
+                if policy.feature_id and policy.feature_id not in features:
+                    raise WorldValidationError(f"Spatial V3 encounter {policy.id} references an invalid feature")
+            for layer in layers:
+                if layer.navigation_space_id not in spaces:
+                    raise WorldValidationError("Spatial V3 layer references an invalid navigation space")
+            for binding in bindings:
+                if binding.navigation_space_id not in spaces:
+                    raise WorldValidationError("Spatial V3 location binding references an invalid navigation space")
+                location = entities.get(binding.location_id)
+                if not location or location.get("kind") != "location":
+                    raise WorldValidationError("Spatial V3 location binding references an invalid location")
+
         for relation in projection["relations"].values():
             if relation.get("relation") != "route" or relation.get("blocked"):
                 continue
