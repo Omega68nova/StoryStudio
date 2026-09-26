@@ -1,0 +1,32 @@
+name: remove tldraw dependency
+
+on:
+  push:
+    branches: [spatial-v3-v2-editor-port]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: spatial-v3-v2-editor-port
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Remove unused tldraw package
+        working-directory: frontend
+        run: npm uninstall tldraw --ignore-scripts
+      - name: Commit dependency cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package.json frontend/package-lock.json
+          git rm .github/workflows/remove-tldraw.yml
+          git commit -m "Remove unused tldraw dependency"
+          git push origin HEAD:spatial-v3-v2-editor-port
