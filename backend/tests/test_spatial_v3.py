@@ -14,6 +14,7 @@ from app.domain.spatial_v3 import (
     EncounterPolicy,
     MapFeature,
     MultiPolygonGeometry,
+    NavigationLayer,
     NavigationMode,
     NavigationSpace,
     PolygonGeometry,
@@ -102,6 +103,29 @@ def test_barrier_defaults_to_blocked_crossing() -> None:
     assert properties.traversal.default_allowed is False
 
 
+def test_barrier_payload_parses_as_barrier_properties() -> None:
+    feature = MapFeature.model_validate({
+        "id": "wall",
+        "project_id": "project",
+        "navigation_space_id": "space",
+        "feature_kind": "barrier",
+        "geometry": {
+            "type": "LineString",
+            "coordinates": [[0, 0], [10, 0], [10, 10], [0, 0]],
+        },
+        "properties": {
+            "traversal": {
+                "default_allowed": False,
+                "travel_multiplier": 1,
+                "options": [],
+            },
+        },
+    })
+    assert isinstance(feature.properties, BarrierProperties)
+    assert feature.geometry.coordinates[0] == (0.0, 0.0)
+    assert feature.geometry.coordinates[-1] == (0.0, 0.0)
+
+
 def test_barrier_can_offer_conditional_crossings() -> None:
     properties = BarrierProperties(
         traversal=TraversalPolicy(
@@ -177,6 +201,32 @@ def _insert_location(db: Database, project_id: str, location_id: str, name: str)
         """,
         (location_id, project_id, "location", name, "[]", "[]", utc_now()),
     )
+
+
+def test_navigation_layer_editor_controls_persist(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    project = db.create_project("V3 layer controls")
+    _insert_location(db, project["id"], "world", "World")
+    data.spatial_v3.save_space(NavigationSpace(
+        id="space",
+        project_id=project["id"],
+        owner_location_id="world",
+    ))
+    data.spatial_v3.save_layer(NavigationLayer(
+        navigation_space_id="space",
+        layer_key="roads",
+        label="Roads",
+        visible=True,
+        textured=False,
+        editable=False,
+        labels_mode="hidden",
+    ))
+    layer = data.spatial_v3.layers("space")[0]
+    assert layer.textured is False
+    assert layer.editable is False
+    assert layer.labels_mode == "hidden"
 
 
 def test_v3_overlap_keeps_city_and_road_while_road_controls_movement(tmp_path) -> None:

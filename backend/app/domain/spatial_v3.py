@@ -212,6 +212,29 @@ FeatureProperties: TypeAlias = (
 
 
 class MapFeature(SpatialV3Model):
+    @model_validator(mode="before")
+    @classmethod
+    def parse_properties_for_kind(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        kind = str(value.get("feature_kind") or "")
+        raw = value.get("properties")
+        if not isinstance(raw, dict):
+            return value
+        property_models: dict[str, type[SpatialV3Model]] = {
+            "surface": SurfaceProperties,
+            "corridor": CorridorProperties,
+            "barrier": BarrierProperties,
+            "connector": ConnectorProperties,
+            "spot": SpotProperties,
+        }
+        model = property_models.get(kind)
+        if model is None:
+            return value
+        parsed = dict(value)
+        parsed["properties"] = model.model_validate(raw)
+        return parsed
+
     id: str
     project_id: str
     navigation_space_id: str
@@ -303,4 +326,6 @@ class NavigationLayer(SpatialV3Model):
     label: str
     position: int = 0
     visible: bool = True
+    textured: bool = True
+    editable: bool = True
     labels_mode: LabelsMode = LabelsMode.IMPORTANT

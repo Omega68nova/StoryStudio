@@ -373,6 +373,8 @@ class SpatialV3Repository(BaseRepository):
                 "label": row["label"],
                 "position": row["position"],
                 "visible": bool(row["visible"]),
+                "textured": bool(row.get("textured", 1)),
+                "editable": bool(row.get("editable", 1)),
                 "labels_mode": row["labels_mode"],
             })
             for row in self.db.fetch_all(
@@ -389,12 +391,14 @@ class SpatialV3Repository(BaseRepository):
         self.db.execute(
             """
             INSERT INTO navigation_space_layers_current(
-              navigation_space_id,layer_key,label,position,visible,labels_mode
-            ) VALUES(?,?,?,?,?,?)
+              navigation_space_id,layer_key,label,position,visible,textured,editable,labels_mode
+            ) VALUES(?,?,?,?,?,?,?,?)
             ON CONFLICT(navigation_space_id,layer_key) DO UPDATE SET
               label=excluded.label,
               position=excluded.position,
               visible=excluded.visible,
+              textured=excluded.textured,
+              editable=excluded.editable,
               labels_mode=excluded.labels_mode
             """,
             (
@@ -403,6 +407,8 @@ class SpatialV3Repository(BaseRepository):
                 layer.label,
                 layer.position,
                 int(layer.visible),
+                int(layer.textured),
+                int(layer.editable),
                 str(layer.labels_mode),
             ),
         )

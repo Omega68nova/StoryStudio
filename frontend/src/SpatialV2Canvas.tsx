@@ -16,6 +16,8 @@ export type V2Geometry =
 export type V2CanvasFeature = {
   id: string;
   feature_kind: V2FeatureKind;
+  render_layer?: string;
+  semantic_location_id?: string | null;
   name: string;
   geometry: V2Geometry;
   hidden: boolean;
@@ -119,9 +121,16 @@ function pointForRef(geometry: V2Geometry, ref: VertexRef): V2Point | null {
   return part?.points[ref.index] ?? null;
 }
 
-function updateVertex(geometry: V2Geometry, ref: VertexRef, point: V2Point): V2Geometry {
+function updateVertex(geometry: V2Geometry, ref: VertexRef, point: V2Point, linkCoincident = false): V2Geometry {
+  const original = pointForRef(geometry, ref);
   const part = editableParts(geometry).find(item => item.part === ref.part);
-  if (!part || !part.points[ref.index]) return geometry;
+  if (!part || !original || !part.points[ref.index]) return geometry;
+  if (linkCoincident && geometry.type === "MultiLineString") {
+    return {
+      ...geometry,
+      coordinates: geometry.coordinates.map(line => line.map(item => samePoint(item, original) ? point : item)),
+    };
+  }
   const points = part.points.map(item => [...item] as V2Point);
   points[ref.index] = point;
   return replacePart(geometry, ref.part, points, part.closed);
@@ -178,14 +187,21 @@ function areaExtrusion(geometry: V2Geometry, ref: VertexRef): V2Geometry {
   ]);
 }
 
-function renderGeometry(feature: V2CanvasFeature, geometry: V2Geometry, selected: boolean, onSelect: () => void) {
+function renderGeometry(
+  feature: V2CanvasFeature,
+  geometry: V2Geometry,
+  selected: boolean,
+  textured: boolean,
+  editable: boolean,
+  onSelect: () => void,
+) {
   const className = selected ? " selected" : "";
   if (geometry.type === "Polygon") {
     const ring = geometry.coordinates[0] ?? [];
     return <polygon
       points={ring.map(point => point.join(",")).join(" ")}
       className={`location-map-area${className}`}
-      style={{ pointerEvents: "auto", cursor: "pointer" }}
+      style={{ pointerEvents: editable ? "auto" : "none", cursor: editable ? "pointer" : "default", fill: textured ? undefined : "none" }}
       onClick={event => { event.stopPropagation(); onSelect(); }}
     />;
   }
@@ -194,7 +210,7 @@ function renderGeometry(feature: V2CanvasFeature, geometry: V2Geometry, selected
       key={index}
       points={(polygon[0] ?? []).map(point => point.join(",")).join(" ")}
       className={`location-map-area${className}`}
-      style={{ pointerEvents: "auto", cursor: "pointer" }}
+      style={{ pointerEvents: editable ? "auto" : "none", cursor: editable ? "pointer" : "default", fill: textured ? undefined : "none" }}
       onClick={event => { event.stopPropagation(); onSelect(); }}
     />)}</g>;
   }
@@ -207,7 +223,7 @@ function renderGeometry(feature: V2CanvasFeature, geometry: V2Geometry, selected
         fill="none"
         stroke="transparent"
         strokeWidth={Math.max(4, width + 3)}
-        style={{ pointerEvents: "stroke", cursor: "pointer" }}
+        style={{ pointerEvents: editable ? "stroke" : "none", cursor: editable ? "pointer" : "default" }}
         onClick={event => { event.stopPropagation(); onSelect(); }}
       />
       <polyline
@@ -217,7 +233,7 @@ function renderGeometry(feature: V2CanvasFeature, geometry: V2Geometry, selected
         strokeWidth={width}
         strokeLinecap="round"
         strokeLinejoin="round"
-        style={{ pointerEvents: "none", strokeWidth: width }}
+        style={{ pointerEvents: "none", strokeWidth: textured ? width : Math.min(width, 1.2), strokeDasharray: textured ? undefined : "2 1.4" }}
       />
     </g>)}</g>;
   }
@@ -234,6 +250,8 @@ export function SpatialV2Canvas({
   onFeatureChange,
   onCreateFeature,
   onConnectorPoint,
+  layerSettings,
+  locationNames,
 }: {
   features: V2CanvasFeature[];
   tool: V2Tool;
@@ -244,6 +262,8 @@ export function SpatialV2Canvas({
   onFeatureChange: (feature: V2CanvasFeature) => void;
   onCreateFeature: (kind: V2FeatureKind, points: V2Point[]) => void;
   onConnectorPoint: (point: V2Point) => void;
+  layerSettings: Record<string, { textured: boolean; editable: boolean; labels_mode: "hidden" | "important" | "all" }>;
+  locationNames: Record<string, string>;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -290,12 +310,13 @@ export function SpatialV2Canvas({
 
   function displayedGeometry(feature: V2CanvasFeature): V2Geometry {
     if (dragFeature?.id === feature.id) return translatedGeometry(dragFeature.geometry, dragOffset[0], dragOffset[1]);
-    if (vertexDrag?.featureId === feature.id && vertexPreview) return updateVertex(feature.geometry, vertexDrag, vertexPreview);
+    if (vertexDrag?.featureId === feature.id && vertexPreview) return updateVertex(feature.geometry, vertexDrag, vertexPreview, feature.feature_kind === "corridor");
     return feature.geometry;
   }
 
   function startDrag(event: ReactPointerEvent<HTMLElement>, feature: V2CanvasFeature) {
-    if (tool !== "select" || event.button !== 0) return;
+    const settings = layerSettings[feature.render_layer ?? ""];
+    if (tool !== "select" || event.button !== 0 || settings?.editable === false) return;
     event.stopPropagation();
     const host = canvasRef.current;
     if (!host) return;
@@ -321,7 +342,7 @@ export function SpatialV2Canvas({
       const feature = features.find(item => item.id === vertexDrag.featureId);
       if (feature) {
         const next = structuredClone(feature);
-        next.geometry = updateVertex(feature.geometry, vertexDrag, vertexPreview);
+        next.geometry = updateVertex(feature.geometry, vertexDrag, vertexPreview, feature.feature_kind === "corridor");
         onFeatureChange(next);
       }
     }
@@ -405,7 +426,14 @@ export function SpatialV2Canvas({
           {features.map(feature => {
             const geometry = displayedGeometry(feature);
             return <g key={feature.id}>
-              {renderGeometry(feature, geometry, feature.id === selectedFeatureId, () => onSelectFeature(feature.id))}
+              {renderGeometry(
+                feature,
+                geometry,
+                feature.id === selectedFeatureId,
+                layerSettings[feature.render_layer ?? ""]?.textured !== false,
+                layerSettings[feature.render_layer ?? ""]?.editable !== false,
+                () => onSelectFeature(feature.id),
+              )}
             </g>;
           })}
 
@@ -426,29 +454,36 @@ export function SpatialV2Canvas({
         {features.map(feature => {
           const geometry = displayedGeometry(feature);
           const center = centroid(geometry);
+          const settings = layerSettings[feature.render_layer ?? ""];
+          const editable = settings?.editable !== false;
+          const displayName = feature.semantic_location_id ? (locationNames[feature.semantic_location_id] ?? feature.name) : feature.name;
+          const showLabel = settings?.labels_mode === "all"
+            || (settings?.labels_mode !== "hidden" && (feature.id === selectedFeatureId || Boolean(feature.semantic_location_id)));
           if (feature.geometry.type === "Point") {
             return <button
               key={`${feature.id}:node`}
               className={`location-map-anchor ${feature.feature_kind}${feature.id === selectedFeatureId ? " selected" : ""}`}
-              style={{ left: `${center[0]}%`, top: `${center[1]}%` }}
-              title={feature.name}
+              title={showLabel ? feature.name : feature.feature_kind}
               onClick={event => { event.stopPropagation(); onSelectFeature(feature.id); }}
               onPointerDown={event => startDrag(event, feature)}
+              style={{ left: `${center[0]}%`, top: `${center[1]}%`, pointerEvents: editable ? "auto" : "none", opacity: showLabel ? 1 : .55 }}
             >{feature.feature_kind === "connector" ? "▮" : "◇"}</button>;
           }
+          if (!showLabel) return null;
           return <button
             key={`${feature.id}:label`}
             className={`location-map-node v3-feature-node${feature.id === selectedFeatureId ? " selected" : ""}`}
-            style={{ left: `${center[0]}%`, top: `${center[1]}%` }}
             onClick={event => { event.stopPropagation(); onSelectFeature(feature.id); }}
             onPointerDown={event => startDrag(event, feature)}
+            disabled={!editable}
+            style={{ left: `${center[0]}%`, top: `${center[1]}%`, pointerEvents: editable ? "auto" : "none" }}
           >
-            <b>{feature.name || feature.feature_kind}</b>
+            <b>{displayName || feature.feature_kind}</b>
             <small>{feature.feature_kind}</small>
           </button>;
         })}
 
-        {tool === "edit" && selected && editableParts(displayedGeometry(selected)).flatMap(part => part.points.flatMap((point, index) => {
+        {tool === "edit" && selected && layerSettings[selected.render_layer ?? ""]?.editable !== false && editableParts(displayedGeometry(selected)).flatMap(part => part.points.flatMap((point, index) => {
           const next = part.points[(index + 1) % part.points.length];
           const hasNext = part.closed || index < part.points.length - 1;
           const ref: VertexRef = { featureId: selected.id, part: part.part, index };
