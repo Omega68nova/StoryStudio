@@ -162,17 +162,8 @@ class SpatialV3NestingService:
         # Enter the most specific open child whose parent footprint was crossed.
         matches: list[tuple[NavigationSpace, dict[str, Any], float]] = []
         for child, child_context in self._open_children(project_id, space_id):
-            footprint = shape(
-                # The parent's original footprint is equivalent to mapping the
-                # normalized child boundary back through source/target bounds.
-                inherited_parent_context(
-                    self.repository,
-                    project_id=project_id,
-                    space=child,
-                )["boundary"]
-            )
-            # The above boundary lives in child coordinates. Use the owner's
-            # parent-space Surface(s) for the actual crossing test.
+            # Use the owner's authoritative parent-space Surface(s) for the
+            # crossing test; the inherited boundary itself lives in child coords.
             source_ids = set(child_context["source_feature_ids"])
             source_shapes = [
                 shape(feature.geometry.model_dump(mode="json"))
