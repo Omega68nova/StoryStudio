@@ -3528,6 +3528,9 @@ async def create_effect(project_id: str, request: EffectDefinitionCreate) -> dic
     require_project(project_id)
     if not data.rules.stat(project_id, request.target_stat_key): raise HTTPException(422, "Unknown target stat")
     _validate_formula_stats(project_id, request.formula)
+    if request.value_expression:
+        from app.domain.rules_v2 import ValueExpression
+        ValueExpression.model_validate(request.value_expression)
     try: result = data.rules.save_effect(EffectDefinition.model_validate({"project_id": project_id, **request.model_dump()}))
     except Exception as exc: raise HTTPException(422, str(exc)) from exc
     return result.model_dump(mode="json")
@@ -3539,6 +3542,9 @@ async def update_effect(project_id: str, effect_key: str, request: EffectDefinit
     if request.effect_key != effect_key: raise HTTPException(422, "effect_key is immutable")
     if not data.rules.stat(project_id, request.target_stat_key): raise HTTPException(422, "Unknown target stat")
     _validate_formula_stats(project_id, request.formula)
+    if request.value_expression:
+        from app.domain.rules_v2 import ValueExpression
+        ValueExpression.model_validate(request.value_expression)
     try: result = data.rules.save_effect(EffectDefinition.model_validate({"project_id": project_id, **request.model_dump()}), previous_key=effect_key)
     except Exception as exc: raise HTTPException(422, str(exc)) from exc
     return result.model_dump(mode="json")
@@ -3566,6 +3572,11 @@ def _validate_ability_references(project_id: str, request: AbilityDefinitionCrea
     _validate_requirement_references(project_id, requirements)
     projection = scheduler.world.projection(project_id)
     entities = projection.get("entities", {})
+    for raw_cost in request.rule_costs:
+        from app.domain.rules_v2 import RuleCost
+        cost = RuleCost.model_validate(raw_cost)
+        if not data.rules.stat(project_id, cost.stat_key):
+            raise HTTPException(422, f"Unknown stat in generalized ability cost: {cost.stat_key}")
     for cost in request.costs:
         if cost.stat_key:
             definition = data.rules.stat(project_id, cost.stat_key)
@@ -3636,6 +3647,8 @@ async def delete_stat(project_id: str, stat_key: str) -> None:
     if db.fetch_one("SELECT 1 FROM effect_definitions WHERE project_id=? AND target_stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is targeted by an effect")
     if db.fetch_one("SELECT 1 FROM effect_formula_nodes WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an effect formula")
     if db.fetch_one("SELECT 1 FROM ability_costs WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an ability cost")
+    if db.fetch_one("SELECT 1 FROM ability_rule_costs WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by a generalized ability cost")
+    if db.fetch_one("SELECT 1 FROM rule_object_stats WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat has stored values on rule/subsystem objects")
     if db.fetch_one("SELECT 1 FROM ability_requirement_nodes WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an ability requirement")
     if db.fetch_one("SELECT 1 FROM ability_passive_triggers WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by a passive trigger")
     db.execute("DELETE FROM stat_definitions WHERE project_id=? AND stat_key=?", (project_id, stat_key))

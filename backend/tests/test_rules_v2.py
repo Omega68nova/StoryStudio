@@ -515,3 +515,31 @@ def test_rule_context_exposes_ability_effect_and_auxiliary_objects(tmp_path) -> 
         stat_lookup=lambda key, owner: runtime.stat(project_id, key, owner),
     )
     assert weather_value == 11
+
+
+def test_phase8_api_schemas_preserve_generalized_fields() -> None:
+    from app.schemas import AbilityDefinitionCreate, EffectDefinitionCreate
+
+    effect = EffectDefinitionCreate.model_validate({
+        "effect_key": "scaled",
+        "name": "Scaled",
+        "target_stat_key": "hp",
+        "formula": {"kind": "constant", "value": 1},
+        "value_expression": {"kind": "stat", "selector": {"kind": "ability"}, "stat_key": "power"},
+        "stats": {"power": 4},
+    })
+    assert effect.value_expression["selector"]["kind"] == "ability"
+    assert effect.stats["power"] == 4
+
+    ability = AbilityDefinitionCreate.model_validate({
+        "ability_key": "cast",
+        "name": "Cast",
+        "rule_costs": [{
+            "owner": {"kind": "source"},
+            "stat_key": "durability",
+            "amount": {"kind": "constant", "value": 1},
+        }],
+        "stats": {"power": 7},
+    })
+    assert ability.rule_costs[0]["owner"]["kind"] == "source"
+    assert ability.stats["power"] == 7
