@@ -1372,6 +1372,24 @@ export function LocationMapStudio({
       if (!leftEntity || !rightEntity) return 0;
       return compareAreaPriority(rightEntity, leftEntity);
     });
+  const ambientDirty = JSON.stringify(ambientSets) !== ambientSavedSnapshot;
+  const updateAmbientSet = (index: number, patch: Partial<AmbientSoundSet>) =>
+    setAmbientSets(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
+  const ambientVariantsFor = (ids: string[]) => ambient.variants.filter(item => ids.includes(item.id));
+  const ambientSoundPicker = (item: AmbientSoundSet, index: number, label: string) => <BoxedMultiselectFilter
+    label={label}
+    tooltipLabel="ambient sounds"
+    options={ambient.variants}
+    value={ambientVariantsFor(item.variant_ids)}
+    getOptionSecondaryText={(variant: AmbientVariant) => `${variant.playback_rate}× · gain ${variant.default_gain}${!variant.available ? " · missing" : !variant.enabled ? " · disabled" : ""}`}
+    getOptionDisabled={(variant: AmbientVariant) => (!variant.enabled || !variant.available) && !item.variant_ids.includes(variant.id)}
+    onChange={(_event, next) => {
+      const variant_ids = next.map((variant: AmbientVariant) => variant.id);
+      if (index >= 0) updateAmbientSet(index, { variant_ids });
+      else setAmbientSets(current => [{ ...item, variant_ids }, ...current]);
+    }}
+  />;
+
   const toolLabels: Array<{ id: Tool; label: string }> = [
     { id: "select", label: "Select" },
     { id: "drag", label: "Drag" },
@@ -1445,6 +1463,36 @@ export function LocationMapStudio({
           >{item.label}</Button>)}
         </ButtonGroup>
         <span className="location-map-toolbar-spacer" />
+        <TextField
+          select
+          size="small"
+          label="Weather"
+          value={previewWeatherId}
+          onChange={event => setPreviewWeatherId(event.target.value)}
+          className="location-map-preview-select"
+        >
+          {environmentSettings?.weather.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+        <TextField
+          select
+          size="small"
+          label="Time of day"
+          value={previewTimePhaseId}
+          onChange={event => setPreviewTimePhaseId(event.target.value)}
+          className="location-map-preview-select"
+        >
+          {environmentSettings?.time_phases.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+        <FormControlLabel
+          className="location-map-sound-toggle"
+          control={<Switch
+            size="small"
+            checked={soundPreviewEnabled}
+            disabled={!selectedLocation}
+            onChange={event => setSoundPreviewEnabled(event.target.checked)}
+          />}
+          label={soundPreviewEnabled ? `Sound · ${previewAmbient.length}` : "Toggle sound"}
+        />
         <Button size="small" variant="outlined" onClick={() => setEnvironmentSettingsOpen(true)}>Environment settings</Button>
         {tool === "area" && areaDraft.length >= 2 && <Button size="small" onClick={() => void finishArea(false)}>
           Finish as wall
