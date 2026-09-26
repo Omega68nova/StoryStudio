@@ -7,6 +7,16 @@ from typing import Any, Callable, Literal
 
 from app.domain.adapters import entity_from_projection, relationship_from_projection
 from app.domain.world import Ability, AbilityAction, AbilityCostKind, Character, ComparisonOperator, DomainReference, EffectDefinition, EffectTarget, FormulaNode, Item, Location, Relationship, RequirementExpression, Stat, resolve_stat_bounds
+from app.domain.rules_v2 import (
+    ConditionEvaluator,
+    RuleEvaluationContext,
+    RuleEvaluationError,
+    RuleObjectResolver,
+    RuleObjectSnapshot,
+    ValueExpressionEvaluator,
+    condition_expression_from_requirement,
+    value_expression_from_formula,
+)
 
 
 class DomainOperationError(ValueError):
@@ -138,6 +148,12 @@ EffectiveStats = Callable[[Any], dict[str, float]]
 
 
 class RequirementEvaluator:
+    @staticmethod
+    def _snapshot(value: Any, effective_stats: EffectiveStats) -> RuleObjectSnapshot:
+        raw = value.model_dump(mode="json") if hasattr(value, "model_dump") else dict(value)
+        kind = "relationship" if isinstance(value, Relationship) else str(raw.get("kind") or "object")
+        return RuleObjectResolver.snapshot(raw, kind=kind, stats=effective_stats(value))
+
     def ensure_satisfied(self, actor: Character, ability: Ability, *, projection: dict[str, Any], primary_target: ResolvedTarget | None, stat_lookup: StatLookup, effective_stats: EffectiveStats) -> None:
         root = ability.requirements
         if not set(root.tags).issubset(set(actor.tags)):
@@ -147,49 +163,28 @@ class RequirementEvaluator:
             definition = stat_lookup(key, "character")
             if float(stats.get(key, definition.default_value)) < float(minimum):
                 raise DomainOperationError(f"{actor.name} does not meet the {definition.label} requirement")
-        if root.kind and not self._eval(root, actor, primary_target, projection, stat_lookup, effective_stats):
-            raise DomainOperationError(f"{actor.name} does not meet the ability requirements")
+        if not root.kind:
+            return
 
-    @staticmethod
-    def _compare(left: Any, operation: str, right: Any) -> bool:
-        if operation == ComparisonOperator.EQ: return left == right
-        if operation == ComparisonOperator.NE: return left != right
-        try: left, right = float(left), float(right)
-        except (TypeError, ValueError): return False
-        return {"lt": left < right, "lte": left <= right, "gt": left > right, "gte": left >= right}.get(operation, False)
-
-    def _eval(self, node: RequirementExpression, actor: Character, primary: ResolvedTarget | None, projection: dict[str, Any], stat_lookup: StatLookup, effective_stats: EffectiveStats) -> bool:
-        kind = str(node.kind)
-        if kind == "and": return all(self._eval(item, actor, primary, projection, stat_lookup, effective_stats) for item in node.children)
-        if kind == "or": return any(self._eval(item, actor, primary, projection, stat_lookup, effective_stats) for item in node.children)
-        if kind == "not": return not self._eval(node.child, actor, primary, projection, stat_lookup, effective_stats)  # type: ignore[arg-type]
-        target = actor if node.target == "actor" or not primary else primary.container
-        if kind == "compare":
-            if isinstance(target, Location): return False
-            scope = "relationship" if isinstance(target, Relationship) else "character"
-            definition = stat_lookup(str(node.stat_key), scope)
-            stats = effective_stats(target)
-            return self._compare(stats.get(str(node.stat_key), definition.default_value), str(node.comparison), node.value)
-        if kind == "has_tag": return str(node.tag) in set(getattr(target, "tags", []))
-        if kind == "has_item" and isinstance(target, Character): return any(str(x.item_id) == str(node.item_id) and x.quantity > 0 for x in target.state.inventory)
-        if kind == "has_ability" and isinstance(target, Character):
-            return str(node.ability_key or "") in set(target.state.abilities)
-        if kind == "relationship":
-            relation_name = str(node.relation or "").casefold()
-            if primary and isinstance(primary.container, Relationship): return primary.container.relation.casefold() == relation_name
-            target_id = str(target.id) if isinstance(target, Character) else str(actor.id)
-            return any(
-                str(item.get("relation", "")).casefold() == relation_name
-                and target_id in {str(item.get("source_id", "")), str(item.get("target_id", ""))}
-                for item in projection.get("relations", {}).values()
-            )
-        if kind == "location":
-            if isinstance(target, Character): return target.state.current_location_id == node.location_id
-            if isinstance(target, Location): return target.id == node.location_id
-            return False
-        if kind == "time": return str(projection.get("current_time_phase_id") or "") == str(node.time_phase_id or "")
-        if kind == "weather": return str(projection.get("current_weather_id") or "") == str(node.weather_id or "")
-        return False
+        bindings = {
+            "actor": self._snapshot(actor, effective_stats),
+        }
+        if primary_target is not None:
+            bindings["target"] = self._snapshot(primary_target.container, effective_stats)
+        context = RuleEvaluationContext(
+            bindings=bindings,
+            projection=projection,
+            variables={
+                "current_time_phase_id": projection.get("current_time_phase_id"),
+                "current_weather_id": projection.get("current_weather_id"),
+            },
+        )
+        try:
+            condition = condition_expression_from_requirement(root)
+            if not ConditionEvaluator().evaluate(condition, context, stat_lookup=stat_lookup):
+                raise DomainOperationError(f"{actor.name} does not meet the ability requirements")
+        except RuleEvaluationError as exc:
+            raise DomainOperationError(str(exc)) from exc
 
 
 @dataclass(slots=True)
@@ -265,43 +260,31 @@ class FormulaEvaluator:
     MAX_NODES = 64
 
     def evaluate(self, formula: FormulaNode, participants: dict[str, Any]) -> tuple[float, dict[str, float]]:
-        inputs: dict[str, float] = {}
-        count = 0
-
-        def visit(node: FormulaNode, depth: int) -> float:
-            nonlocal count
-            count += 1
-            if depth > self.MAX_DEPTH or count > self.MAX_NODES:
-                raise DomainOperationError("Effect formula exceeds complexity limits")
-            kind = str(node.kind)
-            if kind == "constant":
-                result = float(node.value)  # type: ignore[arg-type]
-            elif kind == "stat":
-                participant = participants.get(str(node.participant))
-                if participant is None:
-                    raise DomainOperationError(f"Effect needs a {node.participant} participant")
-                stats = participant.get("stats", {}) if isinstance(participant, dict) else participant.stats
-                if str(node.stat_key) not in stats:
-                    raise DomainOperationError(f"{node.participant} is missing stat {node.stat_key}")
-                result = float(stats[str(node.stat_key)])
-                inputs[f"{node.participant}.{node.stat_key}"] = result
-            else:
-                values = [visit(child, depth + 1) for child in node.children]
-                if kind == "negate": result = -values[0]
-                elif kind == "add": result = values[0] + values[1]
-                elif kind == "subtract": result = values[0] - values[1]
-                elif kind == "multiply": result = values[0] * values[1]
-                elif kind == "divide":
-                    if values[1] == 0: raise DomainOperationError("Effect formula divides by zero")
-                    result = values[0] / values[1]
-                elif kind == "minimum": result = min(values)
-                elif kind == "maximum": result = max(values)
-                else: raise DomainOperationError(f"Unknown formula node: {kind}")
-            if not math.isfinite(result):
-                raise DomainOperationError("Effect formula produced a non-finite result")
-            return result
-
-        return visit(formula, 1), inputs
+        bindings: dict[str, RuleObjectSnapshot] = {}
+        for name, raw in participants.items():
+            if isinstance(raw, RuleObjectSnapshot):
+                bindings[name] = raw
+                continue
+            if hasattr(raw, "model_dump"):
+                raw = raw.model_dump(mode="json")
+            raw = dict(raw)
+            bindings[name] = RuleObjectResolver.snapshot(
+                raw,
+                kind=str(raw.get("kind") or name),
+                stats=raw.get("stats", {}),
+            )
+        try:
+            return ValueExpressionEvaluator().evaluate(
+                value_expression_from_formula(formula),
+                RuleEvaluationContext(bindings=bindings),
+            )
+        except RuleEvaluationError as exc:
+            message = str(exc)
+            if "Value expression divides by zero" in message:
+                message = "Effect formula divides by zero"
+            elif "Value expression" in message:
+                message = message.replace("Value expression", "Effect formula")
+            raise DomainOperationError(message) from exc
 
 
 class StatAdjustmentExecutor:
