@@ -394,3 +394,47 @@ def test_phase8_effect_and_rule_costs_round_trip_repository(tmp_path) -> None:
     loaded_ability = data.rules.ability(project_id, "channel")
     assert loaded_effect is not None and loaded_effect.value_expression["kind"] == "add"
     assert loaded_ability is not None and loaded_ability.rule_costs[0]["owner"]["kind"] == "source"
+
+
+def test_runtime_phase8_effect_uses_current_location_per_target_context() -> None:
+    from types import SimpleNamespace
+    from app.domain.world import EffectDefinition, Stat
+    from app.services.rules import RulesRuntime
+
+    target_stat = Stat.model_validate({
+        "project_id": "project", "stat_key": "hp", "label": "HP",
+        "compatible_owner_kinds": ["character"], "default_value": 10, "minimum": 0, "maximum": 100,
+    })
+    magic_stat = Stat.model_validate({
+        "project_id": "project", "stat_key": "magic", "label": "Magic",
+        "compatible_owner_kinds": ["location"], "default_value": 0, "minimum": 0, "maximum": 100,
+    })
+    definition = EffectDefinition.model_validate({
+        "project_id": "project", "effect_key": "ambient_hit", "name": "Ambient hit",
+        "target_stat_key": "hp", "operation": "subtract",
+        "formula": {"kind": "constant", "value": 1},
+        "value_expression": {
+            "kind": "stat", "selector": {"kind": "current_location"}, "stat_key": "magic",
+        },
+    })
+    class FakeRules:
+        def stats(self, _project_id): return [target_stat, magic_stat]
+        def stat(self, _project_id, key): return {"hp": target_stat, "magic": magic_stat}.get(key)
+        def ability(self, *_args): return None
+    runtime = RulesRuntime(SimpleNamespace(rules=FakeRules()), lambda *_args: None)
+    projection = {
+        "entities": {
+            "actor": {"id": "actor", "kind": "character", "name": "Actor", "stats": {"hp": 10}, "state": {"current_location_id": "room"}},
+            "target": {"id": "target", "kind": "character", "name": "Target", "stats": {"hp": 10}, "state": {}},
+            "room": {"id": "room", "kind": "location", "name": "Room", "stats": {"magic": 3}, "state": {}},
+        },
+        "relations": {}, "active_effects": {}, "world_action_count": 0, "target_action_counts": {},
+    }
+    target = SimpleNamespace(id="target", scope="character")
+    result = runtime.normalize_effect(
+        "project", projection, definition, target,
+        {"actor": runtime.participant("project", projection["entities"]["actor"]),
+         "source": runtime.participant("project", projection["entities"]["actor"])},
+    )
+    assert result["resolved_magnitude"] == 3
+    assert result["value"] == 7

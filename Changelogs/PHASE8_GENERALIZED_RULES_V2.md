@@ -355,3 +355,19 @@ master. Phase 8 now ports only those fixes:
 
 The focused CI now also runs Spatial V3 pathfinding tests because Phase 8 shares
 its condition evaluator with conditional traversal.
+
+
+### Generalized costs and effect value execution — runtime wired
+
+Persisted Phase 8 value expressions now drive actual effect magnitude
+calculation. Each target invocation builds a fresh rule context, so target-bound
+values are evaluated independently. Current-location and explicit-object
+selectors resolve against effective branch stats.
+
+Ordered generalized stat costs are normalized after legacy stat costs against a
+working projection, preventing mixed legacy/Phase-8 costs from double-spending
+the same initial resource. The returned stat-change events remain part of the
+same ability normalization/transaction.
+
+Timed live effects persist the originating `ability_key` and re-evaluate
+Phase 8 value expressions from current branch state when they fire.

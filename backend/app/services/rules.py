@@ -12,6 +12,10 @@ from app.domain.rules_v2 import (
     RuleEvaluationContext,
     RuleEvaluationError,
     RuleObjectResolver,
+    RuleCost,
+    RuleCostExecutor,
+    ValueExpression,
+    ValueExpressionEvaluator,
     condition_expression_from_requirement,
 )
 from app.domain.operations import (
@@ -204,13 +208,30 @@ class RulesRuntime:
         except (RuleEvaluationError, DomainOperationError) as exc:
             raise RulesRuntimeError(str(exc)) from exc
 
-    def normalize_effect(self, project_id: str, projection: dict[str, Any], definition: Any, target: Any, participants: dict[str, Any], duration_override: int | None = None, tick_override: int | None = None) -> dict[str, Any]:
+    def normalize_effect(self, project_id: str, projection: dict[str, Any], definition: Any, target: Any, participants: dict[str, Any], duration_override: int | None = None, tick_override: int | None = None, ability: Any | None = None) -> dict[str, Any]:
         target_raw = projection["relations"].get(target.id) if target.scope == "relationship" else projection["entities"].get(target.id)
         if not target_raw: raise DomainOperationError("Effect target is unavailable")
         target_kind = "relationship" if target.scope == "relationship" else str(target_raw.get("kind"))
         stat = self.stat(project_id, definition.target_stat_key, target_kind)
         participant_values = {**participants, "target": self.participant(project_id, target_raw)}
-        magnitude, inputs = FormulaEvaluator().evaluate(definition.formula, participant_values)
+        if definition.value_expression:
+            try:
+                magnitude, inputs = ValueExpressionEvaluator().evaluate(
+                    ValueExpression.model_validate(definition.value_expression),
+                    self.rule_context(
+                        project_id,
+                        projection,
+                        actor_id=str(participants.get("actor", {}).get("id") or "") or None,
+                        source_id=str(participants.get("source", {}).get("id") or "") or None,
+                        target_id=str(target.id),
+                        ability=ability,
+                    ),
+                    stat_lookup=lambda key, owner: self.stat(project_id, key, owner),
+                )
+            except RuleEvaluationError as exc:
+                raise DomainOperationError(str(exc)) from exc
+        else:
+            magnitude, inputs = FormulaEvaluator().evaluate(definition.formula, participant_values)
         duration = definition.duration if duration_override is None else duration_override
         tick = definition.tick_interval if tick_override is None else tick_override
         if not ((duration == 0 and tick == 0) or (duration > 0 and tick <= duration) or (duration == -1 and tick > 0)):
@@ -223,7 +244,7 @@ class RulesRuntime:
         progress = int(projection.get("elapsed_minutes", 0)) if str(definition.clock) == "story_minutes" else int(projection.get("world_action_count", 0)) if str(definition.clock) == "world_actions" else int(projection.get("target_action_counts", {}).get(target.id, 0))
         matches = [item for item in projection.get("active_effects", {}).values() if item.get("effect_key") == definition.effect_key and item.get("target_id") == target.id]
         policy = str(definition.stacking_policy)
-        base = {**common, "actor_id": participants["actor"].get("id"), "source_id": participants["source"].get("id"), "clock": str(definition.clock), "duration": duration, "tick_interval": tick, "evaluation_mode": str(definition.evaluation_mode), "stacking_policy": policy, "max_stacks": definition.max_stacks, "started_at": progress, "next_tick": progress + (tick or duration), "expires_at": None if duration == -1 else progress + duration}
+        base = {**common, "actor_id": participants["actor"].get("id"), "source_id": participants["source"].get("id"), "ability_key": getattr(ability, "ability_key", None), "clock": str(definition.clock), "duration": duration, "tick_interval": tick, "evaluation_mode": str(definition.evaluation_mode), "stacking_policy": policy, "max_stacks": definition.max_stacks, "started_at": progress, "next_tick": progress + (tick or duration), "expires_at": None if duration == -1 else progress + duration}
         if matches and policy in {"refresh", "stack"}:
             previous = matches[0]
             if policy == "refresh": return {**previous, "event_type": "effect.instance_updated", "started_at": progress, "next_tick": progress + (tick or duration), "expires_at": None if duration == -1 else progress + duration}
@@ -285,6 +306,26 @@ class RulesRuntime:
             primary = targets.resolve_ability_target(projection, actor, ability, arguments.get("target_id"))
             RequirementEvaluator().ensure_satisfied(actor, ability, projection=projection, primary_target=primary, stat_lookup=lookup, effective_stats=effective)
             execution = EffectExecutor(targets).normalize(projection=projection, actor=actor, primary_target=primary, ability=ability, next_sequence=int(projection.get("_next_sequence", 0)), elapsed_minutes=int(projection.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective, id_factory=new_id)
+            rule_cost_events: list[dict[str, Any]] = []
+            if ability.rule_costs:
+                cost_projection = copy.deepcopy(projection)
+                for cost_event in execution.costs:
+                    self.apply_event(cost_projection, "stat.changed", cost_event, cost_event.get("entity_id"))
+                try:
+                    rule_cost_events = RuleCostExecutor().normalize(
+                        [RuleCost.model_validate(raw) for raw in ability.rule_costs],
+                        self.rule_context(
+                            project_id,
+                            cost_projection,
+                            actor_id=str(actor.id),
+                            source_id=str(source_raw["id"]),
+                            target_id=str(primary.id),
+                            ability=ability,
+                        ),
+                        stat_lookup=lambda key, owner: self.stat(project_id, key, owner),
+                    )
+                except RuleEvaluationError as exc:
+                    raise DomainOperationError(str(exc)) from exc
             inventory_changes: list[dict[str, Any]] = []
             for cost in ability.costs:
                 kind = str(cost.kind)
@@ -316,10 +357,10 @@ class RulesRuntime:
                 if str(action.kind) == "apply_effect":
                     definition = self.data.rules.effect(project_id, str(action.effect_key))
                     if not definition or not definition.enabled: raise DomainOperationError(f"Unknown effect: {action.effect_key}")
-                    effects.extend(self.normalize_effect(project_id, timing_projection, definition, target, participants, action.duration_override, action.tick_override) for target in resolved)
+                    effects.extend(self.normalize_effect(project_id, timing_projection, definition, target, participants, action.duration_override, action.tick_override, ability) for target in resolved)
                 else: effects.extend(self.normalize_action(action, target, actor) for target in (resolved[:1] if str(action.kind) in {"advance_time", "play_noise", "create"} else resolved))
         except DomainOperationError as exc: raise RulesRuntimeError(str(exc)) from exc
-        return {"actor_id": actor.id, "target_id": primary.id, "ability_key": ability.ability_key, "ability_name": ability.name, "source_item_id": source_item_id, "costs": execution.costs, "inventory_changes": inventory_changes, "effects": effects}
+        return {"actor_id": actor.id, "target_id": primary.id, "ability_key": ability.ability_key, "ability_name": ability.name, "source_item_id": source_item_id, "costs": [*execution.costs, *rule_cost_events], "inventory_changes": inventory_changes, "effects": effects}
 
     def direct_effect(self, project_id: str, projection: dict[str, Any], arguments: dict[str, Any]) -> dict[str, Any]:
         definition = self.data.rules.effect(project_id, str(arguments.get("effect_key") or ""))
@@ -344,7 +385,27 @@ class RulesRuntime:
                 definition = self.data.rules.effect(project_id, instance["effect_key"])
                 actor_raw = working["entities"].get(instance.get("actor_id")) or working["relations"].get(instance.get("actor_id")); source_raw = working["entities"].get(instance.get("source_id")) or working["relations"].get(instance.get("source_id")); target_raw = working["entities"].get(instance["target_id"]) or working["relations"].get(instance["target_id"])
                 if not definition or not actor_raw or not source_raw or not target_raw: raise RulesRuntimeError("Active effect definition or participant is unavailable")
-                magnitude, inputs = (float(instance["snapshot_magnitude"]), dict(instance.get("snapshot_inputs") or {})) if instance.get("evaluation_mode") == "snapshot" else FormulaEvaluator().evaluate(definition.formula, {"actor": self.participant(project_id, actor_raw), "source": self.participant(project_id, source_raw), "target": self.participant(project_id, target_raw)})
+                if instance.get("evaluation_mode") == "snapshot":
+                    magnitude, inputs = float(instance["snapshot_magnitude"]), dict(instance.get("snapshot_inputs") or {})
+                elif definition.value_expression:
+                    ability = self.data.rules.ability(project_id, str(instance.get("ability_key") or "")) if instance.get("ability_key") else None
+                    try:
+                        magnitude, inputs = ValueExpressionEvaluator().evaluate(
+                            ValueExpression.model_validate(definition.value_expression),
+                            self.rule_context(
+                                project_id,
+                                working,
+                                actor_id=str(instance.get("actor_id") or "") or None,
+                                source_id=str(instance.get("source_id") or "") or None,
+                                target_id=str(instance["target_id"]),
+                                ability=ability,
+                            ),
+                            stat_lookup=lambda key, owner: self.stat(project_id, key, owner),
+                        )
+                    except RuleEvaluationError as exc:
+                        raise RulesRuntimeError(str(exc)) from exc
+                else:
+                    magnitude, inputs = FormulaEvaluator().evaluate(definition.formula, {"actor": self.participant(project_id, actor_raw), "source": self.participant(project_id, source_raw), "target": self.participant(project_id, target_raw)})
                 magnitude *= int(instance.get("stacks", 1)); target_kind = "relationship" if instance["target_id"] in working["relations"] else str(target_raw.get("kind")); stat = self.stat(project_id, definition.target_stat_key, target_kind); values = self.effective_stats(project_id, target_raw, target_kind); current = float(values[definition.target_stat_key]); value = EffectExecutor._bounded_value(stat, current, str(definition.operation), magnitude, values=values, stat_lookup=lambda key: self.data.rules.stat(project_id, key))
                 row = {"event_type": "stat.changed", "relation_id" if target_kind == "relationship" else "entity_id": instance["target_id"], "stat_key": definition.target_stat_key, "previous_value": current, "value": value, "effect_key": definition.effect_key, "active_instance_id": instance["id"], "resolved_inputs": inputs, "resolved_magnitude": magnitude, "fired_at": next_tick, "operation": str(definition.operation)}
                 emitted.append(row); self.apply_event(working, "stat.changed", row, row.get("entity_id")); next_tick += int(instance.get("tick_interval") or instance.get("duration"))
@@ -451,7 +512,7 @@ class RulesRuntime:
                             if str(action.kind) == "apply_effect":
                                 effect = self.data.rules.effect(project_id, str(action.effect_key))
                                 if not effect: raise RulesRuntimeError(f"Passive ability references missing effect {action.effect_key}")
-                                row = self.normalize_effect(project_id, working, effect, target, participants, action.duration_override, action.tick_override)
+                                row = self.normalize_effect(project_id, working, effect, target, participants, action.duration_override, action.tick_override, ability)
                             else: row = self.normalize_action(action, target, actor)
                             emitted.append(row); event_type = str(row["event_type"]); event_payload = {key: value for key, value in row.items() if key != "event_type"}; self.apply_event(working, event_type, event_payload, row.get("entity_id"))
                             next_hook = hooks.get(event_type)
