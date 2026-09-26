@@ -403,20 +403,26 @@ class SpatialV3Migration:
             connection_id = str(raw.get("connection_id") or "")
             target_feature = (
                 location_feature_by_id.get(location_id)
-                if location_id
+                if location_id and location_id not in space_owners
                 else connection_feature_ids.get(connection_id)
             )
-            if not target_feature:
+            target_space = (
+                self.space_id(location_id)
+                if location_id in space_owners
+                else None
+            )
+            if not target_feature and not target_space:
                 warnings.append({
                     "kind": "encounter",
                     "id": str(rule_id),
-                    "message": "Encounter rule has no V3 feature target and needs review.",
+                    "message": "Encounter rule has no V3 feature/space target and needs review.",
                 })
                 continue
             probability = max(0.0, min(1.0, float(raw.get("probability") or 0)))
             encounter_policies.append(EncounterPolicy(
                 id=self.encounter_policy_id(str(rule_id)),
                 project_id=project_id,
+                navigation_space_id=target_space,
                 feature_id=target_feature,
                 mode="augment",
                 trigger_kind="transition",
@@ -424,6 +430,46 @@ class SpatialV3Migration:
                 candidates=candidates,
                 enabled=bool(raw.get("enabled", True)),
             ))
+
+        # Preserve the legacy open-map fallback: encounter_rate on a map owner
+        # plus random_encounter children meant one roll per geometric segment.
+        # V3 keeps that behavior as an explicit transition policy so migration
+        # is lossless; authors can later convert it to a distance policy.
+        for owner_id in sorted(space_owners):
+            owner = locations.get(owner_id, {})
+            owner_state = owner.get("state", {})
+            probability = max(0.0, min(1.0, float(owner_state.get("encounter_rate") or 0)))
+            if probability <= 0:
+                continue
+            candidates = [
+                EncounterCandidate(
+                    location_id=child_id,
+                    weight=float(
+                        locations[child_id].get("state", {}).get("encounter_weight") or 1
+                    ),
+                )
+                for child_id in children.get(owner_id, [])
+                if locations[child_id].get("state", {}).get("random_encounter")
+            ]
+            if not candidates:
+                continue
+            policy_id = f"v3-legacy-open:{owner_id}"
+            if any(item.id == policy_id for item in encounter_policies):
+                continue
+            encounter_policies.append(EncounterPolicy(
+                id=policy_id,
+                project_id=project_id,
+                navigation_space_id=self.space_id(owner_id),
+                mode="augment",
+                trigger_kind="transition",
+                probability_per_transition=probability,
+                candidates=candidates,
+            ))
+            warnings.append({
+                "kind": "encounter",
+                "id": owner_id,
+                "message": "Legacy encounter_rate preserved as one transition roll; review and convert to distance-based V3 encounters if desired.",
+            })
 
         layers = [
             NavigationLayer(
