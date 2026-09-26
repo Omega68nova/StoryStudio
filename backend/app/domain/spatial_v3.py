@@ -65,6 +65,11 @@ class EncounterMode(StrEnum):
     DISABLED = "disabled"
 
 
+class EncounterTrigger(StrEnum):
+    DISTANCE = "distance"
+    TRANSITION = "transition"
+
+
 Position: TypeAlias = tuple[float, float]
 
 
@@ -275,7 +280,9 @@ class EncounterPolicy(SpatialV3Model):
     feature_id: str | None = None
     mode: EncounterMode = EncounterMode.AUGMENT
     priority: float = 0
+    trigger_kind: EncounterTrigger = EncounterTrigger.DISTANCE
     rate_per_100_units: float = Field(default=0, ge=0)
+    probability_per_transition: float | None = Field(default=None, ge=0, le=1)
     minimum_distance: float = Field(default=0, ge=0)
     candidates: list[EncounterCandidate] = Field(default_factory=list)
     conditions: dict[str, Any] | None = None
@@ -285,6 +292,8 @@ class EncounterPolicy(SpatialV3Model):
     def validate_owner(self) -> "EncounterPolicy":
         if (self.navigation_space_id is None) == (self.feature_id is None):
             raise ValueError("Encounter policy must target exactly one navigation space or feature")
+        if self.trigger_kind == "transition" and self.probability_per_transition is None:
+            raise ValueError("Transition encounter policies require probability_per_transition")
         return self
 
 
