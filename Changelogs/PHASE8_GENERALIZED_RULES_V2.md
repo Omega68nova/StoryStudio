@@ -436,3 +436,58 @@ Rules Studio now exposes the new Phase 8 primitives without requiring raw JSON:
 The API request schemas now preserve and validate `value_expression`,
 `rule_costs`, and ability/effect `stats`, closing a prior gap where these
 new fields could otherwise be dropped at the HTTP boundary.
+
+
+## Spatial Map alignment
+
+The previous Map V2 editor has been replaced by a Spatial V3-native canvas.
+
+The editor now authors branch-authoritative:
+
+- NavigationSpace objects in FREE or ROUTED mode;
+- Surface polygons with semantic-location membership;
+- thick Corridor routes;
+- Barrier lines/multilines;
+- cross-space Connector features;
+- Spot features;
+- render layers and label visibility;
+- independent render order and movement priority;
+- traversal policies and conditional alternatives;
+- distance/transition encounter policies and candidate requirements;
+- semantic Location -> NavigationSpace bindings.
+
+Selected Point, LineString and Polygon geometry can be reshaped directly through
+canvas vertex handles. Legacy map geometry is no longer edited in parallel; a
+project without V3 spaces is offered the existing materialization path instead.
+
+A shared visual `RuleConditionEditor` is now used by Rules Studio and the
+Spatial Map. Ability Conditions V2 are persisted in
+`ability_definitions.condition_expression_json` and executed by the shared
+runtime. Legacy RequirementExpression trees remain supported during migration.
+
+Migrated legacy map requirement payloads are adapted into equivalent visual
+Conditions V2 when opened in the editor.
+
+## Spatial V3 presets
+
+Presets are generators only: they emit normal Spatial V3 branch mutations and do
+not create a second preset-specific storage model.
+
+Implemented presets:
+
+- Open region;
+- Road / route;
+- River;
+- City;
+- Walled city;
+- Building + ROUTED interior + door;
+- ROUTED room / interior;
+- Portal connection.
+
+Preset application is one branch transaction. Generated spaces, surfaces,
+corridors, barriers, connectors, layers and bindings are ordinary V3 objects and
+can be edited or deleted individually afterward.
+
+The walled-city preset deliberately generates segmented wall geometry with
+openings aligned to its crossing roads, so roads pass through wall gaps rather
+than relying on a special wall-override rule.
