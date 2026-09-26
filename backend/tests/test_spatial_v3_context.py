@@ -1,4 +1,5 @@
 from app.domain.spatial_v3 import (
+    BarrierProperties,
     CorridorProperties,
     LocationNavigationSpace,
     MapFeature,
@@ -7,6 +8,7 @@ from app.domain.spatial_v3 import (
 )
 from app.services.spatial_v3 import SpatialV3Service
 from app.services.spatial_v3_context import inherited_parent_context
+from app.services.spatial_v3_nesting import SpatialV3NestingService
 
 
 class FakeRepository:
@@ -121,6 +123,8 @@ def test_inherited_context_uses_parent_footprint_as_local_boundary_and_clips_con
     assert context is not None
     assert context["source_space_id"] == "parent-space"
     assert context["source_feature_ids"] == ["district-footprint"]
+    assert context["source_bounds"] == [20.0, 20.0, 80.0, 80.0]
+    assert context["target_bounds"] == [0.0, 0.0, 100.0, 100.0]
     assert context["boundary"]["type"] == "Polygon"
     boundary = context["boundary"]["coordinates"][0]
     assert min(point[0] for point in boundary) == 0
@@ -212,3 +216,154 @@ def test_movement_resolver_treats_inherited_shape_as_real_bounds():
     assert inside["movement"]["default_allowed"] is True
     assert outside["movement"]["within_bounds"] is False
     assert outside["movement"]["default_allowed"] is False
+
+
+
+def test_open_nested_space_descends_and_ascends_at_matching_coordinates():
+    parent = NavigationSpace(
+        id="parent-space",
+        project_id="project",
+        owner_location_id="city",
+    )
+    child = NavigationSpace(
+        id="child-space",
+        project_id="project",
+        owner_location_id="district",
+    )
+    district = surface(
+        "district-footprint",
+        "parent-space",
+        "district",
+        [(20, 20), (80, 20), (80, 80), (20, 80), (20, 20)],
+    )
+    repository = FakeRepository(
+        [parent, child],
+        [district],
+        {
+            "district": LocationNavigationSpace(
+                project_id="project",
+                location_id="district",
+                navigation_space_id="child-space",
+                entrance_policy="open",
+                bounds_mode="inherit_parent",
+            )
+        },
+    )
+    service = SpatialV3NestingService(repository)
+
+    entered = service.resolve_step(
+        project_id="project",
+        space_id="parent-space",
+        current=(19, 50),
+        candidate=(21, 50),
+    )
+    assert entered["allowed"] is True
+    assert entered["transition"]["kind"] == "descend"
+    assert entered["space_id"] == "child-space"
+    assert entered["point"][0] == pytest.approx(1.6666667)
+    assert entered["point"][1] == pytest.approx(50)
+
+    exited = service.resolve_step(
+        project_id="project",
+        space_id="child-space",
+        current=(1, 50),
+        candidate=(-2, 50),
+    )
+    assert exited["allowed"] is True
+    assert exited["transition"]["kind"] == "ascend"
+    assert exited["space_id"] == "parent-space"
+    assert exited["point"][0] == pytest.approx(18.8)
+    assert exited["point"][1] == pytest.approx(50)
+
+
+def test_connector_only_child_does_not_auto_descend():
+    parent = NavigationSpace(
+        id="parent-space",
+        project_id="project",
+        owner_location_id="city",
+    )
+    child = NavigationSpace(
+        id="child-space",
+        project_id="project",
+        owner_location_id="building",
+    )
+    building = surface(
+        "building-footprint",
+        "parent-space",
+        "building",
+        [(20, 20), (80, 20), (80, 80), (20, 80), (20, 20)],
+    )
+    repository = FakeRepository(
+        [parent, child],
+        [building],
+        {
+            "building": LocationNavigationSpace(
+                project_id="project",
+                location_id="building",
+                navigation_space_id="child-space",
+                entrance_policy="connectors",
+                bounds_mode="inherit_parent",
+            )
+        },
+    )
+
+    result = SpatialV3NestingService(repository).resolve_step(
+        project_id="project",
+        space_id="parent-space",
+        current=(19, 50),
+        candidate=(21, 50),
+    )
+    assert result["allowed"] is True
+    assert result["transition"] is None
+    assert result["space_id"] == "parent-space"
+
+
+def test_parent_barrier_blocks_walking_out_of_open_child():
+    parent = NavigationSpace(
+        id="parent-space",
+        project_id="project",
+        owner_location_id="city",
+    )
+    child = NavigationSpace(
+        id="child-space",
+        project_id="project",
+        owner_location_id="district",
+    )
+    district = surface(
+        "district-footprint",
+        "parent-space",
+        "district",
+        [(20, 20), (80, 20), (80, 80), (20, 80), (20, 20)],
+    )
+    wall = MapFeature.model_validate({
+        "id": "west-wall",
+        "project_id": "project",
+        "navigation_space_id": "parent-space",
+        "feature_kind": "barrier",
+        "name": "West wall",
+        "geometry": {"type": "LineString", "coordinates": [(20, 20), (20, 80)]},
+        "render_layer": "barriers",
+        "properties": BarrierProperties().model_dump(mode="json"),
+    })
+    repository = FakeRepository(
+        [parent, child],
+        [district, wall],
+        {
+            "district": LocationNavigationSpace(
+                project_id="project",
+                location_id="district",
+                navigation_space_id="child-space",
+                entrance_policy="open",
+                bounds_mode="inherit_parent",
+            )
+        },
+    )
+
+    result = SpatialV3NestingService(repository).resolve_step(
+        project_id="project",
+        space_id="child-space",
+        current=(1, 50),
+        candidate=(-2, 50),
+    )
+    assert result["allowed"] is False
+    assert result["reason"] == "parent_blocked"
