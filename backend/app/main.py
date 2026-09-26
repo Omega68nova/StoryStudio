@@ -1920,6 +1920,33 @@ async def resolve_spatial_v3_point(
     return {"movement": movement, "encounters": encounters}
 
 
+@app.post("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/step")
+async def resolve_spatial_v3_nested_step(
+    project_id: str,
+    space_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve one movement step, including seamless open parent/child crossings."""
+    require_project(project_id)
+    _synchronize_spatial_v3_projection(project_id)
+    from app.services.spatial_v3 import SpatialV3Error
+    from app.services.spatial_v3_nesting import SpatialV3NestingService
+
+    try:
+        current = request.get("current") or []
+        candidate = request.get("candidate") or []
+        if len(current) < 2 or len(candidate) < 2:
+            raise SpatialV3Error("Nested movement step requires current and candidate points")
+        return SpatialV3NestingService(data.spatial_v3).resolve_step(
+            project_id=project_id,
+            space_id=space_id,
+            current=(float(current[0]), float(current[1])),
+            candidate=(float(candidate[0]), float(candidate[1])),
+        )
+    except (SpatialV3Error, ValueError, TypeError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/spatial-v3/path")
 async def plan_spatial_v3_path(
     project_id: str,

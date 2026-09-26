@@ -28,10 +28,30 @@ type Space = {
   id: string;
   owner_location_id: string | null;
   navigation_mode: "free" | "routed";
+  bounds?: Geometry | null;
+};
+
+type SpaceBinding = {
+  location_id: string;
+  navigation_space_id: string;
+  entrance_policy: "connectors" | "open";
+  bounds_mode: "inherit_parent" | "independent";
+};
+
+type InheritedContext = {
+  source_space_id: string;
+  source_location_id: string;
+  source_feature_ids: string[];
+  source_bounds: [number, number, number, number];
+  target_bounds: [number, number, number, number];
+  boundary: Geometry;
+  features: Feature[];
 };
 
 type SpaceDetails = {
   space: Space;
+  binding?: SpaceBinding | null;
+  inherited_context?: InheritedContext | null;
   features: Feature[];
 };
 
@@ -117,6 +137,49 @@ function clampPoint(point: Point): Point {
   return [Math.max(0, Math.min(100, point[0])), Math.max(0, Math.min(100, point[1]))];
 }
 
+function transformPoint(
+  point: Point,
+  source: [number, number, number, number],
+  target: [number, number, number, number],
+): Point {
+  const [sMinX, sMinY, sMaxX, sMaxY] = source;
+  const [tMinX, tMinY, tMaxX, tMaxY] = target;
+  const sw = Math.max(1e-9, sMaxX - sMinX);
+  const sh = Math.max(1e-9, sMaxY - sMinY);
+  return [
+    tMinX + ((point[0] - sMinX) / sw) * (tMaxX - tMinX),
+    tMinY + ((point[1] - sMinY) / sh) * (tMaxY - tMinY),
+  ];
+}
+
+function parentToChild(point: Point, context: InheritedContext): Point {
+  return transformPoint(point, context.source_bounds, context.target_bounds);
+}
+
+function childToParent(point: Point, context: InheritedContext): Point {
+  return transformPoint(point, context.target_bounds, context.source_bounds);
+}
+
+function movementWinner(features: Feature[], point: Point) {
+  return features
+    .filter(feature =>
+      feature.enabled
+      && (feature.feature_kind === "surface" || feature.feature_kind === "corridor")
+      && (feature.feature_kind === "surface"
+        ? pointInGeometry(point, feature.geometry)
+        : corridorContains(point, feature))
+    )
+    .sort((a, b) => Number(b.movement_priority ?? 0) - Number(a.movement_priority ?? 0))[0] ?? null;
+}
+
+function canOccupyIn(details: SpaceDetails, point: Point) {
+  const boundary = details.inherited_context?.boundary ?? details.space.bounds;
+  if (boundary && !pointInGeometry(point, boundary)) return false;
+  const winner = movementWinner(details.features, point);
+  if (winner) return winner.properties.traversal?.default_allowed !== false;
+  return details.space.navigation_mode === "free";
+}
+
 function featureCenter(feature: Feature): Point {
   if (feature.geometry.type === "Point") return feature.geometry.coordinates;
   const points = feature.geometry.type === "LineString" ? feature.geometry.coordinates
@@ -188,8 +251,8 @@ export function SpatialPlaytestPage({
     [current],
   );
   const barriers = useMemo(
-    () => features.filter(feature => feature.feature_kind === "barrier"),
-    [features],
+    () => current?.features.filter(feature => feature.enabled && feature.feature_kind === "barrier") ?? [],
+    [current],
   );
 
   const activeSemanticLocationId = useMemo(() => {
@@ -289,13 +352,8 @@ export function SpatialPlaytestPage({
 
   const canOccupy = useCallback((point: Point) => {
     if (!current) return false;
-    if (current.space.navigation_mode === "free") return true;
-    return features.some(feature =>
-      feature.feature_kind === "surface" ? pointInGeometry(point, feature.geometry)
-      : feature.feature_kind === "corridor" ? corridorContains(point, feature)
-      : false
-    );
-  }, [current, features]);
+    return canOccupyIn(current, point);
+  }, [current]);
 
   const enterSpace = useCallback((targetSpaceId: string, targetPoint: Point = [50, 50], reason = "Entered") => {
     if (!details[targetSpaceId]) return;
@@ -389,9 +447,79 @@ export function SpatialPlaytestPage({
         const length = Math.hypot(dx, dy) || 1;
         const step = MOVE_SPEED * dt;
         setPlayer(currentPoint => {
-          const candidate = clampPoint([currentPoint[0] + dx / length * step, currentPoint[1] + dy / length * step]);
+          if (!current) return currentPoint;
+          const rawCandidate: Point = [
+            currentPoint[0] + dx / length * step,
+            currentPoint[1] + dy / length * step,
+          ];
+
+          // OPEN inherited spaces are continuous with their parent. Walking
+          // beyond the inherited child boundary ascends at the equivalent
+          // parent coordinate, provided the parent-side segment is legal.
+          const context = current.inherited_context;
+          if (
+            context
+            && current.binding?.entrance_policy === "open"
+            && pointInGeometry(currentPoint, context.boundary)
+            && !pointInGeometry(rawCandidate, context.boundary)
+          ) {
+            const parent = details[context.source_space_id];
+            if (!parent) return currentPoint;
+            const parentCurrent = childToParent(currentPoint, context);
+            const parentCandidate = childToParent(rawCandidate, context);
+            const parentBarriers = parent.features.filter(feature => feature.enabled && feature.feature_kind === "barrier");
+            if (crossesBarrier(parentCurrent, parentCandidate, parentBarriers)) return currentPoint;
+            if (!canOccupyIn(parent, parentCandidate)) return currentPoint;
+            setSpaceId(context.source_space_id);
+            setMessage(`Exited to ${locations.get(parent.space.owner_location_id ?? "")?.name ?? context.source_space_id}`);
+            return clampPoint(parentCandidate);
+          }
+
+          const candidate = clampPoint(rawCandidate);
           if (crossesBarrier(currentPoint, candidate, barriers)) return currentPoint;
           if (!canOccupy(candidate)) return currentPoint;
+
+          // Crossing into an OPEN child footprint automatically descends into
+          // its inner Navigation Space at the matching local coordinate.
+          const openChildren = Object.values(details)
+            .filter(child =>
+              child.space.id !== spaceId
+              && child.binding?.entrance_policy === "open"
+              && child.inherited_context?.source_space_id === spaceId
+            )
+            .map(child => {
+              const childContext = child.inherited_context!;
+              const sourceFeatures = current.features.filter(feature => feature.enabled && childContext.source_feature_ids.includes(feature.id));
+              const entered = sourceFeatures.some(feature =>
+                feature.feature_kind === "surface"
+                && pointInGeometry(candidate, feature.geometry)
+                && !pointInGeometry(currentPoint, feature.geometry)
+              );
+              return { child, childContext, sourceFeatures, entered };
+            })
+            .filter(item => item.entered)
+            .sort((a, b) => {
+              const area = (items: Feature[]) => items.reduce((sum, feature) => {
+                if (feature.geometry.type !== "Polygon") return sum;
+                const ring = feature.geometry.coordinates[0] ?? [];
+                let value = 0;
+                for (let i = 0; i < ring.length - 1; i++) {
+                  value += ring[i][0] * ring[i + 1][1] - ring[i + 1][0] * ring[i][1];
+                }
+                return sum + Math.abs(value / 2);
+              }, 0);
+              return area(a.sourceFeatures) - area(b.sourceFeatures);
+            });
+
+          const descent = openChildren[0];
+          if (descent) {
+            const childPoint = parentToChild(candidate, descent.childContext);
+            if (!canOccupyIn(descent.child, childPoint)) return currentPoint;
+            setSpaceId(descent.child.space.id);
+            setMessage(`Entered ${locations.get(descent.child.space.owner_location_id ?? "")?.name ?? descent.child.space.id}`);
+            return clampPoint(childPoint);
+          }
+
           return candidate;
         });
       }
@@ -399,7 +527,7 @@ export function SpatialPlaytestPage({
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [barriers, canOccupy]);
+  }, [barriers, canOccupy, current, details, features, locations, spaceId]);
 
   if (!current) return <div className="page"><h1>Spatial playtest</h1>{error ? <Alert severity="error">{error}</Alert> : <p>Loading map…</p>}</div>;
 
@@ -417,7 +545,7 @@ export function SpatialPlaytestPage({
       <div>
         <p className="eyebrow">SPATIAL V3 PLAYTEST</p>
         <h1>{locations.get(current.space.owner_location_id ?? "")?.name ?? "Navigation space"}</h1>
-        <p>WASD moves · E interacts · barriers block movement · ROUTED spaces only allow authored traversable geometry.</p>
+        <p>WASD moves · E interacts · open nested areas transition automatically · doors/gates remain explicit · barriers and movement rules still apply.</p>
       </div>
       <Stack direction="row" spacing={1}>
         <Chip label={current.space.navigation_mode.toUpperCase()} />
