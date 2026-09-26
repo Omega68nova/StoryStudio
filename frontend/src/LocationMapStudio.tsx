@@ -233,11 +233,13 @@ export function LocationMapStudio({
   revision,
   workflows: _workflows,
   fail,
+  openEnvironmentLocation,
 }: {
   projectId: string;
   revision: number;
   workflows: WorkflowPreset[];
   fail: (message: string) => void;
+  openEnvironmentLocation?: (locationId: string) => void;
 }) {
   const [world, setWorld] = useState<WorldProjection | null>(null);
   const [ruleData, setRuleData] = useState<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>({ stats: [], abilities: [] });
@@ -807,6 +809,8 @@ export function LocationMapStudio({
               <TextField select fullWidth size="small" label="Semantic location" value={featureDraft.semantic_location_id ?? ""} onChange={event => setFeatureDraft({ ...featureDraft, semantic_location_id: event.target.value || null })}>
                 <MenuItem value="">None</MenuItem>{locations.map(location => <MenuItem key={location.id} value={location.id}>{location.name}</MenuItem>)}
               </TextField>
+              {(featureDraft.feature_kind === "surface" || featureDraft.feature_kind === "spot") && featureDraft.semantic_location_id && openEnvironmentLocation &&
+                <Button size="small" onClick={() => openEnvironmentLocation(featureDraft.semantic_location_id!)}>Open location</Button>}
               <Button size="small" onClick={() => { setLocationAssignTarget("feature"); setLocationNameDraft(featureDraft.name || ""); setLocationDialogOpen(true); }}>New + assign</Button>
             </Stack>
             <Stack direction="row" spacing={1}>

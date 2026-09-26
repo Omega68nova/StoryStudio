@@ -1,14 +1,25 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Checkbox, Divider, FormControlLabel, IconButton, MenuItem, Switch, TextField, Tooltip } from "@mui/material";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api } from "./api";
 import { BoxedMultiselectFilter, CreatableBoxedMultiselect } from "./customComponents/BoxedMultiselect";
 import { RecordDrawer, ResourceButton, ResourceList } from "./customComponents/AdminResourceForms";
 import { FavoriteLibraryButton } from "./FavoriteLibraryButton";
-import type { AmbientAssignment, AmbientSoundSet, AmbientVariant, EnvironmentLocation, EnvironmentSettings, LocationMapLayer, NoiseVariant, TimePhase, WeatherDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
+import { EntityImageSurface } from "./customComponents/EntityImageSurface";
+import type { AmbientAssignment, AmbientSoundSet, AmbientVariant, EnvironmentLocation, EnvironmentSettings, LocationMapLayer, MediaAsset, NoiseVariant, TimePhase, WeatherDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
 
 type Editor = { kind: "weather"; value: WeatherDefinition } | { kind: "time"; value: TimePhase } | { kind: "location"; value: EnvironmentLocation };
 type AmbientData = { variants: AmbientVariant[]; assignments: AmbientAssignment[] };
+type BackgroundRecord = {
+  media_asset_id: string;
+  file_path?: string | null;
+  status: string;
+  prompt: string;
+  negative_prompt: string;
+  weather_id?: string | null;
+  time_phase_id?: string | null;
+};
+type PreviewPlaying = { audio: HTMLAudioElement; gain: number; target: number };
 const emptySet = (): AmbientSoundSet => ({ selector_type: "default", selector_value: null, weather_id: null, time_phase_id: null, variant_ids: [] });
 const emptyLocation = (parentId: string | null): EnvironmentLocation => ({ name: "", parent_location_id: parentId, exposure: "outdoor", description: "", imagegen_description: "", tags: [], image_tags: [], enabled: true, random_encounter: false, hidden: false, discovered: true, x: null, y: null, topology: "closed", occupancy: "direct_allowed", boundary_access: "free", spatial_kind: "spot", priority_layer: 0, minutes_per_unit: 1, base_visibility_units: null, encounter_rate: 0, footprint: null, local_bounds: null });
 
@@ -29,6 +40,57 @@ function setsFor(assignments: AmbientAssignment[], ownerType: string, ownerId?: 
   const result = [...grouped.values()];
   if (!result.some(item => item.selector_type === "default" && !item.weather_id && !item.time_phase_id)) result.unshift(emptySet());
   return result;
+}
+
+function resolveLocationAmbientPreview(
+  location: WorldEntity | null,
+  draft: EnvironmentLocation | null,
+  ambient: AmbientData,
+  localSets: AmbientSoundSet[],
+  weatherId: string,
+  phaseId: string,
+): AmbientVariant[] {
+  if (!location || !draft) return [];
+  const tags = new Set([
+    ...location.tags,
+    ...draft.tags,
+    ...draft.image_tags,
+  ].map(value => String(value).toLocaleLowerCase()));
+  const replacementRules = localSets.flatMap((set, setIndex) =>
+    set.variant_ids.map((variantId, variantIndex) => ({
+      id: `preview-${setIndex}-${variantIndex}`,
+      owner_type: "location",
+      owner_id: location.id,
+      selector_type: set.selector_type,
+      selector_value: set.selector_value ?? null,
+      weather_id: set.weather_id ?? null,
+      time_phase_id: set.time_phase_id ?? null,
+      variant_id: variantId,
+    }))
+  );
+  const rules = [
+    ...ambient.assignments.filter(item => !(item.owner_type === "location" && item.owner_id === location.id)),
+    ...replacementRules,
+  ];
+  const matched = new Set<string>();
+  for (const rule of rules) {
+    const ownerMatch = rule.owner_type === "location"
+      ? rule.owner_id === location.id
+      : rule.owner_type === "weather"
+        ? rule.owner_id === weatherId
+        : rule.owner_type === "time"
+          ? rule.owner_id === phaseId
+          : rule.owner_type === "action" && String(rule.owner_id).toLocaleLowerCase() === "standing";
+    if (!ownerMatch) continue;
+    if (draft.exposure === "isolated" && (rule.owner_type === "weather" || rule.owner_type === "time")) continue;
+    const selectorMatch = rule.selector_type === "default"
+      || rule.selector_type === draft.exposure
+      || (rule.selector_type === "tag" && tags.has(String(rule.selector_value ?? "").toLocaleLowerCase()));
+    const conditionMatch = (!rule.weather_id || rule.weather_id === weatherId)
+      && (!rule.time_phase_id || rule.time_phase_id === phaseId);
+    if (selectorMatch && conditionMatch) matched.add(rule.variant_id);
+  }
+  return ambient.variants.filter(item => matched.has(item.id) && item.enabled && item.available);
 }
 
 function normalizedLocation(entity: WorldEntity): EnvironmentLocation {
@@ -69,6 +131,13 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
   const [derived, setDerived] = useState({ source_path: "", label: "", playback_rate: 2, default_gain: 1 });
   const [actionRule, setActionRule] = useState({ owner_id: "", variant_id: "" });
   const [background, setBackground] = useState({ weather_id: "", time_phase_id: "", prompt: "" });
+  const [backgrounds, setBackgrounds] = useState<BackgroundRecord[]>([]);
+  const [backgroundSelection, setBackgroundSelection] = useState("new");
+  const [imageBusy, setImageBusy] = useState(false);
+  const [previewWeatherId, setPreviewWeatherId] = useState("");
+  const [previewTimePhaseId, setPreviewTimePhaseId] = useState("");
+  const [soundPreviewEnabled, setSoundPreviewEnabled] = useState(false);
+  const previewAudio = useRef(new Map<string, PreviewPlaying>());
 
   const load = useCallback(async () => {
     const [nextSettings, nextMap, nextAmbient, nextNoises, nextWorld, nextProposals] = await Promise.all([
@@ -80,11 +149,126 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
       environmentRequest("Weather proposals", api<Array<{ id: string; name: string; description: string; status: string }>>(`/projects/${projectId}/environment/weather-proposals`)),
     ]);
     setSettings(nextSettings); setMap(nextMap); setAmbient(nextAmbient); setNoises(nextNoises); setWorld(nextWorld); setProposals(nextProposals);
+    setPreviewWeatherId(current => nextSettings.weather.some(item => item.id === current && item.enabled)
+      ? current
+      : (nextSettings.weather.find(item => item.id === nextSettings.initial_weather_id && item.enabled)?.id ?? nextSettings.weather.find(item => item.enabled)?.id ?? ""));
+    setPreviewTimePhaseId(current => nextSettings.time_phases.some(item => item.id === current && item.enabled)
+      ? current
+      : (nextSettings.time_phases.find(item => item.enabled)?.id ?? ""));
   }, [projectId, parentId]);
   useEffect(() => { void load().catch(cause => fail(String(cause))); }, [load, revision, fail]);
 
   const locations = useMemo(() => Object.values(world?.entities ?? {}).filter(item => item.kind === "location" && !item.state.archived), [world]);
   const allTags = useMemo(() => [...new Set([...(settings?.weather.flatMap(item => [...item.tags, ...item.image_tags]) ?? []), ...locations.flatMap(item => [...item.tags, ...(Array.isArray(item.state.image_tags) ? item.state.image_tags.map(String) : [])]), ...ambient.variants.flatMap(item => item.tags)])].sort((a, b) => a.localeCompare(b)), [settings, locations, ambient.variants]);
+  const editingLocation = editor?.kind === "location" && editor.value.id
+    ? world?.entities[editor.value.id] ?? null
+    : null;
+
+  const loadBackgrounds = useCallback(async (locationId: string) => {
+    const rows = await api<BackgroundRecord[]>(`/projects/${projectId}/environment/locations/${locationId}/backgrounds`);
+    setBackgrounds(rows);
+    setBackgroundSelection(current => current !== "new" && rows.some(row => row.media_asset_id === current)
+      ? current
+      : (rows[0]?.media_asset_id ?? "new"));
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!editingLocation) {
+      setBackgrounds([]);
+      setBackgroundSelection("new");
+      return;
+    }
+    void loadBackgrounds(editingLocation.id).catch(cause => setFormError(String(cause)));
+  }, [editingLocation?.id, loadBackgrounds]);
+
+  useEffect(() => {
+    if (backgroundSelection === "new") return;
+    const row = backgrounds.find(item => item.media_asset_id === backgroundSelection);
+    if (!row) return;
+    setBackground({
+      weather_id: row.weather_id ?? "",
+      time_phase_id: row.time_phase_id ?? "",
+      prompt: row.prompt || "",
+    });
+  }, [backgroundSelection, backgrounds]);
+
+  const backgroundAsset = useMemo<MediaAsset | null>(() => {
+    if (!editingLocation || backgroundSelection === "new") return null;
+    const row = backgrounds.find(item => item.media_asset_id === backgroundSelection);
+    if (!row) return null;
+    return {
+      id: row.media_asset_id,
+      entity_id: editingLocation.id,
+      kind: "location",
+      status: row.status,
+      file_path: row.file_path,
+      prompt: row.prompt,
+      negative_prompt: row.negative_prompt,
+    };
+  }, [backgrounds, backgroundSelection, editingLocation]);
+
+  const previewAmbient = useMemo(() => resolveLocationAmbientPreview(
+    editingLocation,
+    editor?.kind === "location" ? editor.value : null,
+    ambient,
+    soundSets,
+    previewWeatherId,
+    previewTimePhaseId,
+  ), [editingLocation, editor, ambient, soundSets, previewWeatherId, previewTimePhaseId]);
+
+  useEffect(() => {
+    const desired = new Map((soundPreviewEnabled && editingLocation ? previewAmbient : []).map(item => [item.id, item]));
+    for (const [id, item] of desired) {
+      let playing = previewAudio.current.get(id);
+      if (!playing) {
+        const audio = new Audio(item.url);
+        audio.loop = true;
+        audio.preload = "auto";
+        audio.volume = 0;
+        audio.playbackRate = item.playback_rate;
+        playing = { audio, gain: 0, target: item.default_gain };
+        previewAudio.current.set(id, playing);
+        void audio.play().catch(() => undefined);
+      }
+      playing.audio.playbackRate = item.playback_rate;
+      playing.target = item.default_gain;
+    }
+    for (const [id, playing] of previewAudio.current) {
+      if (!desired.has(id)) playing.target = 0;
+    }
+  }, [soundPreviewEnabled, editingLocation?.id, previewAmbient]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const [id, playing] of previewAudio.current) {
+        const delta = playing.target - playing.gain;
+        playing.gain += Math.sign(delta) * Math.min(.05, Math.abs(delta));
+        playing.audio.volume = Math.max(0, Math.min(1, playing.gain));
+        if (playing.target === 0 && playing.gain === 0) {
+          playing.audio.pause();
+          playing.audio.src = "";
+          previewAudio.current.delete(id);
+        }
+      }
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: soundPreviewEnabled }));
+    return () => {
+      if (soundPreviewEnabled) window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
+    };
+  }, [soundPreviewEnabled]);
+
+  useEffect(() => () => {
+    window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
+    for (const playing of previewAudio.current.values()) {
+      playing.audio.pause();
+      playing.audio.src = "";
+    }
+    previewAudio.current.clear();
+  }, [projectId]);
   const snapshot = editor ? JSON.stringify({ editor, soundSets }) : "";
   const dirty = Boolean(editor && initialDraft && snapshot !== initialDraft);
 
@@ -105,7 +289,7 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
   }, [focusLocationId, world, settings]);
   function closeEditor(force = false) {
     if (!force && dirty && !window.confirm("Discard unsaved environment changes?")) return;
-    setEditor(null); setInitialDraft(""); setFormError("");
+    setSoundPreviewEnabled(false); setEditor(null); setInitialDraft(""); setFormError("");
   }
   async function saveSettings(patch: Partial<EnvironmentSettings>) {
     if (!settings) return;
@@ -135,7 +319,16 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
   }
   async function deleteEditor() {
     if (!editor || !editor.value.id || !window.confirm(`Delete ${editor.value.name}?`)) return;
-    try { await api(`/projects/${projectId}/environment/${editor.kind === "weather" ? `weather/${editor.value.id}` : `time-phases/${editor.value.id}`}`, { method: "DELETE" }); await load(); closeEditor(true); } catch (cause) { setFormError(String(cause)); }
+    try {
+      const path = editor.kind === "weather"
+        ? `weather/${editor.value.id}`
+        : editor.kind === "time"
+          ? `time-phases/${editor.value.id}`
+          : `locations/${editor.value.id}`;
+      await api(`/projects/${projectId}/environment/${path}`, { method: "DELETE" });
+      await load();
+      closeEditor(true);
+    } catch (cause) { setFormError(String(cause)); }
   }
   async function reorderTime(id: string, direction: -1 | 1) {
     if (!settings) return; const ids = settings.time_phases.map(item => item.id), index = ids.indexOf(id), target = index + direction; if (target < 0 || target >= ids.length) return;
@@ -152,10 +345,85 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
   async function saveVariant(item: AmbientVariant, patch: Partial<AmbientVariant>) { try { await api(`/projects/${projectId}/environment/ambient/variants/${item.id}`, { method: "PUT", body: JSON.stringify({ ...item, ...patch }) }); await load(); } catch (cause) { fail(String(cause)); } }
   async function saveNoise(item: NoiseVariant, patch: Partial<NoiseVariant>) { try { await api(`/projects/${projectId}/noises/${item.id}`, { method: "PUT", body: JSON.stringify({ ...item, ...patch }) }); await load(); } catch (cause) { fail(String(cause)); } }
   async function addActionRule() { if (!actionRule.owner_id.trim() || !actionRule.variant_id) return; try { await api(`/projects/${projectId}/environment/ambient/assignments`, { method: "POST", body: JSON.stringify({ owner_type: "action", owner_id: actionRule.owner_id.trim(), selector_type: "default", variant_id: actionRule.variant_id }) }); setActionRule({ owner_id: "", variant_id: "" }); await load(); } catch (cause) { fail(String(cause)); } }
-  async function generateBackground() {
-    const currentSettings = settings;
-    if (!editor || editor.kind !== "location" || !editor.value.id || !currentSettings?.background_workflow_id) return; const prompt = background.prompt.trim() || composedPrompt(editor.value, currentSettings);
-    try { const created = await api<{ media_asset_id: string }>(`/projects/${projectId}/environment/locations/${editor.value.id}/backgrounds`, { method: "POST", body: JSON.stringify({ prompt, negative_prompt: "", weather_id: background.weather_id || null, time_phase_id: background.time_phase_id || null }) }); await api(`/media-assets/${created.media_asset_id}/generate`, { method: "POST", body: JSON.stringify({ workflow_preset_id: currentSettings.background_workflow_id, prompt, negative_prompt: "", width: null, height: null }) }); } catch (cause) { setFormError(String(cause)); }
+  async function generateBackground(customPrompt = false, asset?: MediaAsset | null) {
+    if (!editor || editor.kind !== "location" || !editor.value.id) return;
+    const workflowId = settings?.background_workflow_id;
+    if (!workflowId) {
+      setFormError("Choose a background workflow before generating location images.");
+      return;
+    }
+    const fallback = composedPrompt(editor.value, settings, background.weather_id, background.time_phase_id);
+    const prompt = customPrompt
+      ? window.prompt("Background prompt", asset?.prompt || background.prompt || fallback)?.trim()
+      : (asset?.prompt || background.prompt || fallback).trim();
+    if (!prompt) return;
+    setImageBusy(true);
+    setFormError("");
+    try {
+      let mediaId = asset?.id;
+      if (!mediaId) {
+        const created = await api<{ media_asset_id: string }>(
+          `/projects/${projectId}/environment/locations/${editor.value.id}/backgrounds`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              prompt,
+              negative_prompt: "",
+              weather_id: background.weather_id || null,
+              time_phase_id: background.time_phase_id || null,
+            }),
+          },
+        );
+        mediaId = created.media_asset_id;
+      }
+      await api(`/media-assets/${mediaId}/generate`, {
+        method: "POST",
+        body: JSON.stringify({
+          workflow_preset_id: workflowId,
+          prompt,
+          negative_prompt: asset?.negative_prompt ?? "",
+          width: null,
+          height: null,
+        }),
+      });
+      await loadBackgrounds(editor.value.id);
+      setBackgroundSelection(mediaId);
+    } catch (cause) {
+      setFormError(String(cause));
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function uploadBackground(file: File) {
+    if (!editor || editor.kind !== "location" || !editor.value.id) return;
+    const form = new FormData();
+    form.append("file", file);
+    const conditions = new URLSearchParams({ kind: "location" });
+    if (backgroundSelection === "new" && background.weather_id) conditions.set("weather_id", background.weather_id);
+    if (backgroundSelection === "new" && background.time_phase_id) conditions.set("time_phase_id", background.time_phase_id);
+    setImageBusy(true);
+    try {
+      const created = await api<MediaAsset>(`/entities/${editor.value.id}/media/upload?${conditions.toString()}`, { method: "POST", body: form });
+      await loadBackgrounds(editor.value.id);
+      setBackgroundSelection(created.id);
+    } catch (cause) {
+      setFormError(String(cause));
+    } finally {
+      setImageBusy(false);
+    }
+  }
+
+  async function deleteBackground(asset: MediaAsset) {
+    if (!editor || editor.kind !== "location" || !editor.value.id) return;
+    try {
+      await api(`/media-assets/${asset.id}`, { method: "DELETE" });
+      setBackgroundSelection("new");
+      setBackground({ weather_id: "", time_phase_id: "", prompt: composedPrompt(editor.value, settings) });
+      await loadBackgrounds(editor.value.id);
+    } catch (cause) {
+      setFormError(String(cause));
+    }
   }
 
   if (!settings) return null;
@@ -171,7 +439,33 @@ export function EnvironmentStudio({ projectId, revision, workflows, fail, focusL
     <section className="panel map-panel"><div className="sheet-heading"><h2>{map?.parent?.name ?? "World locations"}</h2>{map?.parent && <Button onClick={() => setParentId(map.parent?.parent_id ?? null)}>Go back</Button>}</div><div className="environment-map"><MapEdges layer={map} />{map?.locations.map(item => <button className={!item.effectively_enabled ? "disabled" : ""} draggable key={item.id} style={{ left: `${10 + item.x * 21}%`, top: `${12 + item.y * 24}%` }} onDragEnd={e => void moveLocation(item.id, e.clientX, e.clientY, e.currentTarget)} onClick={() => { const entity = world?.entities[item.id]; if (entity) begin({ kind: "location", value: normalizedLocation(entity) }, "location", item.id); if (item.has_children) setParentId(item.id); }}><b>{item.name}</b><small>{item.exposure === "isolated" ? "sealed" : item.exposure}{item.has_children ? " · enter" : ""}</small></button>)}</div></section>
     <AmbientCatalog ambient={ambient} derived={derived} setDerived={setDerived} actionRule={actionRule} setActionRule={setActionRule} saveVariant={saveVariant} createDerived={createDerived} addActionRule={addActionRule} />
     <NoiseCatalog noises={noises} saveNoise={saveNoise} />
-    <RecordDrawer title={editor ? `${editor.value.id ? "Edit" : "Create"} ${editor.kind}` : ""} open={Boolean(editor)} dirty={dirty} error={formError} onClose={() => closeEditor()} onSave={saveEditor} onDelete={editor?.value.id ? deleteEditor : undefined}>{editor?.kind === "weather" && <WeatherForm value={editor.value} setValue={value => setEditor({ kind: "weather", value })} settings={settings} tags={allTags} soundSets={soundSets} setSoundSets={setSoundSets} variants={ambient.variants} />}{editor?.kind === "time" && <TimeForm value={editor.value} setValue={value => setEditor({ kind: "time", value })} settings={settings} soundSets={soundSets} setSoundSets={setSoundSets} variants={ambient.variants} />}{editor?.kind === "location" && <LocationForm value={editor.value} setValue={value => setEditor({ kind: "location", value })} locations={locations} settings={settings} tags={allTags} soundSets={soundSets} setSoundSets={setSoundSets} variants={ambient.variants} background={background} setBackground={setBackground} onGenerate={generateBackground} projectId={projectId} reload={load} />}</RecordDrawer>
+    <RecordDrawer title={editor ? `${editor.value.id ? "Edit" : "Create"} ${editor.kind}` : ""} open={Boolean(editor)} dirty={dirty} error={formError} onClose={() => closeEditor()} onSave={saveEditor} onDelete={editor?.value.id ? deleteEditor : undefined}>{editor?.kind === "weather" && <WeatherForm value={editor.value} setValue={value => setEditor({ kind: "weather", value })} settings={settings} tags={allTags} soundSets={soundSets} setSoundSets={setSoundSets} variants={ambient.variants} />}{editor?.kind === "time" && <TimeForm value={editor.value} setValue={value => setEditor({ kind: "time", value })} settings={settings} soundSets={soundSets} setSoundSets={setSoundSets} variants={ambient.variants} />}{editor?.kind === "location" && <LocationForm
+  value={editor.value}
+  setValue={value => setEditor({ kind: "location", value })}
+  locations={locations}
+  settings={settings}
+  tags={allTags}
+  soundSets={soundSets}
+  setSoundSets={setSoundSets}
+  variants={ambient.variants}
+  background={background}
+  setBackground={setBackground}
+  backgrounds={backgrounds}
+  backgroundSelection={backgroundSelection}
+  setBackgroundSelection={setBackgroundSelection}
+  backgroundAsset={backgroundAsset}
+  imageBusy={imageBusy}
+  onGenerate={generateBackground}
+  onUpload={uploadBackground}
+  onDeleteBackground={deleteBackground}
+  previewWeatherId={previewWeatherId}
+  setPreviewWeatherId={setPreviewWeatherId}
+  previewTimePhaseId={previewTimePhaseId}
+  setPreviewTimePhaseId={setPreviewTimePhaseId}
+  soundPreviewEnabled={soundPreviewEnabled}
+  setSoundPreviewEnabled={setSoundPreviewEnabled}
+  previewAmbient={previewAmbient}
+/>}</RecordDrawer>
   </div>;
 }
 
@@ -182,9 +476,157 @@ function WeatherForm({ value, setValue, settings, tags, soundSets, setSoundSets,
 function TimeForm({ value, setValue, settings, soundSets, setSoundSets, variants }: { value: TimePhase; setValue: (value: TimePhase) => void; settings: EnvironmentSettings; soundSets: AmbientSoundSet[]; setSoundSets: (value: AmbientSoundSet[]) => void; variants: AmbientVariant[] }) { return <><FormFields name={value.name} description={value.description} imagegen={value.imagegen_description} enabled={value.enabled} setName={name => setValue({ ...value, name })} setDescription={description => setValue({ ...value, description })} setImagegen={imagegen_description => setValue({ ...value, imagegen_description })} setEnabled={enabled => setValue({ ...value, enabled })} /><TextField type="number" label="Duration in minutes" inputProps={{ min: 1 }} value={value.duration_minutes} onChange={e => setValue({ ...value, duration_minutes: Number(e.target.value) })} /><TextField type="number" label="Visibility multiplier" inputProps={{ min: 0, max: 10, step: .1 }} value={value.visibility_multiplier ?? 1} onChange={e => setValue({ ...value, visibility_multiplier: Number(e.target.value) })} /><SoundSetsEditor owner="time" sets={soundSets} setSets={setSoundSets} variants={variants} settings={settings} /></>; }
 function FormFields({ name, description, imagegen, enabled, setName, setDescription, setImagegen, setEnabled, enabledDisabled = false }: { name: string; description: string; imagegen: string; enabled: boolean; setName: (value: string) => void; setDescription: (value: string) => void; setImagegen: (value: string) => void; setEnabled: (value: boolean) => void; enabledDisabled?: boolean }) { return <><TextField required label="Name" value={name} onChange={e => setName(e.target.value)} /><TextField multiline minRows={4} label="Description" value={description} onChange={e => setDescription(e.target.value)} /><TextField multiline minRows={3} label="Image-generation description" value={imagegen} onChange={e => setImagegen(e.target.value)} /><FormControlLabel control={<Switch disabled={enabledDisabled} checked={enabled} onChange={e => setEnabled(e.target.checked)} />} label={enabledDisabled ? "Enabled (initial weather)" : "Enabled"} /></>; }
 
-function LocationForm({ value, setValue, locations, settings, tags, soundSets, setSoundSets, variants, background, setBackground, onGenerate, reload }: { value: EnvironmentLocation; setValue: (value: EnvironmentLocation) => void; locations: WorldEntity[]; settings: EnvironmentSettings; tags: string[]; soundSets: AmbientSoundSet[]; setSoundSets: (value: AmbientSoundSet[]) => void; variants: AmbientVariant[]; background: { weather_id: string; time_phase_id: string; prompt: string }; setBackground: (value: { weather_id: string; time_phase_id: string; prompt: string }) => void; onGenerate: () => void; projectId: string; reload: () => Promise<void> }) {
+function LocationForm({
+  value,
+  setValue,
+  locations,
+  settings,
+  tags,
+  soundSets,
+  setSoundSets,
+  variants,
+  background,
+  setBackground,
+  backgrounds,
+  backgroundSelection,
+  setBackgroundSelection,
+  backgroundAsset,
+  imageBusy,
+  onGenerate,
+  onUpload,
+  onDeleteBackground,
+  previewWeatherId,
+  setPreviewWeatherId,
+  previewTimePhaseId,
+  setPreviewTimePhaseId,
+  soundPreviewEnabled,
+  setSoundPreviewEnabled,
+  previewAmbient,
+}: {
+  value: EnvironmentLocation;
+  setValue: (value: EnvironmentLocation) => void;
+  locations: WorldEntity[];
+  settings: EnvironmentSettings;
+  tags: string[];
+  soundSets: AmbientSoundSet[];
+  setSoundSets: (value: AmbientSoundSet[]) => void;
+  variants: AmbientVariant[];
+  background: { weather_id: string; time_phase_id: string; prompt: string };
+  setBackground: (value: { weather_id: string; time_phase_id: string; prompt: string }) => void;
+  backgrounds: BackgroundRecord[];
+  backgroundSelection: string;
+  setBackgroundSelection: (value: string) => void;
+  backgroundAsset: MediaAsset | null;
+  imageBusy: boolean;
+  onGenerate: (customPrompt?: boolean, asset?: MediaAsset | null) => Promise<void>;
+  onUpload: (file: File) => Promise<void>;
+  onDeleteBackground: (asset: MediaAsset) => Promise<void>;
+  previewWeatherId: string;
+  setPreviewWeatherId: (value: string) => void;
+  previewTimePhaseId: string;
+  setPreviewTimePhaseId: (value: string) => void;
+  soundPreviewEnabled: boolean;
+  setSoundPreviewEnabled: (value: boolean) => void;
+  previewAmbient: AmbientVariant[];
+}) {
   const blockedParents = descendantsOf(value.id, locations);
-  return <><FormFields name={value.name} description={value.description} imagegen={value.imagegen_description} enabled={value.enabled} setName={name => setValue({ ...value, name })} setDescription={description => setValue({ ...value, description })} setImagegen={imagegen_description => setValue({ ...value, imagegen_description })} setEnabled={enabled => setValue({ ...value, enabled })} /><TextField select label="Parent location" value={value.parent_location_id ?? ""} onChange={e => setValue({ ...value, parent_location_id: e.target.value || null })}><MenuItem value="">World root</MenuItem>{locations.filter(item => !blockedParents.has(item.id)).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField><div className="environment-condition-row"><TextField select label="Topology" value={value.topology} onChange={e => setValue({ ...value, topology: e.target.value as EnvironmentLocation["topology"] })}><MenuItem value="open">Open/free movement</MenuItem><MenuItem value="closed">Closed/routed</MenuItem></TextField><TextField select label="Occupancy" value={value.occupancy} onChange={e => setValue({ ...value, occupancy: e.target.value as EnvironmentLocation["occupancy"] })}><MenuItem value="direct_allowed">Direct occupancy allowed</MenuItem><MenuItem value="child_required">Child location required</MenuItem></TextField></div><div className="environment-condition-row"><TextField select label="Boundary access" value={value.boundary_access} onChange={e => setValue({ ...value, boundary_access: e.target.value as EnvironmentLocation["boundary_access"] })}><MenuItem value="free">Free boundary</MenuItem><MenuItem value="connection_required">Door/portal required</MenuItem></TextField><TextField select label="Spatial kind" value={value.spatial_kind} onChange={e => setValue({ ...value, spatial_kind: e.target.value as EnvironmentLocation["spatial_kind"] })}><MenuItem value="spot">Spot</MenuItem><MenuItem value="area">Area</MenuItem></TextField></div><div className="environment-condition-row"><TextField select label="Exposure" value={value.exposure} onChange={e => setValue({ ...value, exposure: e.target.value as EnvironmentLocation["exposure"] })}><MenuItem value="outdoor">Outdoor</MenuItem><MenuItem value="indoor">Indoor</MenuItem><MenuItem value="isolated">Sealed</MenuItem></TextField><TextField type="number" label="Minutes per map unit" inputProps={{ min: .001, step: .1 }} value={value.minutes_per_unit} onChange={e => setValue({ ...value, minutes_per_unit: Number(e.target.value) })} /></div><div className="environment-condition-row"><TextField type="number" label="Visibility radius" value={value.base_visibility_units ?? ""} onChange={e => setValue({ ...value, base_visibility_units: e.target.value === "" ? null : Number(e.target.value) })} /><TextField type="number" label="Encounter rate" inputProps={{ min: 0, max: 1, step: .01 }} value={value.encounter_rate} onChange={e => setValue({ ...value, encounter_rate: Number(e.target.value) })} />{value.spatial_kind === "area" && <TextField type="number" label="Area priority layer" helperText="Lower values win overlaps." value={value.priority_layer} onChange={e => setValue({ ...value, priority_layer: Number(e.target.value) })} />}</div><CreatableBoxedMultiselect label="Tags" tooltipLabel="tags" options={tags} value={value.tags} onChange={(_e, next) => setValue({ ...value, tags: next })} /><CreatableBoxedMultiselect label="Image tags" tooltipLabel="image tags" options={tags} value={value.image_tags} onChange={(_e, next) => setValue({ ...value, image_tags: next })} /><div className="environment-toggle-row"><FormControlLabel control={<Checkbox checked={value.random_encounter} onChange={e => setValue({ ...value, random_encounter: e.target.checked, discovered: e.target.checked ? false : value.discovered })} />} label="Random encounter" /><FormControlLabel control={<Checkbox checked={value.discovered} onChange={e => setValue({ ...value, discovered: e.target.checked })} />} label="Discovered" /></div><SoundSetsEditor owner="location" sets={soundSets} setSets={setSoundSets} variants={variants} settings={settings} />{value.id && <section className="environment-form-section"><h3>Backgrounds</h3><label className="file-button">Upload default background<input hidden type="file" accept="image/png,image/jpeg,image/webp" onChange={async e => { const file = e.target.files?.[0]; if (!file) return; const form = new FormData(); form.append("file", file); await api(`/entities/${value.id}/media/upload?kind=location`, { method: "POST", body: form }); await reload(); }} /></label><div className="environment-condition-row"><TextField select size="small" label="Weather" value={background.weather_id} onChange={e => setBackground({ weather_id: e.target.value, time_phase_id: background.time_phase_id, prompt: composedPrompt(value, settings, e.target.value, background.time_phase_id) })}><MenuItem value="">Any</MenuItem>{settings.weather.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField><TextField select size="small" label="Time" value={background.time_phase_id} onChange={e => setBackground({ weather_id: background.weather_id, time_phase_id: e.target.value, prompt: composedPrompt(value, settings, background.weather_id, e.target.value) })}><MenuItem value="">Any</MenuItem>{settings.time_phases.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}</TextField></div><TextField multiline minRows={3} label="Generation prompt" value={background.prompt} onChange={e => setBackground({ ...background, prompt: e.target.value })} /><Button disabled={!settings.background_workflow_id} onClick={() => void onGenerate()}>Generate background</Button></section>}</>;
+  return <>
+    <FormFields
+      name={value.name}
+      description={value.description}
+      imagegen={value.imagegen_description}
+      enabled={value.enabled}
+      setName={name => setValue({ ...value, name })}
+      setDescription={description => setValue({ ...value, description })}
+      setImagegen={imagegen_description => setValue({ ...value, imagegen_description })}
+      setEnabled={enabled => setValue({ ...value, enabled })}
+    />
+
+    <TextField select label="Parent location" value={value.parent_location_id ?? ""} onChange={e => setValue({ ...value, parent_location_id: e.target.value || null })}>
+      <MenuItem value="">World root</MenuItem>
+      {locations.filter(item => !blockedParents.has(item.id)).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+    </TextField>
+
+    <TextField select label="Exposure" value={value.exposure} onChange={e => setValue({ ...value, exposure: e.target.value as EnvironmentLocation["exposure"] })}>
+      <MenuItem value="outdoor">Outdoor</MenuItem>
+      <MenuItem value="indoor">Indoor</MenuItem>
+      <MenuItem value="isolated">Sealed / isolated</MenuItem>
+    </TextField>
+
+    <CreatableBoxedMultiselect label="Tags" tooltipLabel="tags" options={tags} value={value.tags} onChange={(_e, next) => setValue({ ...value, tags: next })} />
+    <CreatableBoxedMultiselect label="Image tags" tooltipLabel="image tags" options={tags} value={value.image_tags} onChange={(_e, next) => setValue({ ...value, image_tags: next })} />
+
+    <div className="environment-toggle-row">
+      <FormControlLabel control={<Checkbox checked={value.discovered} onChange={e => setValue({ ...value, discovered: e.target.checked })} />} label="Discovered" />
+      <FormControlLabel control={<Checkbox checked={value.hidden} onChange={e => setValue({ ...value, hidden: e.target.checked })} />} label="Hidden" />
+    </div>
+
+    <SoundSetsEditor owner="location" sets={soundSets} setSets={setSoundSets} variants={variants} settings={settings} />
+
+    <section className="environment-form-section">
+      <div className="sheet-heading">
+        <div><h3>Ambient preview</h3><p>Hear the currently edited rules without saving them.</p></div>
+        <FormControlLabel control={<Switch checked={soundPreviewEnabled} onChange={e => setSoundPreviewEnabled(e.target.checked)} />} label="Preview" />
+      </div>
+      <div className="environment-condition-row">
+        <TextField select size="small" label="Weather" value={previewWeatherId} onChange={e => setPreviewWeatherId(e.target.value)}>
+          {settings.weather.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+        <TextField select size="small" label="Time" value={previewTimePhaseId} onChange={e => setPreviewTimePhaseId(e.target.value)}>
+          {settings.time_phases.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+      </div>
+      <small>{previewAmbient.length ? `Playing: ${previewAmbient.map(item => item.label).join(", ")}` : "No ambient loops match these preview conditions."}</small>
+    </section>
+
+    {value.id && <section className="environment-form-section">
+      <div className="sheet-heading"><div><h3>Backgrounds</h3><p>Weather/time variants use the same resolver as story and playtest scenes.</p></div><span>{backgrounds.length} variant{backgrounds.length === 1 ? "" : "s"}</span></div>
+      <TextField select size="small" label="Background variant" value={backgroundSelection} onChange={e => {
+        const next = e.target.value;
+        setBackgroundSelection(next);
+        if (next === "new") setBackground({ weather_id: "", time_phase_id: "", prompt: composedPrompt(value, settings) });
+      }}>
+        <MenuItem value="new">+ New background variant</MenuItem>
+        {backgrounds.map(row => {
+          const weather = settings.weather.find(item => item.id === row.weather_id)?.name ?? "Any weather";
+          const phase = settings.time_phases.find(item => item.id === row.time_phase_id)?.name ?? "Any time";
+          return <MenuItem key={row.media_asset_id} value={row.media_asset_id}>{weather} · {phase}</MenuItem>;
+        })}
+      </TextField>
+      <div className="environment-condition-row">
+        <TextField select size="small" label="Weather" disabled={backgroundSelection !== "new"} value={background.weather_id} onChange={e => setBackground({
+          weather_id: e.target.value,
+          time_phase_id: background.time_phase_id,
+          prompt: composedPrompt(value, settings, e.target.value, background.time_phase_id),
+        })}>
+          <MenuItem value="">Any weather</MenuItem>{settings.weather.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+        <TextField select size="small" label="Time" disabled={backgroundSelection !== "new"} value={background.time_phase_id} onChange={e => setBackground({
+          weather_id: background.weather_id,
+          time_phase_id: e.target.value,
+          prompt: composedPrompt(value, settings, background.weather_id, e.target.value),
+        })}>
+          <MenuItem value="">Any time</MenuItem>{settings.time_phases.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+      </div>
+      {backgroundSelection === "new" && <TextField multiline minRows={3} label="Generation prompt" value={background.prompt} onChange={e => setBackground({ ...background, prompt: e.target.value })} />}
+      <EntityImageSurface
+        asset={backgroundAsset}
+        alt={`${value.name} background`}
+        className="location-map-background-surface"
+        placeholder="Background"
+        onGenerate={() => void onGenerate(false, null)}
+        onGenerateWithPrompt={() => void onGenerate(true, null)}
+        onRegenerate={asset => void onGenerate(false, asset)}
+        onRegenerateWithPrompt={asset => void onGenerate(true, asset)}
+        onDelete={asset => void onDeleteBackground(asset)}
+        onUpload={file => void onUpload(file)}
+        loading={imageBusy}
+        loadingLabel="Working on background…"
+      />
+      {!settings.background_workflow_id && <small>Choose a Background workflow in Environment settings to enable generation.</small>}
+    </section>}
+  </>;
 }
 
 function SoundSetsEditor({ owner, sets, setSets, variants, settings }: { owner: "weather" | "time" | "location"; sets: AmbientSoundSet[]; setSets: (value: AmbientSoundSet[]) => void; variants: AmbientVariant[]; settings: EnvironmentSettings }) {
