@@ -536,6 +536,63 @@ export function LocationMapStudio({
     };
   }, [backgrounds, selectedLocation, backgroundSelection]);
 
+  const previewAmbient = useMemo(
+    () => resolveAmbientPreview(
+      selectedLocation,
+      editorDraft,
+      ambient,
+      ambientSets,
+      previewWeatherId,
+      previewTimePhaseId,
+    ),
+    [selectedLocation, editorDraft, ambient, ambientSets, previewWeatherId, previewTimePhaseId],
+  );
+
+  useEffect(() => {
+    const desired = new Map((soundPreviewEnabled && selectedLocation ? previewAmbient : []).map(item => [item.id, item]));
+    for (const [id, item] of desired) {
+      let playing = previewAudio.current.get(id);
+      if (!playing) {
+        const audio = new Audio(item.url);
+        audio.loop = true;
+        audio.preload = "auto";
+        audio.volume = 0;
+        audio.playbackRate = item.playback_rate;
+        playing = { audio, gain: 0, target: item.default_gain };
+        previewAudio.current.set(id, playing);
+        void audio.play().catch(() => undefined);
+      }
+      playing.audio.playbackRate = item.playback_rate;
+      playing.target = item.default_gain;
+    }
+    for (const [id, playing] of previewAudio.current) {
+      if (!desired.has(id)) playing.target = 0;
+    }
+  }, [soundPreviewEnabled, selectedLocation?.id, previewAmbient]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const [id, playing] of previewAudio.current) {
+        playing.gain += Math.sign(playing.target - playing.gain) * Math.min(.05, Math.abs(playing.target - playing.gain));
+        playing.audio.volume = Math.max(0, Math.min(1, playing.gain));
+        if (playing.target === 0 && playing.gain === 0) {
+          playing.audio.pause();
+          playing.audio.src = "";
+          previewAudio.current.delete(id);
+        }
+      }
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => () => {
+    for (const playing of previewAudio.current.values()) {
+      playing.audio.pause();
+      playing.audio.src = "";
+    }
+    previewAudio.current.clear();
+  }, [projectId]);
+
   function canvasPoint(clientX: number, clientY: number, element: HTMLElement): Point {
     const rect = element.getBoundingClientRect();
     return {
@@ -667,6 +724,25 @@ export function LocationMapStudio({
     setAreaDraft([]);
     setTool("select");
     await load();
+  }
+
+  async function saveLocationAmbient() {
+    if (!selectedLocation) return;
+    try {
+      const saved = await api<AmbientSoundSet[]>(
+        `/projects/${projectId}/environment/ambient/assignments/location/${selectedLocation.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ sets: ambientSets.filter(item => item.variant_ids.length) }),
+        },
+      );
+      setAmbientSets(saved.length ? saved : [emptyAmbientSet()]);
+      setAmbientSavedSnapshot(JSON.stringify(saved.length ? saved : [emptyAmbientSet()]));
+      const nextAmbient = await api<AmbientData>(`/projects/${projectId}/environment/ambient`);
+      setAmbient(nextAmbient);
+    } catch (cause) {
+      fail(String(cause));
+    }
   }
 
   async function saveLocation(value: EnvironmentLocation) {
