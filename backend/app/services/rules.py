@@ -6,6 +6,14 @@ from typing import Any, Callable
 
 from app.database import new_id
 from app.domain.adapters import entity_from_projection
+from app.domain.rules_v2 import (
+    ConditionEvaluator,
+    ConditionExpression,
+    RuleEvaluationContext,
+    RuleEvaluationError,
+    RuleObjectResolver,
+    condition_expression_from_requirement,
+)
 from app.domain.operations import (
     DomainOperationError,
     EffectExecutor,
@@ -14,7 +22,7 @@ from app.domain.operations import (
     StatAdjustmentExecutor,
     TargetResolver,
 )
-from app.domain.world import Character, resolve_stat_bounds
+from app.domain.world import Character, RequirementExpression, resolve_stat_bounds
 
 
 class RulesRuntimeError(ValueError):
@@ -96,6 +104,105 @@ class RulesRuntime:
     def participant(self, project_id: str, raw: dict[str, Any]) -> dict[str, Any]:
         owner_kind = str(raw.get("kind")) if raw.get("kind") else "relationship"
         return {**raw, "stats": self.effective_stats(project_id, raw, owner_kind)}
+
+    def rule_context(
+        self,
+        project_id: str,
+        projection: dict[str, Any],
+        *,
+        actor_id: str | None = None,
+        source_id: str | None = None,
+        target_id: str | None = None,
+        ability: Any | None = None,
+    ) -> RuleEvaluationContext:
+        """Build a reusable Rules V2 context from branch-authoritative state.
+
+        Every projection object is copied with effective stat values so generic
+        selectors (including explicit/current_location) see defaults and dynamic
+        bounds exactly like the existing rules runtime.
+        """
+        entities = {
+            str(entity_id): self.participant(project_id, raw)
+            for entity_id, raw in projection.get("entities", {}).items()
+        }
+        relations = {
+            str(relation_id): self.participant(project_id, raw)
+            for relation_id, raw in projection.get("relations", {}).items()
+        }
+        normalized_projection = {
+            **projection,
+            "entities": entities,
+            "relations": relations,
+        }
+        bindings = {}
+        for name, object_id in (
+            ("actor", actor_id),
+            ("source", source_id),
+            ("target", target_id),
+        ):
+            if not object_id:
+                continue
+            raw = entities.get(str(object_id)) or relations.get(str(object_id))
+            if raw:
+                bindings[name] = RuleObjectResolver.snapshot(raw)
+        if ability is not None:
+            ability_raw = ability.model_dump(mode="json") if hasattr(ability, "model_dump") else dict(ability)
+            bindings["ability"] = RuleObjectResolver.snapshot({
+                **ability_raw,
+                "id": str(ability_raw.get("ability_key") or ability_raw.get("id") or "ability"),
+                "kind": "ability",
+                "stats": dict(ability_raw.get("stats") or {}),
+                "state": {},
+            })
+
+        return RuleEvaluationContext(
+            bindings=bindings,
+            projection=normalized_projection,
+            variables={
+                "current_time_phase_id": projection.get("current_time_phase_id"),
+                "current_weather_id": projection.get("current_weather_id"),
+            },
+        )
+
+    def evaluate_condition(
+        self,
+        project_id: str,
+        projection: dict[str, Any],
+        payload: dict[str, Any],
+        *,
+        actor_id: str | None = None,
+        source_id: str | None = None,
+        target_id: str | None = None,
+        ability: Any | None = None,
+    ) -> bool:
+        """Evaluate new or legacy condition payloads through Rules V2."""
+        raw = dict(payload)
+        raw.pop("schema_version", None)
+        condition = None
+        try:
+            condition = ConditionExpression.model_validate(raw)
+        except ValueError:
+            try:
+                condition = condition_expression_from_requirement(
+                    RequirementExpression.model_validate(raw)
+                )
+            except ValueError as exc:
+                raise RulesRuntimeError(f"Invalid rule condition: {exc}") from exc
+        try:
+            return ConditionEvaluator().evaluate(
+                condition,
+                self.rule_context(
+                    project_id,
+                    projection,
+                    actor_id=actor_id,
+                    source_id=source_id,
+                    target_id=target_id,
+                    ability=ability,
+                ),
+                stat_lookup=lambda key, owner: self.stat(project_id, key, owner),
+            )
+        except (RuleEvaluationError, DomainOperationError) as exc:
+            raise RulesRuntimeError(str(exc)) from exc
 
     def normalize_effect(self, project_id: str, projection: dict[str, Any], definition: Any, target: Any, participants: dict[str, Any], duration_override: int | None = None, tick_override: int | None = None) -> dict[str, Any]:
         target_raw = projection["relations"].get(target.id) if target.scope == "relationship" else projection["entities"].get(target.id)

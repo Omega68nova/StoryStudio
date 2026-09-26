@@ -285,3 +285,39 @@ Before this branch is considered complete, tests should demonstrate:
 - snapshot and live timed effects preserving the correct source context;
 - Spatial V3 traversal requirements using the exact same condition evaluator;
 - branch replay reproducing identical stat/effect results.
+
+
+## Implementation status
+
+### Shared evaluator foundation — implemented
+
+The branch now contains `app.domain.rules_v2` with:
+
+- `RuleObjectSelector` and extensible selector kinds;
+- `RuleObjectSnapshot`;
+- `RuleEvaluationContext`;
+- recursive `ValueExpression`;
+- recursive `ConditionExpression`;
+- generic object resolution;
+- value evaluation with stat-owner compatibility hooks;
+- condition evaluation;
+- legacy FormulaNode -> ValueExpression adapter;
+- legacy RequirementExpression -> ConditionExpression adapter.
+
+The old `FormulaEvaluator` and `RequirementEvaluator` now execute through
+these adapters, preserving existing persisted definitions while moving runtime
+semantics onto the shared engine.
+
+`RulesRuntime.rule_context()` normalizes every world entity and relationship
+to effective stat values, including defaults and dynamic bounds.
+`RulesRuntime.evaluate_condition()` accepts both new Phase 8 condition payloads
+and legacy requirement payloads. This is the integration boundary intended for
+Spatial V3 and other subsystems.
+
+### Salvaged from the old rules PR
+
+- focused `test_rules_rework.py` regression suite;
+- GitHub Actions backend/frontend rules workflow;
+- shared stat dependency graph validator.
+
+The old implementation itself has not been merged.

@@ -197,3 +197,111 @@ def test_stat_lookup_validates_owner_compatibility() -> None:
         stat_lookup=stat_lookup,
     )
     assert value == 5
+
+
+def test_runtime_condition_uses_effective_stats_and_legacy_payload() -> None:
+    from types import SimpleNamespace
+    from app.domain.world import Stat
+    from app.services.rules import RulesRuntime
+
+    class FakeRules:
+        def __init__(self):
+            self._stat = Stat.model_validate({
+                "project_id": "project",
+                "stat_key": "mana",
+                "label": "Mana",
+                "compatible_owner_kinds": ["character"],
+                "default_value": 10,
+                "minimum": 0,
+                "maximum": 10,
+            })
+        def stats(self, _project_id):
+            return [self._stat]
+        def stat(self, _project_id, key):
+            return self._stat if key == "mana" else None
+
+    runtime = RulesRuntime(
+        SimpleNamespace(rules=FakeRules()),
+        lambda *_args: None,
+    )
+    projection = {
+        "entities": {
+            "hero": {
+                "id": "hero",
+                "kind": "character",
+                "name": "Hero",
+                "tags": [],
+                "stats": {},
+                "state": {},
+            }
+        },
+        "relations": {},
+    }
+    assert runtime.evaluate_condition(
+        "project",
+        projection,
+        {
+            "schema_version": 2,
+            "kind": "compare",
+            "target": "actor",
+            "stat_key": "mana",
+            "comparison": "gte",
+            "value": 10,
+        },
+        actor_id="hero",
+    )
+
+
+def test_runtime_condition_can_read_explicit_location_stats() -> None:
+    from types import SimpleNamespace
+    from app.domain.world import Stat
+    from app.services.rules import RulesRuntime
+
+    class FakeRules:
+        def __init__(self):
+            self._stat = Stat.model_validate({
+                "project_id": "project",
+                "stat_key": "magic",
+                "label": "Magic",
+                "compatible_owner_kinds": ["location"],
+                "default_value": 0,
+                "minimum": 0,
+                "maximum": 100,
+            })
+        def stats(self, _project_id):
+            return [self._stat]
+        def stat(self, _project_id, key):
+            return self._stat if key == "magic" else None
+
+    runtime = RulesRuntime(SimpleNamespace(rules=FakeRules()), lambda *_args: None)
+    projection = {
+        "entities": {
+            "tower": {
+                "id": "tower",
+                "kind": "location",
+                "name": "Tower",
+                "tags": [],
+                "stats": {"magic": 25},
+                "state": {},
+            }
+        },
+        "relations": {},
+    }
+    assert runtime.evaluate_condition(
+        "project",
+        projection,
+        {
+            "kind": "compare",
+            "left": {
+                "kind": "stat",
+                "selector": {
+                    "kind": "explicit",
+                    "object_id": "tower",
+                    "object_kind": "location",
+                },
+                "stat_key": "magic",
+            },
+            "comparison": "gt",
+            "right": {"kind": "constant", "value": 20},
+        },
+    )
