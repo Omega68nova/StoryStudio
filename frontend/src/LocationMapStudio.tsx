@@ -18,7 +18,7 @@ import {
 import { api } from "./api";
 import type { AbilityDefinition, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
 import { blankConditionExpression, conditionExpressionFromPayload, ConditionExpressionEditor } from "./RuleConditionEditor";
-import { SpatialTldrawCanvas } from "./SpatialTldrawCanvas";
+import { SpatialV2Canvas } from "./SpatialV2Canvas";
 
 type Point = [number, number];
 type Tool = "select" | "edit" | "surface" | "corridor" | "barrier" | "spot" | "connector";
@@ -421,20 +421,6 @@ export function LocationMapStudio({
     }
   }
 
-  function beginCanvasExtrusion(feature: MapFeature, point: Point) {
-    setSelectedFeatureId(feature.id);
-    setDraftTemplate({
-      name: `${feature.name || "Corridor"} branch`,
-      semantic_location_id: feature.semantic_location_id,
-      render_layer: feature.render_layer,
-      render_order: feature.render_order,
-      movement_priority: feature.movement_priority,
-      properties: structuredClone(feature.properties),
-    });
-    setDraftPoints([point]);
-    setTool("corridor");
-  }
-
   async function saveFeature() {
     if (!featureDraft) return;
     try {
@@ -599,8 +585,8 @@ export function LocationMapStudio({
               )}
             </ButtonGroup>
             <Chip size="small" variant="outlined" label={
-              tool === "select" ? "Select: tldraw selection bounds · drag whole objects · pan/zoom normally"
-              : tool === "edit" ? "Edit: tldraw vertex/create handles · right-click segment adds point · hold E + click vertex to extrude"
+              tool === "select" ? "Select: V2 whole-object drag with visible bounds"
+              : tool === "edit" ? "Edit: V2 vertex handles · midpoint adds point · right-click vertex menu · hold E + click to extrude"
               : `Drawing ${tool}`
             }/>
             {draftPoints.length > 0 && <>
@@ -613,7 +599,7 @@ export function LocationMapStudio({
         </Paper>
 
         <Paper className="panel" sx={{ p: 1, overflow: "hidden" }}>
-          <SpatialTldrawCanvas
+          <SpatialV2Canvas
             features={visibleFeatures}
             tool={tool}
             selectedFeatureId={selectedFeatureId}
@@ -627,7 +613,6 @@ export function LocationMapStudio({
               setConnectorTargetSpace(spaces.find(item => item.id !== spaceId)?.id ?? spaceId);
               setConnectorTargetPoint(point);
             }}
-            onExtrudeCorridor={(feature, point) => beginCanvasExtrusion(feature as MapFeature, point)}
           />
         </Paper>
 
