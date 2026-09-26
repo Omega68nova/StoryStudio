@@ -432,7 +432,9 @@ export function LocationMapStudio({
     const nextSets = ambientSetsFor(ambient.assignments, selectedLocation?.id);
     setAmbientSets(nextSets);
     setAmbientSavedSnapshot(JSON.stringify(nextSets));
-  }, [selectedLocation?.id, world, ambient.assignments]);
+  // Ambient drafts intentionally survive map/world refreshes until selection changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLocation?.id]);
 
   const loadBackgrounds = useCallback(async (locationId: string) => {
     const rows = await api<BackgroundRecord[]>(`/projects/${projectId}/environment/locations/${locationId}/backgrounds`);
@@ -585,7 +587,15 @@ export function LocationMapStudio({
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: soundPreviewEnabled }));
+    return () => {
+      if (soundPreviewEnabled) window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
+    };
+  }, [soundPreviewEnabled]);
+
   useEffect(() => () => {
+    window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
     for (const playing of previewAudio.current.values()) {
       playing.audio.pause();
       playing.audio.src = "";
