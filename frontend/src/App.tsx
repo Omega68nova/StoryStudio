@@ -118,14 +118,27 @@ const viewLabels: Record<View, string> = {
   users: "Users",
 };
 
+const viewValues = new Set<View>(Object.keys(viewLabels) as View[]);
+
+function initialUrlState(): { projectId: string | null; view: View } {
+  const params = new URLSearchParams(window.location.search);
+  const requestedView = params.get("view") as View | null;
+  return {
+    projectId: params.get("project"),
+    view: requestedView && viewValues.has(requestedView) ? requestedView : "story",
+  };
+}
+
+
 export default function App() {
+  const urlStateRef = useRef(initialUrlState());
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [leafId, setLeafId] = useState<string | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowPreset[]>([]);
-  const [view, setView] = useState<View>("story");
+  const [view, setView] = useState<View>(() => urlStateRef.current.view);
   const [runtime, setRuntime] = useState("idle");
   const [currentJobId, setCurrentJobId] = useState<string | null>(null);
   const [streamText, setStreamText] = useState("");
@@ -234,9 +247,25 @@ export default function App() {
   useEffect(() => {
     if (!authUser) return;
     Promise.all([loadProjects(), loadWorkflows(), authUser.role === "admin" ? loadStatPacks() : Promise.resolve()])
-      .then(([list]) => list[0] && loadProject(list[0].id))
+      .then(([list]) => {
+        if (!list.length) return;
+        const requestedProjectId = urlStateRef.current.projectId;
+        const initialProject = requestedProjectId
+          ? list.find(item => item.id === requestedProjectId) ?? list[0]
+          : list[0];
+        return loadProject(initialProject.id);
+      })
       .catch((cause) => setError(String(cause.message ?? cause)));
   }, [authUser, loadProject, loadProjects, loadWorkflows, loadStatPacks]);
+
+  useEffect(() => {
+    if (!authChecked || !authUser) return;
+    const url = new URL(window.location.href);
+    if (project?.id) url.searchParams.set("project", project.id);
+    else url.searchParams.delete("project");
+    url.searchParams.set("view", view);
+    window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+  }, [authChecked, authUser, project?.id, view]);
 
   useEffect(() => {
     api<{ version: string }>("/version")
