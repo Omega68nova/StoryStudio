@@ -416,3 +416,23 @@ than being guessed, preserving the conservative diagnostic behavior.
 The travel-preview and transition-encounter endpoints now accept optional
 `actor_id`. The travel preview shares one evaluator with both pathfinding and
 encounter resolution.
+
+
+### Rules Studio Phase 8 authoring — implemented first pass
+
+Rules Studio now exposes the new Phase 8 primitives without requiring raw JSON:
+
+- stat owner compatibility includes ability/effect/weather/outfit/Spatial V3
+  resource kinds;
+- effects can switch between the legacy actor/source/target formula editor and a
+  recursive Phase 8 ValueExpression editor;
+- ValueExpression stat nodes expose object selectors including current location,
+  ability, effect and explicit objects;
+- abilities and effects expose their own compatible stat overrides;
+- abilities have a separate generalized stat-cost editor with owner selector,
+  stat and expression-valued amount;
+- legacy costs/formulas remain editable for compatibility.
+
+The API request schemas now preserve and validate `value_expression`,
+`rule_costs`, and ability/effect `stats`, closing a prior gap where these
+new fields could otherwise be dropped at the HTTP boundary.
