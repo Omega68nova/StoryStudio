@@ -122,6 +122,23 @@ type SpatialPreset = {
 };
 
 const renderLayers: RenderLayer[] = ["topology", "regions", "roads", "places", "barriers", "connections"];
+const toolHelp: Record<Tool, string> = {
+  select: "Select and drag whole map features without changing their shape.",
+  edit: "Edit geometry. Drag red vertices, click midpoint diamonds to add points, right-click a vertex for point actions, or hold E and click a Surface/Corridor vertex to extrude.",
+  surface: "Draw a filled traversable/semantic area such as a district, building footprint, room floor or terrain region.",
+  corridor: "Draw a thick traversable route such as a road, alley, river or passage. Width is edited after creation.",
+  barrier: "Draw a crossing obstacle such as a wall, fence or cliff. Finish leaves it open; Close barrier joins the last point back to the first.",
+  spot: "Place a point of interest or interaction point that does not define an area.",
+  connector: "Place a door/gate/portal/stairs connection whose target may be another Navigation Space.",
+};
+const layerHelp: Record<string, string> = {
+  topology: "Structural/reference geometry for the space itself.",
+  regions: "Large surfaces and semantic areas: districts, terrain, building footprints and similar regions.",
+  roads: "Corridors and route networks such as streets, alleys, rivers and passages.",
+  places: "Point-like places and miscellaneous local map features.",
+  barriers: "Walls, fences, cliffs and other crossing obstacles.",
+  connections: "Doors, gates, stairs, portals and other links between positions or Navigation Spaces.",
+};
 const connectorKinds = ["generic", "door", "gate", "stairs", "ladder", "bridge", "climb", "portal"] as const;
 const emptyTraversal = (allowed = true): TraversalPolicy => ({ default_allowed: allowed, travel_multiplier: 1, options: [] });
 const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
@@ -615,6 +632,7 @@ export function LocationMapStudio({
               : tool === "edit" ? "Edit: V2 vertex handles · midpoint adds point · right-click vertex menu · hold E + click to extrude"
               : `Drawing ${tool}`
             }/>
+            <Alert severity="info" sx={{ py: 0, flex: "1 1 360px" }}>{toolHelp[tool]}</Alert>
             {draftPoints.length > 0 && <>
               <Chip label={`${draftPoints.length} point${draftPoints.length === 1 ? "" : "s"}`}/>
               {(tool === "surface" && draftPoints.length >= 3 || (tool === "corridor" || tool === "barrier") && draftPoints.length >= 2) &&
@@ -656,7 +674,7 @@ export function LocationMapStudio({
           <Stack spacing={1} sx={{ mt: 1 }}>
             {(details?.layers ?? []).map(layer => <Paper key={layer.layer_key} variant="outlined" sx={{ p: 1 }}>
               <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                <div style={{ minWidth: 145 }}><b>{layer.label}</b><div><small>{layer.layer_key}</small></div></div>
+                <div style={{ minWidth: 220, flex: "1 1 220px" }}><b>{layer.label}</b><div><small>{layerHelp[layer.layer_key] ?? "Custom display/editing group."}</small></div></div>
                 <FormControlLabel control={<Switch size="small" checked={layer.visible} onChange={event => void saveLayer({ ...layer, visible: event.target.checked })}/>} label="Visible"/>
                 <FormControlLabel control={<Switch size="small" checked={layer.textured !== false} onChange={event => void saveLayer({ ...layer, textured: event.target.checked })}/>} label="Textured"/>
                 <FormControlLabel control={<Switch size="small" checked={layer.editable !== false} onChange={event => {
