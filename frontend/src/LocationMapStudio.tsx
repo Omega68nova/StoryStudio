@@ -588,6 +588,10 @@ export function LocationMapStudio({
   }, []);
 
   useEffect(() => {
+    if (!selectedLocation && soundPreviewEnabled) setSoundPreviewEnabled(false);
+  }, [selectedLocation, soundPreviewEnabled]);
+
+  useEffect(() => {
     window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: soundPreviewEnabled }));
     return () => {
       if (soundPreviewEnabled) window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
