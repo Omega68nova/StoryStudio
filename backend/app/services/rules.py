@@ -134,7 +134,11 @@ class RulesRuntime:
             str(relation_id): self.participant(project_id, raw)
             for relation_id, raw in projection.get("relations", {}).items()
         }
-        auxiliary = self.data.rules.rule_objects(project_id)
+        auxiliary = (
+            self.data.rules.rule_objects(project_id)
+            if hasattr(self.data.rules, "rule_objects")
+            else {}
+        )
         for raw in auxiliary.values():
             raw["stats"] = self.effective_stats(project_id, raw, str(raw["kind"]))
         normalized_projection = {

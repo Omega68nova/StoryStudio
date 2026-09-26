@@ -28,12 +28,6 @@ class EntityKind(StrEnum):
     LORE_SYSTEM = "lore_system"
     FACT = "fact"
     RELATIONSHIP = "relationship"
-    ABILITY = "ability"
-    EFFECT = "effect"
-    WEATHER = "weather"
-    OUTFIT = "outfit"
-    NAVIGATION_SPACE = "navigation_space"
-    MAP_FEATURE = "map_feature"
     PLOT_BEAT = "plot_beat"
 
 
@@ -120,6 +114,12 @@ class StatOwnerKind(StrEnum):
     FACT = "fact"
     PLOT_BEAT = "plot_beat"
     RELATIONSHIP = "relationship"
+    ABILITY = "ability"
+    EFFECT = "effect"
+    WEATHER = "weather"
+    OUTFIT = "outfit"
+    NAVIGATION_SPACE = "navigation_space"
+    MAP_FEATURE = "map_feature"
 
 
 class StatVisibility(StrEnum):
@@ -978,6 +978,7 @@ class EffectDefinition(DomainModel):
     visibility: StatVisibility = StatVisibility.PUBLIC
     icon: str | None = None
     enabled: bool = True
+    stats: dict[str, Number] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
 
