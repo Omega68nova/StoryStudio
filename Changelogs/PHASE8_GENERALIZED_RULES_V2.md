@@ -321,3 +321,21 @@ Spatial V3 and other subsystems.
 - shared stat dependency graph validator.
 
 The old implementation itself has not been merged.
+
+
+### Spatial V3 traversal conditions — implemented
+
+The experimental Spatial V3 pathfinder now accepts a shared condition evaluator.
+
+- default-blocked barriers/connectors can use authored TraversalOptions;
+- option requirements are evaluated through Rules V2 when actor context is
+  supplied;
+- without actor/context, the previous conservative unresolved/blocked behavior
+  remains unchanged;
+- selected connector options are recorded in route steps;
+- connector option fixed travel time and movement-option multipliers participate
+  in route cost;
+- the diagnostic path endpoint now accepts optional `actor_id` and evaluates
+  traversal requirements against that branch projection.
+
+This is the first cross-system consumer of the shared Phase 8 condition engine.

@@ -1685,14 +1685,29 @@ async def plan_spatial_v3_path(
     target_space_id: str,
     target_x: float,
     target_y: float,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     require_project(project_id)
     from app.services.spatial_v3 import SpatialV3Error
     from app.services.spatial_v3_pathfinding import SpatialV3Pathfinder
 
     _synchronize_spatial_v3_projection(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    condition_evaluator = (
+        lambda payload: scheduler.world.rules_runtime.evaluate_condition(
+            project_id,
+            projection,
+            payload,
+            actor_id=actor_id,
+        )
+        if actor_id
+        else None
+    )
     try:
-        return SpatialV3Pathfinder(data.spatial_v3).plan(
+        return SpatialV3Pathfinder(
+            data.spatial_v3,
+            condition_evaluator=condition_evaluator,
+        ).plan(
             project_id=project_id,
             start_space_id=start_space_id,
             start=(start_x, start_y),
