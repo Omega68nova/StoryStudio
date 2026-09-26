@@ -423,10 +423,6 @@ class SpatialV3Migration:
                 probability_per_transition=probability,
                 candidates=candidates,
                 enabled=bool(raw.get("enabled", True)),
-                conditions={
-                    "legacy_trigger": "per_transition",
-                    "legacy_rule_id": str(rule_id),
-                },
             ))
 
         layers = [
@@ -473,6 +469,7 @@ class SpatialV3Migration:
         projection: dict[str, Any],
     ) -> dict[str, Any]:
         preview = self.preview(project_id, projection)
+        self.repository.clear_project(project_id)
         for raw in preview["spaces"]:
             self.repository.save_space(NavigationSpace.model_validate(raw))
         for raw in preview["location_space_bindings"]:
