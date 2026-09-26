@@ -17,8 +17,12 @@ import {
 } from "@mui/material";
 import { api } from "./api";
 import { FavoriteLibraryButton } from "./FavoriteLibraryButton";
+import { BoxedMultiselectFilter } from "./customComponents/BoxedMultiselect";
 import { EntityImageSurface } from "./customComponents/EntityImageSurface";
 import type {
+  AmbientAssignment,
+  AmbientSoundSet,
+  AmbientVariant,
   EnvironmentLocation,
   EnvironmentSettings,
   MediaAsset,
@@ -95,6 +99,22 @@ type SpatialMap = {
   anchors: SpatialAnchor[];
   connections: SpatialConnection[];
   barriers: SpatialBarrier[];
+};
+type AmbientData = { variants: AmbientVariant[]; assignments: AmbientAssignment[] };
+type PreviewPlaying = { audio: HTMLAudioElement; gain: number; target: number };
+const emptyAmbientSet = (): AmbientSoundSet => ({ selector_type: "default", selector_value: null, weather_id: null, time_phase_id: null, variant_ids: [] });
+const ambientSetsFor = (assignments: AmbientAssignment[], ownerId?: string): AmbientSoundSet[] => {
+  if (!ownerId) return [emptyAmbientSet()];
+  const grouped = new Map<string, AmbientSoundSet>();
+  assignments.filter(item => item.owner_type === "location" && item.owner_id === ownerId).forEach(item => {
+    const key = [item.selector_type, item.selector_value ?? "", item.weather_id ?? "", item.time_phase_id ?? ""].join("|");
+    const current = grouped.get(key) ?? { selector_type: item.selector_type, selector_value: item.selector_value, weather_id: item.weather_id, time_phase_id: item.time_phase_id, variant_ids: [] };
+    if (!current.variant_ids.includes(item.variant_id)) current.variant_ids.push(item.variant_id);
+    grouped.set(key, current);
+  });
+  const result = [...grouped.values()];
+  if (!result.some(item => item.selector_type === "default" && !item.weather_id && !item.time_phase_id)) result.unshift(emptyAmbientSet());
+  return result;
 };
 type BackgroundRecord = {
   media_asset_id: string;
@@ -277,6 +297,13 @@ export function LocationMapStudio({
   const [world, setWorld] = useState<WorldProjection | null>(null);
   const [environmentSettings, setEnvironmentSettings] = useState<EnvironmentSettings | null>(null);
   const [environmentSettingsOpen, setEnvironmentSettingsOpen] = useState(false);
+  const [ambient, setAmbient] = useState<AmbientData>({ variants: [], assignments: [] });
+  const [ambientSets, setAmbientSets] = useState<AmbientSoundSet[]>([emptyAmbientSet()]);
+  const [ambientSavedSnapshot, setAmbientSavedSnapshot] = useState("");
+  const [previewWeatherId, setPreviewWeatherId] = useState("");
+  const [previewTimePhaseId, setPreviewTimePhaseId] = useState("");
+  const [soundPreviewEnabled, setSoundPreviewEnabled] = useState(false);
+  const previewAudio = useRef(new Map<string, PreviewPlaying>());
   const [layerId, setLayerId] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
