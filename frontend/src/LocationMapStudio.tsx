@@ -109,6 +109,14 @@ type MigrationPreview = {
   counts?: Record<string, number>;
   [key: string]: unknown;
 };
+type SpatialPreset = {
+  key: string;
+  label: string;
+  description: string;
+  parameters: string[];
+  requires_semantic_location?: boolean;
+  requires_target_space?: boolean;
+};
 
 const renderLayers: RenderLayer[] = ["topology", "regions", "roads", "places", "barriers", "connections"];
 const connectorKinds = ["generic", "door", "gate", "stairs", "ladder", "bridge", "climb", "portal"] as const;
@@ -117,6 +125,17 @@ const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
 const round = (value: number) => Math.round(value * 10) / 10;
 const parseCsv = (value: string) => value.split(",").map(item => item.trim()).filter(Boolean);
 const formatCsv = (value: unknown) => Array.isArray(value) ? value.join(", ") : "";
+const presetDefaults = (key: string) => ({
+  name: "",
+  semantic_location_id: "",
+  center_x: 50,
+  center_y: 50,
+  width: key === "road" ? 6 : key === "river" ? 10 : 60,
+  height: 60,
+  target_space_id: "",
+  target_x: 50,
+  target_y: 50,
+});
 const locationName = (world: WorldProjection | null, id?: string | null) =>
   id ? world?.entities[id]?.name ?? id : "Unbound";
 
@@ -221,6 +240,10 @@ export function LocationMapStudio({
   const [connectorTargetSpace, setConnectorTargetSpace] = useState("");
   const [connectorTargetPoint, setConnectorTargetPoint] = useState<Point>([50, 50]);
   const [migration, setMigration] = useState<MigrationPreview | null>(null);
+  const [presets, setPresets] = useState<SpatialPreset[]>([]);
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [presetKey, setPresetKey] = useState("open_region");
+  const [presetParams, setPresetParams] = useState(presetDefaults("open_region"));
   const [encounterDraft, setEncounterDraft] = useState<EncounterPolicy | null>(null);
   const [vertexDrag, setVertexDrag] = useState<number | null>(null);
 
@@ -230,14 +253,16 @@ export function LocationMapStudio({
   );
 
   const loadSpaces = useCallback(async () => {
-    const [nextWorld, nextSpaces, nextRules] = await Promise.all([
+    const [nextWorld, nextSpaces, nextRules, nextPresets] = await Promise.all([
       api<WorldProjection>(`/projects/${projectId}/world`),
       api<NavigationSpace[]>(`/projects/${projectId}/spatial-v3/spaces`),
       api<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>(`/projects/${projectId}/rules`),
+      api<SpatialPreset[]>(`/projects/${projectId}/spatial-v3/presets`),
     ]);
     setWorld(nextWorld);
     setSpaces(nextSpaces);
     setRuleData({ stats: nextRules.stats ?? [], abilities: nextRules.abilities ?? [] });
+    setPresets(nextPresets);
     setSpaceId(current => current && nextSpaces.some(item => item.id === current) ? current : nextSpaces[0]?.id ?? "");
     if (!nextSpaces.length) {
       try { setMigration(await api<MigrationPreview>(`/projects/${projectId}/spatial-v3/migration-preview`)); }
@@ -443,6 +468,31 @@ export function LocationMapStudio({
     } catch (cause) { fail(String(cause)); }
   }
 
+  function openPreset(key = presets[0]?.key ?? "open_region") {
+    setPresetKey(key);
+    setPresetParams({
+      ...presetDefaults(key),
+      semantic_location_id: spaces.find(item => item.id === spaceId)?.owner_location_id ?? "",
+      target_space_id: spaces.find(item => item.id !== spaceId)?.id ?? "",
+    });
+    setPresetOpen(true);
+  }
+
+  async function applyPreset() {
+    if (!spaceId || !presetKey) return;
+    try {
+      await api(`/projects/${projectId}/spatial-v3/presets/${presetKey}/apply`, {
+        method: "POST",
+        body: JSON.stringify({
+          navigation_space_id: spaceId,
+          ...presetParams,
+        }),
+      });
+      setPresetOpen(false);
+      await refresh();
+    } catch (cause) { fail(String(cause)); }
+  }
+
   async function saveLayer(layer: NavigationLayer) {
     try {
       await api(`/projects/${projectId}/spatial-v3/spaces/${spaceId}/layers/${layer.layer_key}`, {
@@ -519,6 +569,7 @@ export function LocationMapStudio({
         {spaces.map(space => <MenuItem key={space.id} value={space.id}>{locationName(world, space.owner_location_id)} · {space.navigation_mode}</MenuItem>)}
       </TextField>
       <Button onClick={() => { setCreateSpaceLocation(locations[0]?.id ?? ""); setCreateSpaceOpen(true); }}>New space</Button>
+      <Button variant="outlined" onClick={() => openPreset()}>Apply preset</Button>
       {spaceDraft && <Chip label={spaceDraft.navigation_mode === "free" ? "FREE map" : "ROUTED map"} color={spaceDraft.navigation_mode === "free" ? "success" : "warning"}/>}
     </Stack>
 
@@ -671,6 +722,53 @@ export function LocationMapStudio({
         </Paper> : <Paper className="panel" sx={{ p: 2 }}><h2>Feature inspector</h2><p>Select a feature on the map, or choose a drawing tool.</p><ul><li><b>Surface:</b> area membership / terrain / building footprint.</li><li><b>Corridor:</b> thick traversable route such as road, alley, river or hall.</li><li><b>Barrier:</b> crossing blocker such as a wall or cliff.</li><li><b>Connector:</b> door, gate, bridge, stairs or portal between spaces.</li><li><b>Spot:</b> landmark or interaction point.</li></ul></Paper>}
       </Stack>
     </div>
+
+    <Dialog open={presetOpen} onClose={() => setPresetOpen(false)} maxWidth="md" fullWidth>
+      <DialogTitle>Apply Spatial V3 preset</DialogTitle>
+      <DialogContent><Stack spacing={2} sx={{ mt: 1 }}>
+        <TextField select label="Preset" value={presetKey} onChange={event => {
+          const key = event.target.value;
+          setPresetKey(key);
+          setPresetParams({
+            ...presetDefaults(key),
+            semantic_location_id: spaces.find(item => item.id === spaceId)?.owner_location_id ?? "",
+            target_space_id: spaces.find(item => item.id !== spaceId)?.id ?? "",
+          });
+        }}>
+          {presets.map(preset => <MenuItem key={preset.key} value={preset.key}>{preset.label}</MenuItem>)}
+        </TextField>
+        {presets.find(item => item.key === presetKey) && <Alert severity="info">{presets.find(item => item.key === presetKey)!.description}</Alert>}
+        {presets.find(item => item.key === presetKey)?.parameters.includes("name") && <TextField label="Name" value={presetParams.name} onChange={event => setPresetParams({ ...presetParams, name: event.target.value })}/>}
+        {presets.find(item => item.key === presetKey)?.parameters.includes("semantic_location_id") && <TextField select label="Semantic location" value={presetParams.semantic_location_id} onChange={event => setPresetParams({ ...presetParams, semantic_location_id: event.target.value })}>
+          <MenuItem value="">Use space owner / none</MenuItem>
+          {locations.map(location => <MenuItem key={location.id} value={location.id}>{location.name}</MenuItem>)}
+        </TextField>}
+        {(presets.find(item => item.key === presetKey)?.parameters.includes("center_x") || presets.find(item => item.key === presetKey)?.parameters.includes("center_y")) && <Stack direction="row" spacing={1}>
+          {presets.find(item => item.key === presetKey)?.parameters.includes("center_x") && <TextField fullWidth type="number" label="Center X" value={presetParams.center_x} onChange={event => setPresetParams({ ...presetParams, center_x: Number(event.target.value) })}/>}
+          {presets.find(item => item.key === presetKey)?.parameters.includes("center_y") && <TextField fullWidth type="number" label="Center Y" value={presetParams.center_y} onChange={event => setPresetParams({ ...presetParams, center_y: Number(event.target.value) })}/>}
+        </Stack>}
+        {(presets.find(item => item.key === presetKey)?.parameters.includes("width") || presets.find(item => item.key === presetKey)?.parameters.includes("height")) && <Stack direction="row" spacing={1}>
+          {presets.find(item => item.key === presetKey)?.parameters.includes("width") && <TextField fullWidth type="number" label={presetKey === "road" || presetKey === "river" ? "Corridor width" : "Width"} value={presetParams.width} onChange={event => setPresetParams({ ...presetParams, width: Math.max(.1, Number(event.target.value)) })}/>}
+          {presets.find(item => item.key === presetKey)?.parameters.includes("height") && <TextField fullWidth type="number" label="Height" value={presetParams.height} onChange={event => setPresetParams({ ...presetParams, height: Math.max(1, Number(event.target.value)) })}/>}
+        </Stack>}
+        {presets.find(item => item.key === presetKey)?.parameters.includes("target_space_id") && <TextField select label="Target navigation space" value={presetParams.target_space_id} onChange={event => setPresetParams({ ...presetParams, target_space_id: event.target.value })}>
+          {spaces.filter(item => item.id !== spaceId).map(space => <MenuItem key={space.id} value={space.id}>{locationName(world, space.owner_location_id)} · {space.navigation_mode}</MenuItem>)}
+        </TextField>}
+        {(presets.find(item => item.key === presetKey)?.parameters.includes("target_x") || presets.find(item => item.key === presetKey)?.parameters.includes("target_y")) && <Stack direction="row" spacing={1}>
+          <TextField fullWidth type="number" label="Target X" value={presetParams.target_x} onChange={event => setPresetParams({ ...presetParams, target_x: Number(event.target.value) })}/>
+          <TextField fullWidth type="number" label="Target Y" value={presetParams.target_y} onChange={event => setPresetParams({ ...presetParams, target_y: Number(event.target.value) })}/>
+        </Stack>}
+        {presets.find(item => item.key === presetKey)?.requires_semantic_location && !presetParams.semantic_location_id && <Alert severity="warning">This preset requires a semantic location.</Alert>}
+        {presets.find(item => item.key === presetKey)?.requires_target_space && !presetParams.target_space_id && <Alert severity="warning">This preset requires another navigation space.</Alert>}
+      </Stack></DialogContent>
+      <DialogActions>
+        <Button onClick={() => setPresetOpen(false)}>Cancel</Button>
+        <Button variant="contained" disabled={
+          Boolean(presets.find(item => item.key === presetKey)?.requires_semantic_location && !presetParams.semantic_location_id)
+          || Boolean(presets.find(item => item.key === presetKey)?.requires_target_space && !presetParams.target_space_id)
+        } onClick={() => void applyPreset()}>Apply preset</Button>
+      </DialogActions>
+    </Dialog>
 
     {renderCreateSpaceDialog()}
 
