@@ -526,6 +526,77 @@ class EnvironmentService:
             ),
         }
 
+    def scene_for_location(
+        self,
+        project_id: str,
+        projection: dict[str, Any],
+        location_id: str,
+    ) -> dict[str, Any]:
+        settings = self.settings(project_id)
+        if not settings["enabled"]:
+            return {
+                "enabled": False,
+                "revision": settings.get("revision", 1),
+                "ambient": [],
+            }
+
+        location = projection.get("entities", {}).get(location_id)
+        if not location or location.get("kind") != "location":
+            raise ValueError("Location not found")
+
+        location_model = entity_from_projection(location)
+        if not isinstance(location_model, Location):
+            raise ValueError("Location not found")
+
+        focus_model, _ = self.location_models(projection)
+        weather = self._weather(project_id, projection)
+        weather_model = self.weather_model(project_id, weather)
+        phase = self.phase(project_id, projection.get("elapsed_minutes", 0))
+        next_weather = self.repo.allowed_next_weather(
+            project_id,
+            weather_model.id if weather_model else None,
+        )
+        state = location_model.state
+        location_data = {
+            "id": location_model.id,
+            "name": location_model.name,
+            "description": (
+                state.description
+                or str(getattr(state, "summary", "") or "")
+            ),
+            "tags": location_model.tags,
+            "exposure": state.exposure,
+            "parent_location_id": state.parent_location_id,
+        }
+
+        return {
+            "enabled": True,
+            "revision": settings.get("revision", 1),
+            "focused_character": (
+                {"id": focus_model.id, "name": focus_model.name}
+                if focus_model else None
+            ),
+            "player_action": projection.get("player_action") or "standing",
+            "location": location_data,
+            "location_ancestry": self._ancestry(projection, location),
+            "weather": weather,
+            "time_phase": phase,
+            "allowed_next_weather": next_weather,
+            "background": self.background(
+                project_id,
+                location_model.id,
+                weather_model.id if weather_model else None,
+                (phase or {}).get("id"),
+            ),
+            "ambient": self.resolved_ambient(
+                project_id,
+                projection,
+                location,
+                weather,
+                phase,
+            ),
+        }
+
     def map_layer(
         self,
         project_id: str,

@@ -2273,3 +2273,12 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
 .location-map-anchor.target-endpoint:hover {
   background: #f5ddb8;
 }
+
+.spatial-playtest-page {
+  transition: background-image .25s ease-in-out;
+}
+.spatial-playtest-page > .panel,
+.spatial-playtest-page > .MuiAlert-root,
+.spatial-playtest-page > .page-header {
+  backdrop-filter: blur(2px);
+}

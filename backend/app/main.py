@@ -1496,6 +1496,22 @@ async def get_scene_environment(project_id: str) -> dict[str, Any]:
     return environment.scene(project_id, scheduler.world.projection(project_id))
 
 
+@app.get("/api/projects/{project_id}/environment/locations/{location_id}/scene")
+async def get_location_scene_environment(
+    project_id: str,
+    location_id: str,
+) -> dict[str, Any]:
+    require_project(project_id)
+    try:
+        return environment.scene_for_location(
+            project_id,
+            scheduler.world.projection(project_id),
+            location_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/environment/map")
 async def get_environment_map(project_id: str, parent_id: str | None = None) -> dict[str, Any]:
     require_project(project_id)
