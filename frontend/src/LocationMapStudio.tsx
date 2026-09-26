@@ -18,6 +18,7 @@ import {
 import { api } from "./api";
 import type { AbilityDefinition, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
 import { blankConditionExpression, conditionExpressionFromPayload, ConditionExpressionEditor } from "./RuleConditionEditor";
+import { SpatialTldrawCanvas } from "./SpatialTldrawCanvas";
 
 type Point = [number, number];
 type Tool = "select" | "edit" | "surface" | "corridor" | "barrier" | "spot" | "connector";
@@ -591,6 +592,37 @@ export function LocationMapStudio({
     } catch (cause) { fail(String(cause)); }
   }
 
+  async function persistCanvasFeature(next: MapFeature) {
+    setFeatureDraft(current => current?.id === next.id ? next : current);
+    setDetails(current => current ? {
+      ...current,
+      features: current.features.map(item => item.id === next.id ? next : item),
+    } : current);
+    try {
+      await api(`/projects/${projectId}/spatial-v3/features/${next.id}`, {
+        method: "PUT",
+        body: JSON.stringify(next),
+      });
+    } catch (cause) {
+      fail(String(cause));
+      await loadDetails();
+    }
+  }
+
+  function beginCanvasExtrusion(feature: MapFeature, point: Point) {
+    setSelectedFeatureId(feature.id);
+    setDraftTemplate({
+      name: `${feature.name || "Corridor"} branch`,
+      semantic_location_id: feature.semantic_location_id,
+      render_layer: feature.render_layer,
+      render_order: feature.render_order,
+      movement_priority: feature.movement_priority,
+      properties: structuredClone(feature.properties),
+    });
+    setDraftPoints([point]);
+    setTool("corridor");
+  }
+
   async function saveFeature() {
     if (!featureDraft) return;
     try {
@@ -756,8 +788,8 @@ export function LocationMapStudio({
               )}
             </ButtonGroup>
             <Chip size="small" variant="outlined" label={
-              tool === "select" ? "Select: drag objects"
-              : tool === "edit" ? "Edit: drag vertices · right-click segment adds point · hold E + click vertex to extrude"
+              tool === "select" ? "Select: tldraw selection bounds · drag whole objects · pan/zoom normally"
+              : tool === "edit" ? "Edit: tldraw vertex/create handles · right-click segment adds point · hold E + click vertex to extrude"
               : `Drawing ${tool}`
             }/>
             {draftPoints.length > 0 && <>
@@ -770,82 +802,22 @@ export function LocationMapStudio({
         </Paper>
 
         <Paper className="panel" sx={{ p: 1, overflow: "hidden" }}>
-          <svg
-            viewBox="0 0 100 100"
-            onClick={canvasClick}
-            onPointerMove={canvasPointerMove}
-            onPointerUp={finishCanvasDrag}
-            onPointerLeave={finishCanvasDrag}
-            onContextMenu={canvasContextMenu}
-            style={{ width: "100%", aspectRatio: "1.6", background: "var(--surface, #16191f)", cursor: vertexDrag != null || objectDrag ? "grabbing" : tool === "select" ? "grab" : tool === "edit" ? "default" : "crosshair", display: "block", touchAction: "none" }}
-          >
-            <defs>
-              <pattern id="v3grid" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M 5 0 L 0 0 0 5" fill="none" stroke="currentColor" strokeOpacity=".08" strokeWidth=".2"/></pattern>
-            </defs>
-            <rect width="100" height="100" fill="url(#v3grid)"/>
-            {visibleFeatures.map(feature => {
-              const selected = feature.id === selectedFeatureId;
-              const rendered = selected && featureDraft ? featureDraft : feature;
-              const common = {
-                onClick: (event: React.MouseEvent) => {
-                  event.stopPropagation();
-                  setSelectedFeatureId(feature.id);
-                },
-                onPointerDown: (event: React.PointerEvent<SVGElement>) => {
-                  if (tool !== "select") return;
-                  event.stopPropagation();
-                  const svg = event.currentTarget.ownerSVGElement;
-                  if (!svg) return;
-                  const start = canvasPoint(event.clientX, event.clientY, svg);
-                  const original = structuredClone(rendered);
-                  setSelectedFeatureId(feature.id);
-                  setFeatureDraft(original);
-                  setObjectDrag({ start, original });
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                },
-              };
-              if (rendered.geometry.type === "Polygon") {
-                const points = (rendered.geometry.coordinates[0] ?? []).map(point => point.join(",")).join(" ");
-                return <polygon key={feature.id} {...common} points={points} fill={selected ? "rgba(255,255,255,.24)" : "rgba(255,255,255,.11)"} stroke="currentColor" strokeWidth={selected ? .8 : .35}/>;
-              }
-              if (rendered.geometry.type === "LineString") {
-                const points = rendered.geometry.coordinates.map(point => point.join(",")).join(" ");
-                const width = rendered.feature_kind === "corridor" ? Math.max(.8, Number(rendered.properties.width ?? 4)) : rendered.feature_kind === "barrier" ? 1 : .7;
-                return <polyline key={feature.id} {...common} points={points} fill="none" stroke="currentColor" strokeOpacity={selected ? 1 : .7} strokeWidth={selected ? width + .5 : width} strokeLinecap="round" strokeLinejoin="round"/>;
-              }
-              if (rendered.geometry.type === "Point") {
-                const [x, y] = rendered.geometry.coordinates;
-                return <g key={feature.id} {...common}><circle cx={x} cy={y} r={selected ? 2.1 : 1.5} fill="currentColor"/>{rendered.name && <text x={x + 2} y={y - 2} fontSize="2.2" fill="currentColor">{rendered.name}</text>}</g>;
-              }
-              return null;
-            })}
-            {tool === "edit" && featureDraft && featureDraft.geometry.type !== "MultiLineString" && featureDraft.geometry.type !== "MultiPolygon" && featurePoints(featureDraft)
-              .filter((_point, index) => featureDraft.geometry.type !== "Polygon" || index < featurePoints(featureDraft).length - 1)
-              .map((point, index) => <circle
-                key={`handle-${index}`}
-                cx={point[0]}
-                cy={point[1]}
-                r="1.15"
-                fill="var(--background, #111)"
-                stroke="currentColor"
-                strokeWidth=".45"
-                style={{ cursor: "grab" }}
-                onClick={event => event.stopPropagation()}
-                onPointerDown={event => {
-                  event.stopPropagation();
-                  (event.currentTarget as SVGCircleElement).setPointerCapture(event.pointerId);
-                  if (eHeld) {
-                    extrudeFromVertex(index, point);
-                  } else {
-                    setVertexDrag(index);
-                  }
-                }}
-              />)}
-            {draftPoints.length > 0 && <>
-              <polyline points={draftPoints.map(point => point.join(",")).join(" ")} fill={tool === "surface" ? "rgba(255,255,255,.08)" : "none"} stroke="currentColor" strokeDasharray="1 1" strokeWidth=".5"/>
-              {draftPoints.map((point, index) => <circle key={index} cx={point[0]} cy={point[1]} r=".8" fill="currentColor"/>)}
-            </>}
-          </svg>
+          <SpatialTldrawCanvas
+            features={visibleFeatures}
+            tool={tool}
+            selectedFeatureId={selectedFeatureId}
+            draftPoints={draftPoints}
+            onDraftPointsChange={setDraftPoints}
+            onSelectFeature={id => setSelectedFeatureId(id)}
+            onFeatureChange={feature => void persistCanvasFeature(feature as MapFeature)}
+            onCreateFeature={(kind, points) => void createFeature(kind, points)}
+            onConnectorPoint={point => {
+              setConnectorPoint(point);
+              setConnectorTargetSpace(spaces.find(item => item.id !== spaceId)?.id ?? spaceId);
+              setConnectorTargetPoint(point);
+            }}
+            onExtrudeCorridor={(feature, point) => beginCanvasExtrusion(feature as MapFeature, point)}
+          />
         </Paper>
 
         <Paper className="panel" sx={{ p: 2 }}>
