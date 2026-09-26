@@ -27,6 +27,15 @@ class SpatialV3Repository(BaseRepository):
     model while V3 is evaluated against the legacy spatial implementation.
     """
 
+    def clear_project(self, project_id: str) -> None:
+        # navigation_spaces_current owns all V3 feature/layer/binding rows by
+        # cascade. Encounter policies directly owned by a space/feature cascade
+        # with those rows as well.
+        self.db.execute(
+            "DELETE FROM navigation_spaces_current WHERE project_id=?",
+            (project_id,),
+        )
+
     def spaces(self, project_id: str) -> list[NavigationSpace]:
         return [
             self._space_from_row(row)
