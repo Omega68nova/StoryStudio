@@ -929,6 +929,48 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   color: #827767;
   line-height: 1.35;
 }
+.location-map-preview-select {
+  width: 135px;
+}
+.location-map-sound-toggle {
+  margin: 0 2px 0 0 !important;
+  white-space: nowrap;
+}
+.location-map-ambient-editor {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid #ded4c5;
+  border-radius: 9px;
+  background: #f7f2e8;
+}
+.location-map-ambient-help {
+  margin: 0;
+  color: #827767;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.location-map-ambient-set {
+  display: grid;
+  gap: 7px;
+  padding-top: 9px;
+  border-top: 1px solid #dfd5c7;
+}
+.location-map-ambient-condition-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.location-map-ambient-condition-row > .MuiButton-root {
+  justify-self: end;
+}
+.location-map-ambient-actions {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 6px;
+  align-items: center;
+}
 .location-map-environment-dialog {
   display: grid;
   gap: 12px;

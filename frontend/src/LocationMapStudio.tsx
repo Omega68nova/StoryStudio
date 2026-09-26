@@ -17,8 +17,12 @@ import {
 } from "@mui/material";
 import { api } from "./api";
 import { FavoriteLibraryButton } from "./FavoriteLibraryButton";
+import { BoxedMultiselectFilter } from "./customComponents/BoxedMultiselect";
 import { EntityImageSurface } from "./customComponents/EntityImageSurface";
 import type {
+  AmbientAssignment,
+  AmbientSoundSet,
+  AmbientVariant,
   EnvironmentLocation,
   EnvironmentSettings,
   MediaAsset,
@@ -96,6 +100,66 @@ type SpatialMap = {
   connections: SpatialConnection[];
   barriers: SpatialBarrier[];
 };
+type AmbientData = { variants: AmbientVariant[]; assignments: AmbientAssignment[] };
+type PreviewPlaying = { audio: HTMLAudioElement; gain: number; target: number };
+const emptyAmbientSet = (): AmbientSoundSet => ({ selector_type: "default", selector_value: null, weather_id: null, time_phase_id: null, variant_ids: [] });
+const ambientSetsFor = (assignments: AmbientAssignment[], ownerId?: string): AmbientSoundSet[] => {
+  if (!ownerId) return [emptyAmbientSet()];
+  const grouped = new Map<string, AmbientSoundSet>();
+  assignments.filter(item => item.owner_type === "location" && item.owner_id === ownerId).forEach(item => {
+    const key = [item.selector_type, item.selector_value ?? "", item.weather_id ?? "", item.time_phase_id ?? ""].join("|");
+    const current = grouped.get(key) ?? { selector_type: item.selector_type, selector_value: item.selector_value, weather_id: item.weather_id, time_phase_id: item.time_phase_id, variant_ids: [] };
+    if (!current.variant_ids.includes(item.variant_id)) current.variant_ids.push(item.variant_id);
+    grouped.set(key, current);
+  });
+  const result = [...grouped.values()];
+  if (!result.some(item => item.selector_type === "default" && !item.weather_id && !item.time_phase_id)) result.unshift(emptyAmbientSet());
+  return result;
+};
+function resolveAmbientPreview(
+  location: WorldEntity | null,
+  draft: EnvironmentLocation | null,
+  ambient: AmbientData,
+  localSets: AmbientSoundSet[],
+  weatherId: string,
+  phaseId: string,
+): AmbientVariant[] {
+  if (!location || !draft) return [];
+  const tags = new Set([...location.tags, ...draft.tags, ...draft.image_tags].map(value => String(value).toLocaleLowerCase()));
+  const rules: Array<AmbientAssignment | (Omit<AmbientAssignment, "id"> & { id?: string })> = [
+    ...ambient.assignments.filter(item => !(item.owner_type === "location" && item.owner_id === location.id)),
+    ...localSets.flatMap((set, setIndex) => set.variant_ids.map((variantId, variantIndex) => ({
+      id: `preview-${setIndex}-${variantIndex}`,
+      owner_type: "location" as const,
+      owner_id: location.id,
+      selector_type: set.selector_type,
+      selector_value: set.selector_value ?? null,
+      weather_id: set.weather_id ?? null,
+      time_phase_id: set.time_phase_id ?? null,
+      variant_id: variantId,
+    }))),
+  ];
+  const matched = new Set<string>();
+  for (const rule of rules) {
+    const ownerMatch = rule.owner_type === "location"
+      ? rule.owner_id === location.id
+      : rule.owner_type === "weather"
+        ? rule.owner_id === weatherId
+        : rule.owner_type === "time"
+          ? rule.owner_id === phaseId
+          : rule.owner_type === "action" && rule.owner_id.toLocaleLowerCase() === "standing";
+    if (!ownerMatch) continue;
+    if (draft.exposure === "isolated" && (rule.owner_type === "weather" || rule.owner_type === "time")) continue;
+    const selectorMatch = rule.selector_type === "default"
+      || rule.selector_type === draft.exposure
+      || (rule.selector_type === "tag" && tags.has(String(rule.selector_value ?? "").toLocaleLowerCase()));
+    const conditionMatch = (!rule.weather_id || rule.weather_id === weatherId)
+      && (!rule.time_phase_id || rule.time_phase_id === phaseId);
+    if (selectorMatch && conditionMatch) matched.add(rule.variant_id);
+  }
+  return ambient.variants.filter(item => matched.has(item.id) && item.enabled && item.available);
+}
+
 type BackgroundRecord = {
   media_asset_id: string;
   file_path?: string | null;
@@ -277,6 +341,13 @@ export function LocationMapStudio({
   const [world, setWorld] = useState<WorldProjection | null>(null);
   const [environmentSettings, setEnvironmentSettings] = useState<EnvironmentSettings | null>(null);
   const [environmentSettingsOpen, setEnvironmentSettingsOpen] = useState(false);
+  const [ambient, setAmbient] = useState<AmbientData>({ variants: [], assignments: [] });
+  const [ambientSets, setAmbientSets] = useState<AmbientSoundSet[]>([emptyAmbientSet()]);
+  const [ambientSavedSnapshot, setAmbientSavedSnapshot] = useState("");
+  const [previewWeatherId, setPreviewWeatherId] = useState("");
+  const [previewTimePhaseId, setPreviewTimePhaseId] = useState("");
+  const [soundPreviewEnabled, setSoundPreviewEnabled] = useState(false);
+  const previewAudio = useRef(new Map<string, PreviewPlaying>());
   const [layerId, setLayerId] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -327,14 +398,24 @@ export function LocationMapStudio({
   }, []);
 
   const load = useCallback(async () => {
-    const [nextMap, nextWorld, nextSettings] = await Promise.all([
+    const [nextMap, nextWorld, nextSettings, nextAmbient] = await Promise.all([
       api<SpatialMap>(`/projects/${projectId}/spatial/map${layerId ? `?location_id=${layerId}` : ""}`),
       api<WorldProjection>(`/projects/${projectId}/world`),
       api<EnvironmentSettings>(`/projects/${projectId}/environment/settings`),
+      api<AmbientData>(`/projects/${projectId}/environment/ambient`),
     ]);
     setMap(nextMap);
     setWorld(nextWorld);
     setEnvironmentSettings(nextSettings);
+    setAmbient(nextAmbient);
+    setPreviewWeatherId(current => nextSettings.weather.some(item => item.id === current && item.enabled)
+      ? current
+      : (nextSettings.weather.find(item => item.id === nextSettings.initial_weather_id && item.enabled)?.id
+        ?? nextSettings.weather.find(item => item.enabled)?.id
+        ?? ""));
+    setPreviewTimePhaseId(current => nextSettings.time_phases.some(item => item.id === current && item.enabled)
+      ? current
+      : (nextSettings.time_phases.find(item => item.enabled)?.id ?? ""));
     if (!layerId && nextMap.root_location_id) setLayerId(nextMap.root_location_id);
   }, [projectId, layerId]);
 
@@ -348,7 +429,12 @@ export function LocationMapStudio({
 
   useEffect(() => {
     setEditorDraft(selectedLocation ? locationDraft(selectedLocation) : null);
-  }, [selectedLocation?.id, world]);
+    const nextSets = ambientSetsFor(ambient.assignments, selectedLocation?.id);
+    setAmbientSets(nextSets);
+    setAmbientSavedSnapshot(JSON.stringify(nextSets));
+  // Ambient drafts intentionally survive map/world refreshes until selection changes.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedLocation?.id]);
 
   const loadBackgrounds = useCallback(async (locationId: string) => {
     const rows = await api<BackgroundRecord[]>(`/projects/${projectId}/environment/locations/${locationId}/backgrounds`);
@@ -451,6 +537,75 @@ export function LocationMapStudio({
       negative_prompt: row.negative_prompt,
     };
   }, [backgrounds, selectedLocation, backgroundSelection]);
+
+  const previewAmbient = useMemo(
+    () => resolveAmbientPreview(
+      selectedLocation,
+      editorDraft,
+      ambient,
+      ambientSets,
+      previewWeatherId,
+      previewTimePhaseId,
+    ),
+    [selectedLocation, editorDraft, ambient, ambientSets, previewWeatherId, previewTimePhaseId],
+  );
+
+  useEffect(() => {
+    const desired = new Map((soundPreviewEnabled && selectedLocation ? previewAmbient : []).map(item => [item.id, item]));
+    for (const [id, item] of desired) {
+      let playing = previewAudio.current.get(id);
+      if (!playing) {
+        const audio = new Audio(item.url);
+        audio.loop = true;
+        audio.preload = "auto";
+        audio.volume = 0;
+        audio.playbackRate = item.playback_rate;
+        playing = { audio, gain: 0, target: item.default_gain };
+        previewAudio.current.set(id, playing);
+        void audio.play().catch(() => undefined);
+      }
+      playing.audio.playbackRate = item.playback_rate;
+      playing.target = item.default_gain;
+    }
+    for (const [id, playing] of previewAudio.current) {
+      if (!desired.has(id)) playing.target = 0;
+    }
+  }, [soundPreviewEnabled, selectedLocation?.id, previewAmbient]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      for (const [id, playing] of previewAudio.current) {
+        playing.gain += Math.sign(playing.target - playing.gain) * Math.min(.05, Math.abs(playing.target - playing.gain));
+        playing.audio.volume = Math.max(0, Math.min(1, playing.gain));
+        if (playing.target === 0 && playing.gain === 0) {
+          playing.audio.pause();
+          playing.audio.src = "";
+          previewAudio.current.delete(id);
+        }
+      }
+    }, 50);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!selectedLocation && soundPreviewEnabled) setSoundPreviewEnabled(false);
+  }, [selectedLocation, soundPreviewEnabled]);
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: soundPreviewEnabled }));
+    return () => {
+      if (soundPreviewEnabled) window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
+    };
+  }, [soundPreviewEnabled]);
+
+  useEffect(() => () => {
+    window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
+    for (const playing of previewAudio.current.values()) {
+      playing.audio.pause();
+      playing.audio.src = "";
+    }
+    previewAudio.current.clear();
+  }, [projectId]);
 
   function canvasPoint(clientX: number, clientY: number, element: HTMLElement): Point {
     const rect = element.getBoundingClientRect();
@@ -583,6 +738,25 @@ export function LocationMapStudio({
     setAreaDraft([]);
     setTool("select");
     await load();
+  }
+
+  async function saveLocationAmbient() {
+    if (!selectedLocation) return;
+    try {
+      const saved = await api<AmbientSoundSet[]>(
+        `/projects/${projectId}/environment/ambient/assignments/location/${selectedLocation.id}`,
+        {
+          method: "PUT",
+          body: JSON.stringify({ sets: ambientSets.filter(item => item.variant_ids.length) }),
+        },
+      );
+      setAmbientSets(saved.length ? saved : [emptyAmbientSet()]);
+      setAmbientSavedSnapshot(JSON.stringify(saved.length ? saved : [emptyAmbientSet()]));
+      const nextAmbient = await api<AmbientData>(`/projects/${projectId}/environment/ambient`);
+      setAmbient(nextAmbient);
+    } catch (cause) {
+      fail(String(cause));
+    }
   }
 
   async function saveLocation(value: EnvironmentLocation) {
@@ -1212,6 +1386,98 @@ export function LocationMapStudio({
       if (!leftEntity || !rightEntity) return 0;
       return compareAreaPriority(rightEntity, leftEntity);
     });
+  const ambientDirty = JSON.stringify(ambientSets) !== ambientSavedSnapshot;
+  const updateAmbientSet = (index: number, patch: Partial<AmbientSoundSet>) =>
+    setAmbientSets(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
+  const ambientVariantsFor = (ids: string[]) => ambient.variants.filter(item => ids.includes(item.id));
+  const ambientSoundPicker = (item: AmbientSoundSet, index: number, label: string) => <BoxedMultiselectFilter
+    label={label}
+    tooltipLabel="ambient sounds"
+    options={ambient.variants}
+    value={ambientVariantsFor(item.variant_ids)}
+    getOptionSecondaryText={(variant: AmbientVariant) => `${variant.playback_rate}× · gain ${variant.default_gain}${!variant.available ? " · missing" : !variant.enabled ? " · disabled" : ""}`}
+    getOptionDisabled={(variant: AmbientVariant) => (!variant.enabled || !variant.available) && !item.variant_ids.includes(variant.id)}
+    onChange={(_event, next) => {
+      const variant_ids = next.map((variant: AmbientVariant) => variant.id);
+      if (index >= 0) updateAmbientSet(index, { variant_ids });
+      else setAmbientSets(current => [{ ...item, variant_ids }, ...current]);
+    }}
+  />;
+
+  const renderAmbientEditor = () => {
+    if (!selectedLocation || !environmentSettings) return null;
+    const baseIndex = ambientSets.findIndex(item => item.selector_type === "default" && !item.weather_id && !item.time_phase_id);
+    const base = baseIndex >= 0 ? ambientSets[baseIndex] : emptyAmbientSet();
+    const custom = ambientSets.map((item, index) => ({ item, index })).filter(({ index }) => index !== baseIndex);
+    return <section className="location-map-ambient-editor">
+      <div className="location-map-section-heading">
+        <div><p className="eyebrow">AMBIENCE</p><h4>Location sound sets</h4></div>
+        <Chip size="small" label={ambientDirty ? "Unsaved" : "Saved"} />
+      </div>
+      <p className="location-map-ambient-help">The toolbar preview resolves these draft sets immediately against the selected weather and time. You do not need to save before listening.</p>
+      {ambientSoundPicker(base, baseIndex, "Default ambient sounds")}
+      {custom.map(({ item, index }) => <div className="location-map-ambient-set" key={`${index}-${item.selector_type}`}>
+        <div className="location-map-ambient-condition-row">
+          <TextField
+            select
+            size="small"
+            label="Applies in"
+            value={item.selector_type}
+            onChange={event => updateAmbientSet(index, { selector_type: event.target.value as AmbientSoundSet["selector_type"], selector_value: null })}
+          >
+            <MenuItem value="default">Every exposure</MenuItem>
+            <MenuItem value="outdoor">Outdoor</MenuItem>
+            <MenuItem value="indoor">Indoor</MenuItem>
+            <MenuItem value="isolated">Sealed</MenuItem>
+            <MenuItem value="tag">Location tag</MenuItem>
+          </TextField>
+          {item.selector_type === "tag" && <TextField
+            size="small"
+            label="Location tag"
+            value={item.selector_value ?? ""}
+            onChange={event => updateAmbientSet(index, { selector_value: event.target.value })}
+          />}
+          <TextField
+            select
+            size="small"
+            label="Weather"
+            value={item.weather_id ?? ""}
+            onChange={event => updateAmbientSet(index, { weather_id: event.target.value || null })}
+          >
+            <MenuItem value="">Any weather</MenuItem>
+            {environmentSettings.weather.map(weather => <MenuItem key={weather.id} value={weather.id}>{weather.name}</MenuItem>)}
+          </TextField>
+          <TextField
+            select
+            size="small"
+            label="Time"
+            value={item.time_phase_id ?? ""}
+            onChange={event => updateAmbientSet(index, { time_phase_id: event.target.value || null })}
+          >
+            <MenuItem value="">Any time</MenuItem>
+            {environmentSettings.time_phases.map(phase => <MenuItem key={phase.id} value={phase.id}>{phase.name}</MenuItem>)}
+          </TextField>
+          <Button color="error" size="small" onClick={() => setAmbientSets(current => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</Button>
+        </div>
+        {ambientSoundPicker(item, index, "Sounds")}
+      </div>)}
+      <div className="location-map-ambient-actions">
+        <Button size="small" onClick={() => setAmbientSets(current => [...current, emptyAmbientSet()])}>Add conditional sound set</Button>
+        <span />
+        <Button
+          size="small"
+          disabled={!ambientDirty}
+          onClick={() => {
+            const saved = ambientSetsFor(ambient.assignments, selectedLocation.id);
+            setAmbientSets(saved);
+            setAmbientSavedSnapshot(JSON.stringify(saved));
+          }}
+        >Reset ambience</Button>
+        <Button size="small" variant="contained" disabled={!ambientDirty} onClick={() => void saveLocationAmbient()}>Save ambience</Button>
+      </div>
+    </section>;
+  };
+
   const toolLabels: Array<{ id: Tool; label: string }> = [
     { id: "select", label: "Select" },
     { id: "drag", label: "Drag" },
@@ -1285,6 +1551,36 @@ export function LocationMapStudio({
           >{item.label}</Button>)}
         </ButtonGroup>
         <span className="location-map-toolbar-spacer" />
+        <TextField
+          select
+          size="small"
+          label="Weather"
+          value={previewWeatherId}
+          onChange={event => setPreviewWeatherId(event.target.value)}
+          className="location-map-preview-select"
+        >
+          {environmentSettings?.weather.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+        <TextField
+          select
+          size="small"
+          label="Time of day"
+          value={previewTimePhaseId}
+          onChange={event => setPreviewTimePhaseId(event.target.value)}
+          className="location-map-preview-select"
+        >
+          {environmentSettings?.time_phases.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        </TextField>
+        <FormControlLabel
+          className="location-map-sound-toggle"
+          control={<Switch
+            size="small"
+            checked={soundPreviewEnabled}
+            disabled={!selectedLocation}
+            onChange={event => setSoundPreviewEnabled(event.target.checked)}
+          />}
+          label={soundPreviewEnabled ? `Sound · ${previewAmbient.length}` : "Toggle sound"}
+        />
         <Button size="small" variant="outlined" onClick={() => setEnvironmentSettingsOpen(true)}>Environment settings</Button>
         {tool === "area" && areaDraft.length >= 2 && <Button size="small" onClick={() => void finishArea(false)}>
           Finish as wall
@@ -1683,6 +1979,7 @@ export function LocationMapStudio({
               <FormControlLabel control={<Switch size="small" checked={editorDraft.random_encounter} onChange={event => setEditorDraft({ ...editorDraft, random_encounter: event.target.checked })} />} label="Random encounter" />
             </div>
           </div>
+          {renderAmbientEditor()}
           {editorDraft.spatial_kind === "area" && <section className="location-map-contents">
             <div className="location-map-contents-heading">
               <div><p className="eyebrow">CONTENTS</p><h4>Resolved contents</h4></div>

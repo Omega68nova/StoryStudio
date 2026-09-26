@@ -8,6 +8,7 @@ type Playing = { audio: HTMLAudioElement; gain: number; target: number };
 export function AmbientPlayer({ projectId, revision, onScene }: { projectId: string; revision: number; onScene?: (scene: SceneEnvironment) => void }) {
   const active = useRef(new Map<string, Playing>());
   const [armed, setArmed] = useState(false);
+  const [previewActive, setPreviewActive] = useState(false);
   const [prefs, setPrefs] = useState<UserAmbientPreferences>({ enabled: true, master_volume: 1 });
   const [scene, setScene] = useState<SceneEnvironment | null>(null);
   const load = useCallback(async () => {
@@ -23,11 +24,18 @@ export function AmbientPlayer({ projectId, revision, onScene }: { projectId: str
     window.addEventListener("pointerdown", arm, { once: true });
     window.addEventListener("keydown", arm, { once: true });
     const refresh = () => void load();
+    const preview = (raw: Event) => setPreviewActive(Boolean((raw as CustomEvent<boolean>).detail));
     window.addEventListener("storystudio-ambient-preferences", refresh);
-    return () => { window.removeEventListener("pointerdown", arm); window.removeEventListener("keydown", arm); window.removeEventListener("storystudio-ambient-preferences", refresh); };
+    window.addEventListener("storystudio-ambient-preview-active", preview);
+    return () => {
+      window.removeEventListener("pointerdown", arm);
+      window.removeEventListener("keydown", arm);
+      window.removeEventListener("storystudio-ambient-preferences", refresh);
+      window.removeEventListener("storystudio-ambient-preview-active", preview);
+    };
   }, [load]);
   useEffect(() => {
-    const desired = new Map((scene?.enabled && prefs.enabled && armed ? scene.ambient : []).map(item => [item.id, item]));
+    const desired = new Map((scene?.enabled && prefs.enabled && armed && !previewActive ? scene.ambient : []).map(item => [item.id, item]));
     for (const [id, item] of desired) {
       let playing = active.current.get(id);
       if (!playing) {
@@ -39,7 +47,7 @@ export function AmbientPlayer({ projectId, revision, onScene }: { projectId: str
       playing.target = item.default_gain * prefs.master_volume;
     }
     for (const [id, playing] of active.current) if (!desired.has(id)) playing.target = 0;
-  }, [scene, prefs, armed]);
+  }, [scene, prefs, armed, previewActive]);
   useEffect(() => {
     const timer = window.setInterval(() => {
       for (const [id, playing] of active.current) {
