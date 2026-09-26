@@ -116,6 +116,50 @@ const ambientSetsFor = (assignments: AmbientAssignment[], ownerId?: string): Amb
   if (!result.some(item => item.selector_type === "default" && !item.weather_id && !item.time_phase_id)) result.unshift(emptyAmbientSet());
   return result;
 };
+function resolveAmbientPreview(
+  location: WorldEntity | null,
+  draft: EnvironmentLocation | null,
+  ambient: AmbientData,
+  localSets: AmbientSoundSet[],
+  weatherId: string,
+  phaseId: string,
+): AmbientVariant[] {
+  if (!location || !draft) return [];
+  const tags = new Set([...location.tags, ...draft.tags, ...draft.image_tags].map(value => String(value).toLocaleLowerCase()));
+  const rules: Array<AmbientAssignment | (Omit<AmbientAssignment, "id"> & { id?: string })> = [
+    ...ambient.assignments.filter(item => !(item.owner_type === "location" && item.owner_id === location.id)),
+    ...localSets.flatMap((set, setIndex) => set.variant_ids.map((variantId, variantIndex) => ({
+      id: `preview-${setIndex}-${variantIndex}`,
+      owner_type: "location" as const,
+      owner_id: location.id,
+      selector_type: set.selector_type,
+      selector_value: set.selector_value ?? null,
+      weather_id: set.weather_id ?? null,
+      time_phase_id: set.time_phase_id ?? null,
+      variant_id: variantId,
+    }))),
+  ];
+  const matched = new Set<string>();
+  for (const rule of rules) {
+    const ownerMatch = rule.owner_type === "location"
+      ? rule.owner_id === location.id
+      : rule.owner_type === "weather"
+        ? rule.owner_id === weatherId
+        : rule.owner_type === "time"
+          ? rule.owner_id === phaseId
+          : rule.owner_type === "action" && rule.owner_id.toLocaleLowerCase() === "standing";
+    if (!ownerMatch) continue;
+    if (draft.exposure === "isolated" && (rule.owner_type === "weather" || rule.owner_type === "time")) continue;
+    const selectorMatch = rule.selector_type === "default"
+      || rule.selector_type === draft.exposure
+      || (rule.selector_type === "tag" && tags.has(String(rule.selector_value ?? "").toLocaleLowerCase()));
+    const conditionMatch = (!rule.weather_id || rule.weather_id === weatherId)
+      && (!rule.time_phase_id || rule.time_phase_id === phaseId);
+    if (selectorMatch && conditionMatch) matched.add(rule.variant_id);
+  }
+  return ambient.variants.filter(item => matched.has(item.id) && item.enabled && item.available);
+}
+
 type BackgroundRecord = {
   media_asset_id: string;
   file_path?: string | null;
