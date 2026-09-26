@@ -72,7 +72,7 @@ def inherited_parent_context(
     *,
     project_id: str,
     space: NavigationSpace,
-    projection: dict[str, Any],
+    projection: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Project a location's parent-space footprint/context into its own space.
 
@@ -88,6 +88,7 @@ def inherited_parent_context(
     if not binding or str(binding.get("bounds_mode") or "") != "inherit_parent":
         return None
 
+    projection = projection or {}
     entities = projection.get("entities") or {}
     owner = entities.get(owner_location_id) or {}
     parent_location_id = (owner.get("state") or {}).get("parent_location_id")
