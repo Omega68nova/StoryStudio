@@ -17,6 +17,7 @@ export type V2CanvasFeature = {
   id: string;
   feature_kind: V2FeatureKind;
   render_layer?: string;
+  semantic_location_id?: string | null;
   name: string;
   geometry: V2Geometry;
   hidden: boolean;
@@ -453,23 +454,22 @@ export function SpatialV2Canvas({
           const center = centroid(geometry);
           const settings = layerSettings[feature.render_layer ?? ""];
           const editable = settings?.editable !== false;
-          const showLabel = settings?.labels_mode !== "hidden";
+          const showLabel = settings?.labels_mode === "all"
+            || (settings?.labels_mode !== "hidden" && (feature.id === selectedFeatureId || Boolean(feature.semantic_location_id)));
           if (feature.geometry.type === "Point") {
             return <button
               key={`${feature.id}:node`}
               className={`location-map-anchor ${feature.feature_kind}${feature.id === selectedFeatureId ? " selected" : ""}`}
-              style={{ left: `${center[0]}%`, top: `${center[1]}%` }}
-              title={feature.name}
+              title={showLabel ? feature.name : feature.feature_kind}
               onClick={event => { event.stopPropagation(); onSelectFeature(feature.id); }}
               onPointerDown={event => startDrag(event, feature)}
-              style={{ left: `${center[0]}%`, top: `${center[1]}%`, pointerEvents: editable ? "auto" : "none", opacity: showLabel ? 1 : .35 }}
+              style={{ left: `${center[0]}%`, top: `${center[1]}%`, pointerEvents: editable ? "auto" : "none", opacity: showLabel ? 1 : .55 }}
             >{feature.feature_kind === "connector" ? "▮" : "◇"}</button>;
           }
           if (!showLabel) return null;
           return <button
             key={`${feature.id}:label`}
             className={`location-map-node v3-feature-node${feature.id === selectedFeatureId ? " selected" : ""}`}
-            style={{ left: `${center[0]}%`, top: `${center[1]}%` }}
             onClick={event => { event.stopPropagation(); onSelectFeature(feature.id); }}
             onPointerDown={event => startDrag(event, feature)}
             disabled={!editable}
