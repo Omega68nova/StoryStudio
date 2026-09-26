@@ -217,7 +217,7 @@ function renderGeometry(feature: V2CanvasFeature, geometry: V2Geometry, selected
         strokeWidth={width}
         strokeLinecap="round"
         strokeLinejoin="round"
-        style={{ pointerEvents: "none" }}
+        style={{ pointerEvents: "none", strokeWidth: width }}
       />
     </g>)}</g>;
   }
