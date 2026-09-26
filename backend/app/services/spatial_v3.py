@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from typing import Any
+from typing import Any, Callable
 
 try:
     from shapely.geometry import Point, shape
@@ -40,8 +40,65 @@ class SpatialV3Service:
     before the legacy runtime is removed.
     """
 
-    def __init__(self, repository: SpatialV3Repository) -> None:
+    def __init__(
+        self,
+        repository: SpatialV3Repository,
+        *,
+        condition_evaluator: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> None:
         self.repository = repository
+        self.condition_evaluator = condition_evaluator
+
+    def _condition_state(self, payload: dict[str, Any] | None) -> bool | None:
+        if not payload:
+            return True
+        if self.condition_evaluator is None:
+            return None
+        try:
+            return bool(self.condition_evaluator(dict(payload)))
+        except (ValueError, TypeError):
+            return None
+
+    def _encounter_contributors(
+        self,
+        policies: list[EncounterPolicy],
+    ) -> tuple[list[EncounterPolicy], list[dict[str, Any]], bool]:
+        contributors: list[EncounterPolicy] = []
+        unresolved: list[dict[str, Any]] = []
+        disabled = False
+        states: dict[str, bool | None] = {}
+        for policy in policies:
+            state = self._condition_state(policy.conditions)
+            states[policy.id] = state
+            if state is False:
+                continue
+            mode = str(policy.mode)
+            if mode == "disabled":
+                contributors = []
+                disabled = True
+                if state is None:
+                    unresolved.append(policy.model_dump(mode="json"))
+                continue
+            if mode == "replace":
+                contributors = []
+                disabled = False
+            if mode in {"replace", "augment"}:
+                contributors.append(policy)
+                if state is None:
+                    unresolved.append(policy.model_dump(mode="json"))
+
+        active = [
+            policy
+            for policy in contributors
+            if states.get(policy.id) is True
+        ]
+        return active, unresolved, disabled and not contributors
+
+    def _candidate_allowed(
+        self,
+        requirements: dict[str, Any] | None,
+    ) -> bool | None:
+        return self._condition_state(requirements)
 
     @staticmethod
     def _geometry(feature: MapFeature) -> BaseGeometry:
@@ -234,39 +291,20 @@ class SpatialV3Service:
         ]
         policies.sort(key=lambda item: (float(item.priority), str(item.id)))
 
-        contributors: list[EncounterPolicy] = []
-        disabled = False
-        for policy in policies:
-            mode = str(policy.mode)
-            if mode == "disabled":
-                contributors = []
-                disabled = True
-                continue
-            if mode == "replace":
-                contributors = []
-                disabled = False
-            if mode in {"replace", "augment"}:
-                contributors.append(policy)
+        active, unresolved, disabled = self._encounter_contributors(policies)
 
-        if disabled and not contributors:
+        if disabled:
             return {
                 "enabled": False,
                 "rate_per_100_units": 0,
                 "probability": 0,
                 "candidates": [],
                 "policy_ids": [policy.id for policy in policies],
-                "unresolved_conditions": [],
+                "unresolved_conditions": unresolved,
+                "unresolved_candidates": [],
             }
 
-        unconditional = [
-            policy for policy in contributors if not policy.conditions
-        ]
-        unresolved = [
-            policy.model_dump(mode="json")
-            for policy in contributors
-            if policy.conditions
-        ]
-        rate = sum(float(policy.rate_per_100_units) for policy in unconditional)
+        rate = sum(float(policy.rate_per_100_units) for policy in active)
         probability = 0.0 if rate <= 0 or distance <= 0 else (
             1 - math.exp(-(rate / 100.0) * float(distance))
         )
@@ -274,13 +312,16 @@ class SpatialV3Service:
         candidate_weights: dict[str, float] = defaultdict(float)
         candidate_sources: dict[str, list[str]] = defaultdict(list)
         unresolved_candidates: list[dict[str, Any]] = []
-        for policy in unconditional:
+        for policy in active:
             for candidate in policy.candidates:
-                if candidate.requirements:
+                state = self._candidate_allowed(candidate.requirements)
+                if state is None:
                     unresolved_candidates.append({
                         "policy_id": policy.id,
                         "candidate": candidate.model_dump(mode="json"),
                     })
+                    continue
+                if state is False:
                     continue
                 candidate_weights[candidate.location_id] += float(candidate.weight)
                 candidate_sources[candidate.location_id].append(policy.id)
@@ -296,11 +337,11 @@ class SpatialV3Service:
         candidates.sort(key=lambda item: (-item["weight"], item["location_id"]))
 
         return {
-            "enabled": bool(unconditional),
+            "enabled": bool(active),
             "rate_per_100_units": rate,
             "probability": probability,
             "candidates": candidates,
-            "policy_ids": [policy.id for policy in contributors],
+            "policy_ids": [policy.id for policy in active],
             "unresolved_conditions": unresolved,
             "unresolved_candidates": unresolved_candidates,
         }
@@ -343,50 +384,35 @@ class SpatialV3Service:
         ]
         policies.sort(key=lambda item: (float(item.priority), str(item.id)))
 
-        contributors: list[EncounterPolicy] = []
-        disabled = False
-        for policy in policies:
-            mode = str(policy.mode)
-            if mode == "disabled":
-                contributors = []
-                disabled = True
-                continue
-            if mode == "replace":
-                contributors = []
-                disabled = False
-            if mode in {"replace", "augment"}:
-                contributors.append(policy)
+        active, unresolved, disabled = self._encounter_contributors(policies)
 
-        if disabled and not contributors:
+        if disabled:
             return {
                 "enabled": False,
                 "probability": 0,
                 "candidates": [],
                 "policy_ids": [policy.id for policy in policies],
-                "unresolved_conditions": [],
+                "unresolved_conditions": unresolved,
+                "unresolved_candidates": [],
             }
-
-        unconditional = [policy for policy in contributors if not policy.conditions]
-        unresolved = [
-            policy.model_dump(mode="json")
-            for policy in contributors
-            if policy.conditions
-        ]
 
         # Multiple augmenting transition probabilities are independent chances.
         no_encounter = 1.0
         candidate_weights: dict[str, float] = defaultdict(float)
         candidate_sources: dict[str, list[str]] = defaultdict(list)
         unresolved_candidates: list[dict[str, Any]] = []
-        for policy in unconditional:
+        for policy in active:
             probability = float(policy.probability_per_transition or 0)
             no_encounter *= 1 - probability
             for candidate in policy.candidates:
-                if candidate.requirements:
+                state = self._candidate_allowed(candidate.requirements)
+                if state is None:
                     unresolved_candidates.append({
                         "policy_id": policy.id,
                         "candidate": candidate.model_dump(mode="json"),
                     })
+                    continue
+                if state is False:
                     continue
                 candidate_weights[candidate.location_id] += float(candidate.weight)
                 candidate_sources[candidate.location_id].append(policy.id)
@@ -401,10 +427,10 @@ class SpatialV3Service:
         ]
         candidates.sort(key=lambda item: (-item["weight"], item["location_id"]))
         return {
-            "enabled": bool(unconditional),
+            "enabled": bool(active),
             "probability": 1 - no_encounter,
             "candidates": candidates,
-            "policy_ids": [policy.id for policy in contributors],
+            "policy_ids": [policy.id for policy in active],
             "unresolved_conditions": unresolved,
             "unresolved_candidates": unresolved_candidates,
         }

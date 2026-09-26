@@ -1729,14 +1729,26 @@ async def preview_spatial_v3_travel(
     target_y: float,
     seed: str,
     resume_cursor: str | None = None,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     require_project(project_id)
     from app.services.spatial_v3 import SpatialV3Error
     from app.services.spatial_v3_travel import SpatialV3TravelPreview
 
     _synchronize_spatial_v3_projection(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    condition_evaluator = (
+        lambda payload: scheduler.world.rules_runtime.evaluate_condition(
+            project_id, projection, payload, actor_id=actor_id
+        )
+        if actor_id
+        else None
+    )
     try:
-        return SpatialV3TravelPreview(data.spatial_v3).preview(
+        return SpatialV3TravelPreview(
+            data.spatial_v3,
+            condition_evaluator=condition_evaluator,
+        ).preview(
             project_id=project_id,
             start_space_id=start_space_id,
             start=(start_x, start_y),
@@ -1754,13 +1766,25 @@ async def resolve_spatial_v3_transition_encounter(
     project_id: str,
     space_id: str,
     feature_id: str,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     require_project(project_id)
     from app.services.spatial_v3 import SpatialV3Error, SpatialV3Service
 
     _synchronize_spatial_v3_projection(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    condition_evaluator = (
+        lambda payload: scheduler.world.rules_runtime.evaluate_condition(
+            project_id, projection, payload, actor_id=actor_id
+        )
+        if actor_id
+        else None
+    )
     try:
-        return SpatialV3Service(data.spatial_v3).transition_encounter_context(
+        return SpatialV3Service(
+            data.spatial_v3,
+            condition_evaluator=condition_evaluator,
+        ).transition_encounter_context(
             project_id=project_id,
             navigation_space_id=space_id,
             feature_id=feature_id,

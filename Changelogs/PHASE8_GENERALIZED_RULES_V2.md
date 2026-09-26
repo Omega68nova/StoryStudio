@@ -394,3 +394,25 @@ and explicit selectors can resolve auxiliary rule objects. Effective defaults
 and dynamic bounds are applied consistently through `RulesRuntime.rule_context`.
 
 Migration: `051_extended_rule_stat_owners.sql`.
+
+
+### Spatial V3 encounter conditions — shared evaluator wired
+
+Distance and transition encounter policies now evaluate their condition payloads
+through the same Rules V2 evaluator used by abilities and conditional traversal.
+Candidate-level requirements use the same path.
+
+When actor context is supplied:
+
+- false policy conditions skip that policy entirely, including replace/disable
+  semantics;
+- true policy conditions participate normally;
+- false candidate requirements remove that candidate;
+- true candidate requirements include it.
+
+Without actor context, conditional policies/candidates remain unresolved rather
+than being guessed, preserving the conservative diagnostic behavior.
+
+The travel-preview and transition-encounter endpoints now accept optional
+`actor_id`. The travel preview shares one evaluator with both pathfinding and
+encounter resolution.
