@@ -431,7 +431,9 @@ class SpatialV3Repository(BaseRepository):
                 "feature_id": row.get("feature_id"),
                 "mode": row["mode"],
                 "priority": row["priority"],
+                "trigger_kind": row.get("trigger_kind") or "distance",
                 "rate_per_100_units": row["rate_per_100_units"],
+                "probability_per_transition": row.get("probability_per_transition"),
                 "minimum_distance": row["minimum_distance"],
                 "candidates": json.loads(row.get("candidates_json") or "[]"),
                 "conditions": json.loads(row["conditions_json"]) if row.get("conditions_json") else None,
@@ -444,15 +446,17 @@ class SpatialV3Repository(BaseRepository):
             """
             INSERT INTO navigation_encounter_policies_current(
               id,project_id,navigation_space_id,feature_id,mode,priority,
-              rate_per_100_units,minimum_distance,candidates_json,
-              conditions_json,enabled,updated_at
-            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+              trigger_kind,rate_per_100_units,probability_per_transition,
+              minimum_distance,candidates_json,conditions_json,enabled,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
               navigation_space_id=excluded.navigation_space_id,
               feature_id=excluded.feature_id,
               mode=excluded.mode,
               priority=excluded.priority,
+              trigger_kind=excluded.trigger_kind,
               rate_per_100_units=excluded.rate_per_100_units,
+              probability_per_transition=excluded.probability_per_transition,
               minimum_distance=excluded.minimum_distance,
               candidates_json=excluded.candidates_json,
               conditions_json=excluded.conditions_json,
@@ -466,7 +470,9 @@ class SpatialV3Repository(BaseRepository):
                 policy.feature_id,
                 str(policy.mode),
                 float(policy.priority),
+                str(policy.trigger_kind),
                 float(policy.rate_per_100_units),
+                policy.probability_per_transition,
                 float(policy.minimum_distance),
                 json.dumps([item.model_dump(mode="json") for item in policy.candidates]),
                 json.dumps(policy.conditions) if policy.conditions is not None else None,
