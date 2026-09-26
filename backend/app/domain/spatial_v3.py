@@ -59,6 +59,12 @@ class EntrancePolicy(StrEnum):
     OPEN = "open"
 
 
+class EncounterMode(StrEnum):
+    AUGMENT = "augment"
+    REPLACE = "replace"
+    DISABLED = "disabled"
+
+
 Position: TypeAlias = tuple[float, float]
 
 
@@ -157,8 +163,6 @@ class NavigationSpace(SpatialV3Model):
 
 class SurfaceProperties(SpatialV3Model):
     traversal: TraversalPolicy = Field(default_factory=TraversalPolicy)
-    encounter_rate: float = Field(default=0, ge=0)
-    encounter_table: list[dict[str, Any]] = Field(default_factory=list)
     ambience_tags: list[str] = Field(default_factory=list)
     environment_tags: list[str] = Field(default_factory=list)
 
@@ -166,8 +170,6 @@ class SurfaceProperties(SpatialV3Model):
 class CorridorProperties(SpatialV3Model):
     width: float = Field(gt=0)
     traversal: TraversalPolicy = Field(default_factory=TraversalPolicy)
-    encounter_rate: float = Field(default=0, ge=0)
-    encounter_table: list[dict[str, Any]] = Field(default_factory=list)
     ambience_tags: list[str] = Field(default_factory=list)
 
 
@@ -258,6 +260,32 @@ class LocationNavigationSpace(SpatialV3Model):
     navigation_space_id: str
     entrance_policy: EntrancePolicy = EntrancePolicy.CONNECTORS
     bounds_mode: BoundsMode = BoundsMode.INHERIT_PARENT
+
+
+class EncounterCandidate(SpatialV3Model):
+    location_id: str
+    weight: float = Field(default=1, gt=0)
+    requirements: dict[str, Any] | None = None
+
+
+class EncounterPolicy(SpatialV3Model):
+    id: str
+    project_id: str
+    navigation_space_id: str | None = None
+    feature_id: str | None = None
+    mode: EncounterMode = EncounterMode.AUGMENT
+    priority: float = 0
+    rate_per_100_units: float = Field(default=0, ge=0)
+    minimum_distance: float = Field(default=0, ge=0)
+    candidates: list[EncounterCandidate] = Field(default_factory=list)
+    conditions: dict[str, Any] | None = None
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def validate_owner(self) -> "EncounterPolicy":
+        if (self.navigation_space_id is None) == (self.feature_id is None):
+            raise ValueError("Encounter policy must target exactly one navigation space or feature")
+        return self
 
 
 class NavigationLayer(SpatialV3Model):
