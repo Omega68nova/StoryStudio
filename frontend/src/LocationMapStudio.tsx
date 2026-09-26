@@ -105,6 +105,11 @@ type SpaceDetails = {
   layers: NavigationLayer[];
   encounter_policies: EncounterPolicy[];
 };
+type ConnectorTargetHandle = {
+  connector: MapFeature;
+  source_space_id: string;
+  point: Point;
+};
 type MigrationPreview = {
   spaces?: unknown[];
   features?: unknown[];
@@ -239,6 +244,7 @@ export function LocationMapStudio({
   const [spaces, setSpaces] = useState<NavigationSpace[]>([]);
   const [spaceId, setSpaceId] = useState("");
   const [details, setDetails] = useState<SpaceDetails | null>(null);
+  const [connectorTargets, setConnectorTargets] = useState<ConnectorTargetHandle[]>([]);
   const [tool, setTool] = useState<Tool>("select");
   const [draftPoints, setDraftPoints] = useState<Point[]>([]);
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
@@ -285,12 +291,42 @@ export function LocationMapStudio({
   }, [projectId]);
 
   const loadDetails = useCallback(async () => {
-    if (!spaceId) { setDetails(null); setSpaceDraft(null); return; }
+    if (!spaceId) {
+      setDetails(null);
+      setSpaceDraft(null);
+      setConnectorTargets([]);
+      return;
+    }
     const next = await api<SpaceDetails>(`/projects/${projectId}/spatial-v3/spaces/${spaceId}`);
     setDetails(next);
     setSpaceDraft(next.space);
     setSelectedFeatureId(current => current && next.features.some(item => item.id === current) ? current : null);
-  }, [projectId, spaceId]);
+
+    const otherSpaces = spaces.filter(space => space.id !== spaceId);
+    const otherDetails = await Promise.all(otherSpaces.map(space =>
+      api<SpaceDetails>(`/projects/${projectId}/spatial-v3/spaces/${space.id}`)
+        .then(value => ({ space, value }))
+    ));
+    const allSources = [
+      { space: next.space, value: next },
+      ...otherDetails,
+    ];
+    const targets: ConnectorTargetHandle[] = [];
+    for (const source of allSources) {
+      for (const feature of source.value.features) {
+        if (feature.feature_kind !== "connector") continue;
+        if (feature.properties.target?.navigation_space_id !== spaceId) continue;
+        const point = feature.properties.target?.point;
+        if (!Array.isArray(point) || point.length < 2) continue;
+        targets.push({
+          connector: feature,
+          source_space_id: source.space.id,
+          point: [Number(point[0]), Number(point[1])],
+        });
+      }
+    }
+    setConnectorTargets(targets);
+  }, [projectId, spaceId, spaces]);
 
   useEffect(() => { void loadSpaces().catch(cause => fail(String(cause))); }, [loadSpaces, revision, fail]);
   useEffect(() => { void loadDetails().catch(cause => fail(String(cause))); }, [loadDetails, fail]);
@@ -437,6 +473,35 @@ export function LocationMapStudio({
         method: "PUT",
         body: JSON.stringify(next),
       });
+    } catch (cause) {
+      fail(String(cause));
+      await loadDetails();
+    }
+  }
+
+  async function persistConnectorTarget(connectorId: string, point: Point) {
+    const handle = connectorTargets.find(item => item.connector.id === connectorId);
+    if (!handle) return;
+    const next = structuredClone(handle.connector);
+    next.properties = {
+      ...next.properties,
+      target: {
+        ...next.properties.target,
+        navigation_space_id: spaceId,
+        point,
+      },
+    };
+    setConnectorTargets(current => current.map(item =>
+      item.connector.id === connectorId
+        ? { ...item, connector: next, point }
+        : item
+    ));
+    try {
+      await api(`/projects/${projectId}/spatial-v3/features/${next.id}`, {
+        method: "PUT",
+        body: JSON.stringify(next),
+      });
+      await loadDetails();
     } catch (cause) {
       fail(String(cause));
       await loadDetails();
@@ -613,7 +678,7 @@ export function LocationMapStudio({
             <div style={{ marginTop: 10, lineHeight: 1.5 }}>
               <p><b>Navigation Space</b> is the coordinate canvas you are editing. A building interior can have its own separate space.</p>
               <p><b>Semantic Location</b> is story meaning: City, Market, House, Room. A Surface or Spot can be assigned to one without making geometry and story identity the same object.</p>
-              <p><b>Surface</b> is an area you can stand in. <b>Corridor</b> is a thick traversable route such as a road or river. <b>Barrier</b> blocks crossing. <b>Connector</b> links positions/spaces such as doors, gates or portals.</p>
+              <p><b>Surface</b> is an area you can stand in. <b>Corridor</b> is a thick traversable route such as a road or river. <b>Barrier</b> blocks crossing. <b>Connector</b> links positions/spaces such as doors, gates or portals. Connectors appear at both ends: the source in its owning space and a movable target endpoint in the destination space.</p>
               <p><b>Layers</b> only organize display/editing. Put roads on Roads, walls on Barriers, buildings/regions on Regions or Places. Changing a layer does not change traversal semantics.</p>
               <p><b>Select</b> moves whole features. <b>Edit</b> changes vertices. Midpoint diamonds add vertices. Hold <b>E</b> and click a Corridor junction to grow a linked branch in the same road; moving that junction moves every branch endpoint attached there.</p>
               <p><b>FREE</b> spaces allow movement unless blocked. <b>ROUTED</b> spaces require authored traversable surfaces/corridors.</p>
@@ -665,6 +730,16 @@ export function LocationMapStudio({
             }}
             layerSettings={layerSettings}
             locationNames={Object.fromEntries(locations.map(location => [location.id, location.name]))}
+            connectorTargets={connectorTargets.map(item => ({
+              connectorId: item.connector.id,
+              sourceSpaceId: item.source_space_id,
+              sourceSpaceName: locationName(world, spaces.find(space => space.id === item.source_space_id)?.owner_location_id),
+              name: item.connector.semantic_location_id
+                ? (world?.entities[item.connector.semantic_location_id]?.name ?? item.connector.name)
+                : item.connector.name,
+              point: item.point,
+            }))}
+            onConnectorTargetChange={(connectorId, point) => void persistConnectorTarget(connectorId, point)}
           />
         </Paper>
 

@@ -43,6 +43,14 @@ type VertexMenu = {
   ref: VertexRef;
 } | null;
 
+export type ConnectorTargetHandle = {
+  connectorId: string;
+  sourceSpaceId: string;
+  sourceSpaceName: string;
+  name: string;
+  point: V2Point;
+};
+
 const clamp = (value: number) => Math.max(0, Math.min(100, value));
 const round = (value: number) => Math.round(value * 10) / 10;
 const samePoint = (a: V2Point, b: V2Point) => Math.abs(a[0] - b[0]) < .0001 && Math.abs(a[1] - b[1]) < .0001;
@@ -229,7 +237,13 @@ function renderGeometry(
       <polyline
         points={line.map(point => point.join(",")).join(" ")}
         fill="none"
-        className={feature.feature_kind === "barrier" ? "location-map-barrier" : "location-map-connection"}
+        className={
+          feature.feature_kind === "barrier"
+            ? "location-map-barrier"
+            : feature.feature_kind === "corridor"
+              ? "location-map-corridor"
+              : "location-map-connection"
+        }
         strokeWidth={width}
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -252,6 +266,8 @@ export function SpatialV2Canvas({
   onConnectorPoint,
   layerSettings,
   locationNames,
+  connectorTargets,
+  onConnectorTargetChange,
 }: {
   features: V2CanvasFeature[];
   tool: V2Tool;
@@ -264,6 +280,8 @@ export function SpatialV2Canvas({
   onConnectorPoint: (point: V2Point) => void;
   layerSettings: Record<string, { textured: boolean; editable: boolean; labels_mode: "hidden" | "important" | "all" }>;
   locationNames: Record<string, string>;
+  connectorTargets: ConnectorTargetHandle[];
+  onConnectorTargetChange: (connectorId: string, point: V2Point) => void;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -272,6 +290,8 @@ export function SpatialV2Canvas({
   const [vertexDrag, setVertexDrag] = useState<VertexRef | null>(null);
   const [vertexPreview, setVertexPreview] = useState<V2Point | null>(null);
   const [vertexMenu, setVertexMenu] = useState<VertexMenu>(null);
+  const [targetDrag, setTargetDrag] = useState<{ connectorId: string; point: V2Point } | null>(null);
+  const [targetPreview, setTargetPreview] = useState<V2Point | null>(null);
   const [eHeld, setEHeld] = useState(false);
 
   const selected = features.find(item => item.id === selectedFeatureId) ?? null;
@@ -346,10 +366,15 @@ export function SpatialV2Canvas({
         onFeatureChange(next);
       }
     }
+    if (targetDrag && targetPreview) {
+      onConnectorTargetChange(targetDrag.connectorId, targetPreview);
+    }
     setDragFeature(null);
     setDragOffset([0, 0]);
     setVertexDrag(null);
     setVertexPreview(null);
+    setTargetDrag(null);
+    setTargetPreview(null);
   }
 
   function canvasClick(event: React.MouseEvent<HTMLDivElement>) {
@@ -415,6 +440,7 @@ export function SpatialV2Canvas({
         const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
         if (dragFeature) setDragOffset([round(point[0] - dragFeature.start[0]), round(point[1] - dragFeature.start[1])]);
         if (vertexDrag) setVertexPreview(point);
+        if (targetDrag) setTargetPreview(point);
       }}
       onPointerUp={finishDrag}
       onPointerCancel={finishDrag}
@@ -481,6 +507,24 @@ export function SpatialV2Canvas({
             <b>{displayName || feature.feature_kind}</b>
             <small>{feature.feature_kind}</small>
           </button>;
+        })}
+
+        {layerSettings.connections?.editable !== false && connectorTargets.map(target => {
+          const point = targetDrag?.connectorId === target.connectorId && targetPreview ? targetPreview : target.point;
+          return <button
+            key={`connector-target:${target.connectorId}`}
+            className="location-map-anchor connector target-endpoint"
+            style={{ left: `${point[0]}%`, top: `${point[1]}%`, pointerEvents: layerSettings.connections?.editable === false ? "none" : "auto" }}
+            title={`Target of ${target.name || "connector"} · from ${target.sourceSpaceName}`}
+            onClick={event => event.stopPropagation()}
+            onPointerDown={event => {
+              if (tool !== "select" || event.button !== 0 || layerSettings.connections?.editable === false) return;
+              event.stopPropagation();
+              setTargetDrag({ connectorId: target.connectorId, point: target.point });
+              setTargetPreview(target.point);
+              event.currentTarget.setPointerCapture?.(event.pointerId);
+            }}
+          >◎</button>;
         })}
 
         {tool === "edit" && selected && layerSettings[selected.render_layer ?? ""]?.editable !== false && editableParts(displayedGeometry(selected)).flatMap(part => part.points.flatMap((point, index) => {

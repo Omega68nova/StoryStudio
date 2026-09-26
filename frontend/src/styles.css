@@ -1182,6 +1182,13 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   pointer-events: stroke;
   cursor: pointer;
 }
+.location-map-corridor {
+  fill: none;
+  stroke: #8f877d;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
 .location-map-connection.door {
   stroke: #527f98;
 }
@@ -2254,4 +2261,15 @@ h1, h2 { font-family: Georgia, serif; font-weight: 500; margin: 0; }
   stroke-width: .6px;
   stroke-linejoin: round;
   pointer-events: none;
+}
+
+.location-map-anchor.target-endpoint {
+  border-style: dashed;
+  border-width: 2px;
+  background: #fff8e8;
+  color: #9a642c;
+  box-shadow: 0 0 0 2px rgba(154, 100, 44, .15);
+}
+.location-map-anchor.target-endpoint:hover {
+  background: #f5ddb8;
 }

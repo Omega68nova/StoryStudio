@@ -34,7 +34,7 @@ type SpaceDetails = {
   features: Feature[];
 };
 
-const PLAYER_RADIUS = 1.3;
+const PLAYER_RADIUS = 0.65;
 const MOVE_SPEED = 18;
 const INTERACT_DISTANCE = 5;
 
@@ -335,7 +335,13 @@ export function SpatialPlaytestPage({
                 key={index}
                 points={line.map(point => point.join(",")).join(" ")}
                 fill="none"
-                className={feature.feature_kind === "barrier" ? "location-map-barrier" : "location-map-connection"}
+                className={
+                  feature.feature_kind === "barrier"
+                    ? "location-map-barrier"
+                    : feature.feature_kind === "corridor"
+                      ? "location-map-corridor"
+                      : "location-map-connection"
+                }
                 strokeWidth={width}
                 strokeLinecap="round"
                 strokeLinejoin="round"
