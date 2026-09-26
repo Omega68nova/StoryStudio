@@ -52,6 +52,7 @@ from app.domain.world import (
     TypedWorldEntity,
     Weather,
     resolve_stat_bounds,
+    validate_stat_dependency_graph,
 )
 from app.domain.adapters import (
     DomainAdapterError,
@@ -67,6 +68,22 @@ from app.domain.adapters import (
     stat_to_record,
     weather_from_record,
     weather_to_record,
+)
+from app.domain.rules_v2 import (
+    ConditionEvaluator,
+    ConditionExpression,
+    ConditionKind,
+    RuleEvaluationContext,
+    RuleEvaluationError,
+    RuleObjectResolver,
+    RuleObjectSelector,
+    RuleObjectSnapshot,
+    RuleSelectorKind,
+    ValueExpression,
+    ValueExpressionEvaluator,
+    ValueExpressionKind,
+    condition_expression_from_requirement,
+    value_expression_from_formula,
 )
 from app.domain.operations import (
     DomainOperationError,
@@ -150,4 +167,19 @@ __all__ = [
     "stat_to_record",
     "weather_from_record",
     "weather_to_record",
+    "ConditionEvaluator",
+    "ConditionExpression",
+    "ConditionKind",
+    "RuleEvaluationContext",
+    "RuleEvaluationError",
+    "RuleObjectResolver",
+    "RuleObjectSelector",
+    "RuleObjectSnapshot",
+    "RuleSelectorKind",
+    "ValueExpression",
+    "ValueExpressionEvaluator",
+    "ValueExpressionKind",
+    "condition_expression_from_requirement",
+    "value_expression_from_formula",
+    "validate_stat_dependency_graph",
 ]

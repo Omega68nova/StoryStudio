@@ -1562,6 +1562,77 @@ def _synchronize_spatial_v3_projection(project_id: str) -> dict[str, int]:
     )
 
 
+def _commit_spatial_v3_mutation(
+    project_id: str,
+    tool: str,
+    arguments: dict[str, Any],
+    summary: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    project = require_project(project_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(
+            project_id,
+            project.get("active_node_id"),
+            [{"tool": tool, "arguments": arguments}],
+            provenance="author",
+        )
+        transaction = (
+            scheduler.world.commit_to_existing_node(
+                project_id,
+                project["active_node_id"],
+                mutations,
+                provenance="author",
+                summary=summary,
+            )
+            if project.get("active_node_id")
+            else scheduler.world.commit_root(
+                project_id,
+                mutations,
+                provenance="author",
+                summary=summary,
+            )
+        )
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _synchronize_spatial_v3_projection(project_id)
+    return transaction, mutations[0].arguments
+
+
+def _commit_spatial_v3_mutations(
+    project_id: str,
+    raw: list[dict[str, Any]],
+    summary: str,
+) -> tuple[dict[str, Any], list[Any]]:
+    project = require_project(project_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(
+            project_id,
+            project.get("active_node_id"),
+            raw,
+            provenance="author",
+        )
+        transaction = (
+            scheduler.world.commit_to_existing_node(
+                project_id,
+                project["active_node_id"],
+                mutations,
+                provenance="author",
+                summary=summary,
+            )
+            if project.get("active_node_id")
+            else scheduler.world.commit_root(
+                project_id,
+                mutations,
+                provenance="author",
+                summary=summary,
+            )
+        )
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _synchronize_spatial_v3_projection(project_id)
+    return transaction, mutations
+
+
 @app.post("/api/projects/{project_id}/spatial-v3/materialize")
 async def materialize_spatial_v3(project_id: str) -> dict[str, Any]:
     """Migrate legacy spatial state into branch-authoritative Spatial V3 events."""
@@ -1610,6 +1681,41 @@ async def materialize_spatial_v3(project_id: str) -> dict[str, Any]:
     }
 
 
+@app.get("/api/projects/{project_id}/spatial-v3/presets")
+async def list_spatial_v3_presets(project_id: str) -> list[dict[str, Any]]:
+    require_project(project_id)
+    from app.services.spatial_v3_presets import public_spatial_v3_presets
+    return public_spatial_v3_presets()
+
+
+@app.post("/api/projects/{project_id}/spatial-v3/presets/{preset_key}/apply")
+async def apply_spatial_v3_preset(
+    project_id: str,
+    preset_key: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3_presets import (
+        SpatialV3PresetError,
+        build_spatial_v3_preset,
+    )
+    _synchronize_spatial_v3_projection(project_id)
+    try:
+        raw = build_spatial_v3_preset(
+            data.spatial_v3, project_id, preset_key, request
+        )
+    except SpatialV3PresetError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    transaction, mutations = _commit_spatial_v3_mutations(
+        project_id, raw, f"Apply Spatial V3 preset: {preset_key}"
+    )
+    return {
+        "transaction_id": transaction["id"],
+        "preset": preset_key,
+        "mutation_count": len(mutations),
+    }
+
+
 @app.get("/api/projects/{project_id}/spatial-v3/spaces")
 async def list_spatial_v3_spaces(project_id: str) -> list[dict[str, Any]]:
     require_project(project_id)
@@ -1642,6 +1748,103 @@ async def get_spatial_v3_space(project_id: str, space_id: str) -> dict[str, Any]
             for item in data.spatial_v3.encounter_policies(project_id, space_id)
         ],
     }
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/spaces/{space_id}")
+async def upsert_spatial_v3_space(
+    project_id: str,
+    space_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "id": space_id, "project_id": project_id}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "upsertSpatialV3Space", payload, "Spatial V3 space changed"
+    )
+    return {"transaction_id": transaction["id"], "space": normalized}
+
+
+@app.delete("/api/projects/{project_id}/spatial-v3/spaces/{space_id}", status_code=204)
+async def remove_spatial_v3_space(project_id: str, space_id: str) -> None:
+    _commit_spatial_v3_mutation(
+        project_id, "removeSpatialV3Space", {"id": space_id}, "Spatial V3 space removed"
+    )
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/features/{feature_id}")
+async def upsert_spatial_v3_feature(
+    project_id: str,
+    feature_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "id": feature_id, "project_id": project_id}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "upsertSpatialV3Feature", payload, "Spatial V3 feature changed"
+    )
+    return {"transaction_id": transaction["id"], "feature": normalized}
+
+
+@app.delete("/api/projects/{project_id}/spatial-v3/features/{feature_id}", status_code=204)
+async def remove_spatial_v3_feature(project_id: str, feature_id: str) -> None:
+    _commit_spatial_v3_mutation(
+        project_id, "removeSpatialV3Feature", {"id": feature_id}, "Spatial V3 feature removed"
+    )
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/encounters/{policy_id}")
+async def upsert_spatial_v3_encounter(
+    project_id: str,
+    policy_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "id": policy_id, "project_id": project_id}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "upsertSpatialV3Encounter", payload, "Spatial V3 encounter changed"
+    )
+    return {"transaction_id": transaction["id"], "encounter": normalized}
+
+
+@app.delete("/api/projects/{project_id}/spatial-v3/encounters/{policy_id}", status_code=204)
+async def remove_spatial_v3_encounter(project_id: str, policy_id: str) -> None:
+    _commit_spatial_v3_mutation(
+        project_id, "removeSpatialV3Encounter", {"id": policy_id}, "Spatial V3 encounter removed"
+    )
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/layers/{layer_key}")
+async def update_spatial_v3_layer(
+    project_id: str,
+    space_id: str,
+    layer_key: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "navigation_space_id": space_id, "layer_key": layer_key}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "updateSpatialV3Layer", payload, "Spatial V3 layer changed"
+    )
+    return {"transaction_id": transaction["id"], "layer": normalized}
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/locations/{location_id}/binding")
+async def bind_spatial_v3_location(
+    project_id: str,
+    location_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "project_id": project_id, "location_id": location_id}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "bindSpatialV3LocationSpace", payload, "Spatial V3 location binding changed"
+    )
+    return {"transaction_id": transaction["id"], "binding": normalized}
+
+
+@app.delete("/api/projects/{project_id}/spatial-v3/locations/{location_id}/binding", status_code=204)
+async def unbind_spatial_v3_location(project_id: str, location_id: str) -> None:
+    _commit_spatial_v3_mutation(
+        project_id,
+        "unbindSpatialV3LocationSpace",
+        {"location_id": location_id},
+        "Spatial V3 location binding removed",
+    )
 
 
 @app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/resolve")
@@ -1685,14 +1888,29 @@ async def plan_spatial_v3_path(
     target_space_id: str,
     target_x: float,
     target_y: float,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     require_project(project_id)
     from app.services.spatial_v3 import SpatialV3Error
     from app.services.spatial_v3_pathfinding import SpatialV3Pathfinder
 
     _synchronize_spatial_v3_projection(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    condition_evaluator = (
+        lambda payload: scheduler.world.rules_runtime.evaluate_condition(
+            project_id,
+            projection,
+            payload,
+            actor_id=actor_id,
+        )
+        if actor_id
+        else None
+    )
     try:
-        return SpatialV3Pathfinder(data.spatial_v3).plan(
+        return SpatialV3Pathfinder(
+            data.spatial_v3,
+            condition_evaluator=condition_evaluator,
+        ).plan(
             project_id=project_id,
             start_space_id=start_space_id,
             start=(start_x, start_y),
@@ -1714,14 +1932,26 @@ async def preview_spatial_v3_travel(
     target_y: float,
     seed: str,
     resume_cursor: str | None = None,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     require_project(project_id)
     from app.services.spatial_v3 import SpatialV3Error
     from app.services.spatial_v3_travel import SpatialV3TravelPreview
 
     _synchronize_spatial_v3_projection(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    condition_evaluator = (
+        lambda payload: scheduler.world.rules_runtime.evaluate_condition(
+            project_id, projection, payload, actor_id=actor_id
+        )
+        if actor_id
+        else None
+    )
     try:
-        return SpatialV3TravelPreview(data.spatial_v3).preview(
+        return SpatialV3TravelPreview(
+            data.spatial_v3,
+            condition_evaluator=condition_evaluator,
+        ).preview(
             project_id=project_id,
             start_space_id=start_space_id,
             start=(start_x, start_y),
@@ -1739,13 +1969,25 @@ async def resolve_spatial_v3_transition_encounter(
     project_id: str,
     space_id: str,
     feature_id: str,
+    actor_id: str | None = None,
 ) -> dict[str, Any]:
     require_project(project_id)
     from app.services.spatial_v3 import SpatialV3Error, SpatialV3Service
 
     _synchronize_spatial_v3_projection(project_id)
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    condition_evaluator = (
+        lambda payload: scheduler.world.rules_runtime.evaluate_condition(
+            project_id, projection, payload, actor_id=actor_id
+        )
+        if actor_id
+        else None
+    )
     try:
-        return SpatialV3Service(data.spatial_v3).transition_encounter_context(
+        return SpatialV3Service(
+            data.spatial_v3,
+            condition_evaluator=condition_evaluator,
+        ).transition_encounter_context(
             project_id=project_id,
             navigation_space_id=space_id,
             feature_id=feature_id,
@@ -3489,6 +3731,9 @@ async def create_effect(project_id: str, request: EffectDefinitionCreate) -> dic
     require_project(project_id)
     if not data.rules.stat(project_id, request.target_stat_key): raise HTTPException(422, "Unknown target stat")
     _validate_formula_stats(project_id, request.formula)
+    if request.value_expression:
+        from app.domain.rules_v2 import ValueExpression
+        ValueExpression.model_validate(request.value_expression)
     try: result = data.rules.save_effect(EffectDefinition.model_validate({"project_id": project_id, **request.model_dump()}))
     except Exception as exc: raise HTTPException(422, str(exc)) from exc
     return result.model_dump(mode="json")
@@ -3500,6 +3745,9 @@ async def update_effect(project_id: str, effect_key: str, request: EffectDefinit
     if request.effect_key != effect_key: raise HTTPException(422, "effect_key is immutable")
     if not data.rules.stat(project_id, request.target_stat_key): raise HTTPException(422, "Unknown target stat")
     _validate_formula_stats(project_id, request.formula)
+    if request.value_expression:
+        from app.domain.rules_v2 import ValueExpression
+        ValueExpression.model_validate(request.value_expression)
     try: result = data.rules.save_effect(EffectDefinition.model_validate({"project_id": project_id, **request.model_dump()}), previous_key=effect_key)
     except Exception as exc: raise HTTPException(422, str(exc)) from exc
     return result.model_dump(mode="json")
@@ -3527,6 +3775,11 @@ def _validate_ability_references(project_id: str, request: AbilityDefinitionCrea
     _validate_requirement_references(project_id, requirements)
     projection = scheduler.world.projection(project_id)
     entities = projection.get("entities", {})
+    for raw_cost in request.rule_costs:
+        from app.domain.rules_v2 import RuleCost
+        cost = RuleCost.model_validate(raw_cost)
+        if not data.rules.stat(project_id, cost.stat_key):
+            raise HTTPException(422, f"Unknown stat in generalized ability cost: {cost.stat_key}")
     for cost in request.costs:
         if cost.stat_key:
             definition = data.rules.stat(project_id, cost.stat_key)
@@ -3597,6 +3850,8 @@ async def delete_stat(project_id: str, stat_key: str) -> None:
     if db.fetch_one("SELECT 1 FROM effect_definitions WHERE project_id=? AND target_stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is targeted by an effect")
     if db.fetch_one("SELECT 1 FROM effect_formula_nodes WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an effect formula")
     if db.fetch_one("SELECT 1 FROM ability_costs WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an ability cost")
+    if db.fetch_one("SELECT 1 FROM ability_rule_costs WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by a generalized ability cost")
+    if db.fetch_one("SELECT 1 FROM rule_object_stats WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat has stored values on rule/subsystem objects")
     if db.fetch_one("SELECT 1 FROM ability_requirement_nodes WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by an ability requirement")
     if db.fetch_one("SELECT 1 FROM ability_passive_triggers WHERE project_id=? AND stat_key=?", (project_id, stat_key)): raise HTTPException(409, "Stat is referenced by a passive trigger")
     db.execute("DELETE FROM stat_definitions WHERE project_id=? AND stat_key=?", (project_id, stat_key))

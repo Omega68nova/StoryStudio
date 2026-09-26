@@ -10,6 +10,7 @@ from app.domain.spatial_v3 import (
     MapFeature,
     NavigationSpace,
 )
+from app.services.spatial_v3 import SpatialV3Service
 from app.services.spatial_v3_travel import SpatialV3TravelPreview
 
 
@@ -284,3 +285,62 @@ def test_candidate_requirements_are_not_guessed(tmp_path) -> None:
     assert result["status"] == "complete"
     assert result["encounter"] is None
     assert result["unresolved_requirements"]
+
+
+def test_encounter_policy_and_candidate_conditions_use_shared_evaluator(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    project = db.create_project("conditional encounters")
+    for location_id in ("a", "b", "ambush", "blocked"):
+        _location(db, project["id"], location_id)
+    data.spatial_v3.save_space(NavigationSpace(id="a-space", project_id=project["id"], owner_location_id="a"))
+    data.spatial_v3.save_space(NavigationSpace(id="b-space", project_id=project["id"], owner_location_id="b"))
+    data.spatial_v3.save_feature(MapFeature(
+        id="gate",
+        project_id=project["id"],
+        navigation_space_id="a-space",
+        feature_kind="connector",
+        geometry={"type": "Point", "coordinates": (0, 0)},
+        properties=ConnectorProperties(
+            source=ConnectorEndpoint(navigation_space_id="a-space", point=(0, 0)),
+            target=ConnectorEndpoint(navigation_space_id="b-space", point=(0, 0)),
+        ),
+    ))
+    data.spatial_v3.save_encounter_policy(EncounterPolicy(
+        id="conditioned",
+        project_id=project["id"],
+        feature_id="gate",
+        trigger_kind="transition",
+        probability_per_transition=1,
+        conditions={"kind": "has_tag", "tag": "wanted"},
+        candidates=[
+            EncounterCandidate(
+                location_id="ambush",
+                requirements={"kind": "has_tag", "tag": "wanted"},
+            ),
+            EncounterCandidate(
+                location_id="blocked",
+                requirements={"kind": "has_tag", "tag": "never"},
+            ),
+        ],
+    ))
+
+    seen = []
+    service = SpatialV3Service(
+        data.spatial_v3,
+        condition_evaluator=lambda payload: seen.append(payload) is None and False
+        if payload.get("tag") == "never"
+        else payload.get("tag") == "wanted",
+    )
+    context = service.transition_encounter_context(
+        project_id=project["id"],
+        navigation_space_id="a-space",
+        feature_id="gate",
+    )
+    assert context["enabled"] is True
+    assert context["probability"] == 1
+    assert [item["location_id"] for item in context["candidates"]] == ["ambush"]
+    assert not context["unresolved_conditions"]
+    assert not context["unresolved_candidates"]
+    assert seen

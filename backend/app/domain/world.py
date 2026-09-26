@@ -114,6 +114,12 @@ class StatOwnerKind(StrEnum):
     FACT = "fact"
     PLOT_BEAT = "plot_beat"
     RELATIONSHIP = "relationship"
+    ABILITY = "ability"
+    EFFECT = "effect"
+    WEATHER = "weather"
+    OUTFIT = "outfit"
+    NAVIGATION_SPACE = "navigation_space"
+    MAP_FEATURE = "map_feature"
 
 
 class StatVisibility(StrEnum):
@@ -612,6 +618,7 @@ class Weather(DomainModel):
     tags: list[str] = Field(default_factory=list)
     image_tags: list[str] = Field(default_factory=list)
     enabled: bool = True
+    stats: dict[str, Number] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -725,6 +732,49 @@ def resolve_stat_bounds(
         minimum_stat_key=definition.minimum_stat_key,
         maximum_stat_key=definition.maximum_stat_key,
     )
+
+
+def validate_stat_dependency_graph(definitions: list[Stat]) -> None:
+    """Validate project-local dynamic stat-bound references as one graph."""
+    by_key = {item.stat_key: item for item in definitions}
+    graph: dict[str, list[str]] = {}
+    for definition in definitions:
+        dependencies = [
+            key
+            for key in (definition.minimum_stat_key, definition.maximum_stat_key)
+            if key
+        ]
+        for key in dependencies:
+            referenced = by_key.get(key)
+            if referenced is None:
+                raise ValueError(
+                    f"Stat {definition.stat_key} references unavailable bound stat {key}"
+                )
+            if not set(map(str, definition.compatible_owner_kinds)).intersection(
+                map(str, referenced.compatible_owner_kinds)
+            ):
+                raise ValueError(
+                    f"Stat {definition.stat_key} has no compatible owner kind "
+                    f"in common with bound stat {key}"
+                )
+        graph[definition.stat_key] = dependencies
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(key: str) -> None:
+        if key in visiting:
+            raise ValueError("Stat bound dependencies contain a cycle")
+        if key in visited:
+            return
+        visiting.add(key)
+        for child in graph.get(key, []):
+            visit(child)
+        visiting.remove(key)
+        visited.add(key)
+
+    for key in graph:
+        visit(key)
 
 
 class RequirementExpression(DomainModel):
@@ -918,6 +968,7 @@ class EffectDefinition(DomainModel):
     target_stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     operation: EffectOperation = EffectOperation.ADD
     formula: FormulaNode
+    value_expression: dict[str, Any] | None = None
     clock: EffectClock = EffectClock.WORLD_ACTIONS
     duration: int = Field(default=0, ge=-1)
     tick_interval: int = Field(default=0, ge=0)
@@ -927,6 +978,7 @@ class EffectDefinition(DomainModel):
     visibility: StatVisibility = StatVisibility.PUBLIC
     icon: str | None = None
     enabled: bool = True
+    stats: dict[str, Number] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -1050,7 +1102,9 @@ class Ability(DomainModel):
     )
     target_type: AbilityTarget = AbilityTarget.SELF
     requirements: RequirementExpression = Field(default_factory=RequirementExpression)
+    condition_expression: dict[str, Any] | None = None
     costs: list[AbilityCost] = Field(default_factory=list)
+    rule_costs: list[dict[str, Any]] = Field(default_factory=list)
     actions: list[AbilityAction] = Field(default_factory=list)
     passive_triggers: list[PassiveTrigger] = Field(default_factory=list)
     icon: str | None = None
@@ -1058,6 +1112,7 @@ class Ability(DomainModel):
     timed_attack_line_count: int | None = Field(default=None, ge=1, le=8)
     timed_attack_damage_per_line: Number | None = Field(default=None, ge=0)
     bullethell_skill_ids: list[str] = Field(default_factory=list)
+    stats: dict[str, Number] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
 

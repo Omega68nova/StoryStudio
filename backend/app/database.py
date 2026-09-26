@@ -175,6 +175,16 @@ class Database:
             return
 
         now = utc_now()
+        legacy_ability_refs: dict[str, dict[str, str]] = {}
+        if legacy_abilities:
+            for row in connection.execute(
+                "SELECT id,project_id,ability_key,name FROM ability_definitions_legacy_v2"
+            ).fetchall():
+                project_refs = legacy_ability_refs.setdefault(str(row["project_id"]), {})
+                key = str(row["ability_key"])
+                project_refs[key] = key
+                project_refs[str(row["id"])] = key
+                project_refs[str(row["name"])] = key
         if legacy_stats:
             rows = connection.execute("SELECT * FROM stat_definitions_legacy_v2").fetchall()
             for row in rows:
@@ -215,6 +225,56 @@ class Database:
             rows = connection.execute("SELECT * FROM ability_definitions_legacy_v2").fetchall()
             for row in rows:
                 self._migrate_legacy_ability(connection, dict(row), now)
+
+        if legacy_ability_refs:
+            connection.execute("DROP TRIGGER IF EXISTS world_events_no_update")
+            unresolved: dict[str, set[str]] = {}
+            event_rows = connection.execute(
+                "SELECT e.id,e.payload_json,t.project_id "
+                "FROM world_events e JOIN world_transactions t ON t.id=e.transaction_id"
+            ).fetchall()
+            for event in event_rows:
+                try:
+                    payload = json.loads(event["payload_json"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                project_id = str(event["project_id"])
+                refs = legacy_ability_refs.get(project_id, {})
+                changed = False
+                for container in (
+                    (payload.get("entity") or {}).get("state") if isinstance(payload.get("entity"), dict) else None,
+                    payload.get("patch") if isinstance(payload.get("patch"), dict) else None,
+                ):
+                    if not isinstance(container, dict) or not isinstance(container.get("abilities"), list):
+                        continue
+                    normalized: list[str] = []
+                    for value in container["abilities"]:
+                        raw = str(value)
+                        key = refs.get(raw)
+                        if key is None:
+                            unresolved.setdefault(project_id, set()).add(raw)
+                            key = raw
+                        if key not in normalized:
+                            normalized.append(key)
+                    if normalized != container["abilities"]:
+                        container["abilities"] = normalized
+                        changed = True
+                if changed:
+                    connection.execute(
+                        "UPDATE world_events SET payload_json=? WHERE id=?",
+                        (json.dumps(payload, separators=(",", ":"), ensure_ascii=False), event["id"]),
+                    )
+            for project_id, values in unresolved.items():
+                if values:
+                    connection.execute(
+                        "INSERT INTO rule_migration_warnings(id,project_id,warning_kind,message,details_json,created_at) "
+                        "VALUES(?,?,?,?,?,?)",
+                        (
+                            new_id(), project_id, "unresolved_ability_reference",
+                            f"Could not canonicalize {len(values)} legacy ability reference(s).",
+                            json.dumps({"references": sorted(values)}), now,
+                        ),
+                    )
 
         discarded = connection.execute(
             "SELECT t.project_id,COUNT(*) count "
@@ -412,15 +472,23 @@ class Database:
         if not leaves: return
         root_value = leaves[0] if len(leaves) == 1 else {"kind": "and", "children": leaves}
 
-        def write(node: dict[str, Any], parent_id: str | None, position: int) -> None:
+        def write(
+            node: dict[str, Any],
+            parent_id: str | None,
+            position: int,
+            edge_kind: str = "child",
+        ) -> None:
             node_id = new_id()
             connection.execute(
-                "INSERT INTO ability_requirement_nodes(id,project_id,ability_key,parent_id,position,node_kind,target,stat_key,comparison,value_json,item_id,tag,relation,location_id,time_phase_id,weather_id,required_ability_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (node_id, project_id, ability_key, parent_id, position, node.get("kind"), node.get("target", "actor"), node.get("stat_key"), node.get("comparison", "gte"), json.dumps(node.get("value")) if node.get("value") is not None else None, node.get("item_id"), node.get("tag"), node.get("relation"), node.get("location_id"), node.get("time_phase_id"), node.get("weather_id"), node.get("ability_key")),
+                "INSERT INTO ability_requirement_nodes(id,project_id,ability_key,parent_id,position,edge_kind,node_kind,target,stat_key,comparison,value_json,item_id,tag,relation,location_id,time_phase_id,weather_id,required_ability_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (node_id, project_id, ability_key, parent_id, position, edge_kind, node.get("kind"), node.get("target", "actor"), node.get("stat_key"), node.get("comparison", "gte"), json.dumps(node.get("value")) if node.get("value") is not None else None, node.get("item_id"), node.get("tag"), node.get("relation"), node.get("location_id"), node.get("time_phase_id"), node.get("weather_id"), node.get("ability_key")),
             )
-            children = node.get("children") or ([node.get("child")] if node.get("child") else [])
-            for index, child in enumerate(children):
-                if isinstance(child, dict): write(child, node_id, index)
+            for index, child in enumerate(node.get("children") or []):
+                if isinstance(child, dict):
+                    write(child, node_id, index, "child")
+            child = node.get("child")
+            if isinstance(child, dict):
+                write(child, node_id, 0, "not_child")
         write(root_value, None, 0)
 
     def relocate(self, destination: Path) -> None:

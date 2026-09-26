@@ -4,7 +4,7 @@ import base64
 import hashlib
 import json
 import math
-from typing import Any
+from typing import Any, Callable
 
 from app.data.spatialV3Repository import SpatialV3Repository
 from app.services.spatial_v3 import SpatialV3Error, SpatialV3Service
@@ -19,10 +19,21 @@ class SpatialV3TravelPreview:
     Production story travel can adopt the same contract after V3 is proven.
     """
 
-    def __init__(self, repository: SpatialV3Repository) -> None:
+    def __init__(
+        self,
+        repository: SpatialV3Repository,
+        *,
+        condition_evaluator: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> None:
         self.repository = repository
-        self.resolver = SpatialV3Service(repository)
-        self.pathfinder = SpatialV3Pathfinder(repository)
+        self.resolver = SpatialV3Service(
+            repository,
+            condition_evaluator=condition_evaluator,
+        )
+        self.pathfinder = SpatialV3Pathfinder(
+            repository,
+            condition_evaluator=condition_evaluator,
+        )
 
     @staticmethod
     def _stable_uniform(*parts: Any) -> float:

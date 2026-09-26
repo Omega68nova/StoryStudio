@@ -3,7 +3,7 @@ from __future__ import annotations
 import heapq
 import math
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 try:
     from shapely.geometry import LineString, Point, shape
@@ -46,9 +46,30 @@ class SpatialV3Pathfinder:
     considered unresolved, not guessed to be passable.
     """
 
-    def __init__(self, repository: SpatialV3Repository) -> None:
+    def __init__(
+        self,
+        repository: SpatialV3Repository,
+        *,
+        condition_evaluator: Callable[[dict[str, Any]], bool] | None = None,
+    ) -> None:
         self.repository = repository
         self.resolver = SpatialV3Service(repository)
+        self.condition_evaluator = condition_evaluator
+
+    def _traversal_option(self, policy: Any) -> tuple[Any | None, list[dict[str, Any]]]:
+        unresolved: list[dict[str, Any]] = []
+        for option in policy.options:
+            if not option.requirements:
+                return option, unresolved
+            if self.condition_evaluator is None:
+                unresolved.append(option.model_dump(mode="json"))
+                continue
+            try:
+                if self.condition_evaluator(dict(option.requirements)):
+                    return option, unresolved
+            except (ValueError, TypeError):
+                unresolved.append(option.model_dump(mode="json"))
+        return None, unresolved
 
     @staticmethod
     def _feature_policy(feature: MapFeature):
@@ -140,22 +161,35 @@ class SpatialV3Pathfinder:
         project_id: str,
         space_id: str,
         line: BaseGeometry,
-    ) -> tuple[bool, list[dict[str, Any]]]:
+    ) -> tuple[bool, float, list[dict[str, Any]], list[dict[str, Any]]]:
         unresolved: list[dict[str, Any]] = []
+        applied: list[dict[str, Any]] = []
+        extra_cost = 0.0
         for feature, geometry in self._barriers(project_id, space_id):
             if line.intersection(geometry).is_empty:
                 continue
             policy = self._feature_policy(feature)
             if policy is None or policy.default_allowed:
                 continue
-            if policy.options:
-                unresolved.append({
-                    "feature_id": feature.id,
-                    "feature_kind": "barrier",
-                    "options": [item.model_dump(mode="json") for item in policy.options],
-                })
-            return True, unresolved
-        return False, unresolved
+            option, option_unresolved = self._traversal_option(policy)
+            if option is None:
+                if policy.options:
+                    unresolved.append({
+                        "feature_id": feature.id,
+                        "feature_kind": "barrier",
+                        "options": option_unresolved or [
+                            item.model_dump(mode="json") for item in policy.options
+                        ],
+                    })
+                return True, extra_cost, unresolved, applied
+            extra_cost += float(option.fixed_minutes or 0)
+            applied.append({
+                "feature_id": feature.id,
+                "feature_kind": "barrier",
+                "option_key": option.key,
+                "option_label": option.label,
+            })
+        return False, extra_cost, unresolved, applied
 
     def _segment_breaks(
         self,
@@ -215,7 +249,7 @@ class SpatialV3Pathfinder:
             if not bounds_geometry.covers(line):
                 return None
 
-        blocked, unresolved = self._barrier_crossing(
+        blocked, barrier_cost, unresolved, applied_traversals = self._barrier_crossing(
             project_id=project_id,
             space_id=space_id,
             line=line,
@@ -232,7 +266,7 @@ class SpatialV3Pathfinder:
             return 0.0, [], unresolved
 
         parts: list[dict[str, Any]] = []
-        total_cost = 0.0
+        total_cost = barrier_cost
         for left, right in zip(breaks, breaks[1:]):
             if right - left <= 1e-9:
                 continue
@@ -245,10 +279,26 @@ class SpatialV3Pathfinder:
                 y=float(midpoint.y),
             )
             movement = context["movement"]
+            selected_option = None
             if not movement["default_allowed"]:
-                return None
+                for raw_option in movement.get("conditional_options", []):
+                    requirements = raw_option.get("requirements")
+                    if not requirements:
+                        selected_option = raw_option
+                        break
+                    if self.condition_evaluator is not None:
+                        try:
+                            if self.condition_evaluator(dict(requirements)):
+                                selected_option = raw_option
+                                break
+                        except (ValueError, TypeError):
+                            pass
+                if selected_option is None:
+                    return None
             distance = right - left
             multiplier = float(movement["travel_multiplier"])
+            if selected_option is not None:
+                multiplier *= float(selected_option.get("travel_multiplier") or 1)
             cost = distance * multiplier
             total_cost += cost
             p0 = line.interpolate(left)
@@ -262,6 +312,8 @@ class SpatialV3Pathfinder:
                 "travel_cost": cost,
                 "travel_multiplier": multiplier,
                 "movement_source_feature_id": movement["source_feature_id"],
+                **({"conditional_option_key": selected_option.get("key")} if selected_option else {}),
+                **({"conditional_traversals": applied_traversals} if applied_traversals else {}),
                 "semantic_location_ids": context["semantic_location_ids"],
                 "surface_ids": [item["id"] for item in context["surfaces"]],
                 "corridor_ids": [item["id"] for item in context["corridors"]],
@@ -358,14 +410,19 @@ class SpatialV3Pathfinder:
             if not isinstance(props, ConnectorProperties):
                 continue
             policy = props.traversal
+            selected_option = None
             if not policy.default_allowed:
-                if policy.options:
-                    unresolved.append({
-                        "feature_id": feature.id,
-                        "feature_kind": "connector",
-                        "options": [item.model_dump(mode="json") for item in policy.options],
-                    })
-                continue
+                selected_option, option_unresolved = self._traversal_option(policy)
+                if selected_option is None:
+                    if policy.options:
+                        unresolved.append({
+                            "feature_id": feature.id,
+                            "feature_kind": "connector",
+                            "options": option_unresolved or [
+                                item.model_dump(mode="json") for item in policy.options
+                            ],
+                        })
+                    continue
             source = _Node(
                 props.source.navigation_space_id,
                 float(props.source.point[0]),
@@ -376,10 +433,14 @@ class SpatialV3Pathfinder:
                 float(props.target.point[0]),
                 float(props.target.point[1]),
             )
-            if props.travel_minutes is not None:
+            if selected_option is not None and selected_option.fixed_minutes is not None:
+                cost = float(selected_option.fixed_minutes)
+            elif props.travel_minutes is not None:
                 cost = float(props.travel_minutes)
             elif source.space_id == target.space_id:
-                cost = math.dist(source.point, target.point) * float(policy.travel_multiplier)
+                cost = math.dist(source.point, target.point) * float(policy.travel_multiplier) * (
+                    float(selected_option.travel_multiplier) if selected_option is not None else 1.0
+                )
             else:
                 # A cross-space connector without an explicit time is treated
                 # as an instantaneous transition (appropriate for doors/portals).
@@ -394,6 +455,10 @@ class SpatialV3Pathfinder:
                 "target": [target.x, target.y],
                 "travel_cost": cost,
                 "travel_minutes": props.travel_minutes,
+                **({
+                    "conditional_option_key": selected_option.key,
+                    "conditional_option_label": selected_option.label,
+                } if selected_option is not None else {}),
             }
             edges.append((source, target, cost, payload, bool(props.bidirectional)))
         return edges, unresolved

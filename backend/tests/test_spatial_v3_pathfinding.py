@@ -12,6 +12,7 @@ from app.domain.spatial_v3 import (
     MapFeature,
     NavigationSpace,
     SurfaceProperties,
+    TraversalOption,
     TraversalPolicy,
 )
 from app.services.spatial_v3_pathfinding import SpatialV3Pathfinder
@@ -265,3 +266,58 @@ def test_conditional_connector_is_not_guessed_passable(tmp_path) -> None:
             target_space_id="b-space",
             target=(1, 0),
         )
+
+
+def test_conditional_connector_uses_supplied_rules_evaluator(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    project = db.create_project("conditional connector evaluator")
+    _location(db, project["id"], "a")
+    _location(db, project["id"], "b")
+    data.spatial_v3.save_space(NavigationSpace(id="a-space", project_id=project["id"], owner_location_id="a"))
+    data.spatial_v3.save_space(NavigationSpace(id="b-space", project_id=project["id"], owner_location_id="b"))
+    data.spatial_v3.save_feature(MapFeature(
+        id="locked-door",
+        project_id=project["id"],
+        navigation_space_id="a-space",
+        feature_kind="connector",
+        geometry={"type": "Point", "coordinates": (0, 0)},
+        properties=ConnectorProperties(
+            connector_kind="door",
+            source=ConnectorEndpoint(navigation_space_id="a-space", point=(0, 0)),
+            target=ConnectorEndpoint(navigation_space_id="b-space", point=(0, 0)),
+            traversal=TraversalPolicy(
+                default_allowed=False,
+                options=[TraversalOption(
+                    key="strong",
+                    label="Force the door",
+                    requirements={
+                        "schema_version": 2,
+                        "kind": "compare",
+                        "target": "actor",
+                        "stat_key": "strength",
+                        "comparison": "gte",
+                        "value": 10,
+                    },
+                    fixed_minutes=2,
+                )],
+            ),
+        ),
+    ))
+
+    evaluated = []
+    route = SpatialV3Pathfinder(
+        data.spatial_v3,
+        condition_evaluator=lambda payload: evaluated.append(payload) is None or True,
+    ).plan(
+        project_id=project["id"],
+        start_space_id="a-space",
+        start=(1, 0),
+        target_space_id="b-space",
+        target=(1, 0),
+    )
+    connector = next(step for step in route["steps"] if step["kind"] == "connector")
+    assert evaluated
+    assert connector["conditional_option_key"] == "strong"
+    assert connector["travel_cost"] == 2

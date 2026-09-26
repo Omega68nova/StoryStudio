@@ -920,7 +920,9 @@ class AbilityDefinitionCreate(BaseModel):
     compatible_owner_kinds: list[Literal["character", "item"]] = Field(default_factory=lambda: ["character"], min_length=1)
     target_type: Literal["self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"] = "self"
     requirements: dict[str, Any] = Field(default_factory=dict)
+    condition_expression: dict[str, Any] | None = None
     costs: list[AbilityCost] = Field(default_factory=list, max_length=50)
+    rule_costs: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     actions: list[AbilityAction] = Field(default_factory=list, max_length=50)
     passive_triggers: list[PassiveTrigger] = Field(default_factory=list, max_length=20)
     icon: str | None = None
@@ -928,12 +930,37 @@ class AbilityDefinitionCreate(BaseModel):
     timed_attack_line_count: int | None = Field(default=None, ge=1, le=8)
     timed_attack_damage_per_line: float | None = Field(default=None, ge=0, le=1_000_000)
     bullethell_skill_ids: list[str] = Field(default_factory=list, max_length=50)
+    stats: dict[str, float] = Field(default_factory=dict)
 
     @field_validator("requirements")
     @classmethod
     def validate_requirements(cls, requirements: dict[str, Any]) -> dict[str, Any]:
         RequirementExpression.model_validate(requirements)
         return requirements
+
+    @field_validator("condition_expression")
+    @classmethod
+    def validate_condition_expression(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is not None:
+            from app.domain.rules_v2 import ConditionExpression
+            ConditionExpression.model_validate(value)
+        return value
+
+    @field_validator("value_expression", check_fields=False)
+    @classmethod
+    def validate_value_expression(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is not None:
+            from app.domain.rules_v2 import ValueExpression
+            ValueExpression.model_validate(value)
+        return value
+
+    @field_validator("rule_costs", check_fields=False)
+    @classmethod
+    def validate_rule_costs(cls, values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        from app.domain.rules_v2 import RuleCost
+        for value in values:
+            RuleCost.model_validate(value)
+        return values
 
     @model_validator(mode="after")
     def validate_ability_shape(self) -> "AbilityDefinitionCreate":
@@ -951,6 +978,8 @@ class EffectDefinitionCreate(BaseModel):
     target_stat_key: str = Field(pattern=r"^[a-z][a-z0-9_]{0,63}$")
     operation: Literal["add", "subtract", "set", "multiply"] = "add"
     formula: FormulaNode
+    value_expression: dict[str, Any] | None = None
+    stats: dict[str, float] = Field(default_factory=dict)
     clock: Literal["story_minutes", "target_actions", "world_actions"] = "world_actions"
     duration: int = Field(default=0, ge=-1)
     tick_interval: int = Field(default=0, ge=0)

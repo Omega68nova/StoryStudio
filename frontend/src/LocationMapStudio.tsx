@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  Alert,
   Button,
   ButtonGroup,
   Chip,
@@ -9,327 +9,213 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
-  Menu,
   MenuItem,
   Paper,
+  Stack,
   Switch,
   TextField,
 } from "@mui/material";
 import { api } from "./api";
-import { FavoriteLibraryButton } from "./FavoriteLibraryButton";
-import { BoxedMultiselectFilter } from "./customComponents/BoxedMultiselect";
-import { EntityImageSurface } from "./customComponents/EntityImageSurface";
-import type {
-  AmbientAssignment,
-  AmbientSoundSet,
-  AmbientVariant,
-  EnvironmentLocation,
-  EnvironmentSettings,
-  MediaAsset,
-  WorkflowPreset,
-  WorldEntity,
-  WorldProjection,
-} from "./types";
+import type { AbilityDefinition, StatDefinition, WorkflowPreset, WorldEntity, WorldProjection } from "./types";
+import { blankConditionExpression, conditionExpressionFromPayload, ConditionExpressionEditor } from "./RuleConditionEditor";
 
-type Tool = "select" | "drag" | "spot" | "area" | "route" | "edit";
-type Point = { x: number; y: number };
-type Geometry = { location_id?: string; kind?: "point" | "polyline" | "polygon"; points?: Point[] };
-type SpatialLocation = {
-  id: string;
-  name: string;
-  parent_location_id?: string | null;
-  topology?: string;
-  occupancy?: string;
-  boundary_access?: string;
-  spatial_kind?: string;
-  priority_layer?: number;
-  x?: number | null;
-  y?: number | null;
-  discovered?: boolean;
-};
-type SpatialAnchor = {
-  id: string;
-  location_id: string;
-  coordinate_space_id?: string | null;
-  binding_kind?: "coordinate" | "area" | "area_border" | "spot";
-  binding_target_id?: string | null;
-  binding_offset_x?: number | null;
-  binding_offset_y?: number | null;
-  binding_segment_index?: number | null;
-  binding_segment_t?: number | null;
-  name: string;
-  kind: string;
-  x?: number | null;
-  y?: number | null;
-  hidden?: boolean;
-  discovered?: boolean;
-};
-type SpatialConnection = {
-  id: string;
-  kind: "route" | "door" | "portal";
-  source_anchor_id: string;
-  target_anchor_id: string;
-  travel_minutes: number;
-  modes?: string[];
-  bidirectional?: boolean;
+type Point = [number, number];
+type Tool = "select" | "surface" | "corridor" | "barrier" | "spot" | "connector";
+type FeatureKind = Exclude<Tool, "select">;
+type RenderLayer = "topology" | "regions" | "roads" | "places" | "barriers" | "connections";
+type LabelsMode = "hidden" | "important" | "all";
+
+type TraversalOption = {
+  key: string;
+  label: string;
   requirements?: Record<string, unknown> | null;
-  lock?: { locked?: boolean; minigame_key?: string | null; difficulty?: number; success_behavior?: string } | null;
-  hidden?: boolean;
-  discovered?: boolean;
-  enabled?: boolean;
-  source_location_id?: string;
-  target_location_id?: string;
+  travel_multiplier: number;
+  fixed_minutes?: number | null;
 };
-type SpatialBarrier = {
+type TraversalPolicy = {
+  default_allowed: boolean;
+  travel_multiplier: number;
+  options: TraversalOption[];
+};
+type NavigationSpace = {
   id: string;
+  project_id: string;
+  owner_location_id?: string | null;
+  navigation_mode: "free" | "routed";
+  base_travel_multiplier: number;
+  bounds?: { type: "Polygon" | "MultiPolygon"; coordinates: unknown } | null;
+  revision: number;
+};
+type MapFeature = {
+  id: string;
+  project_id: string;
+  navigation_space_id: string;
+  semantic_location_id?: string | null;
+  feature_kind: FeatureKind;
   name: string;
-  location_id: string;
-  blocked_modes?: string[];
-  hidden?: boolean;
-  discovered?: boolean;
-  geometry?: Geometry;
-};
-type SpatialMap = {
+  geometry:
+    | { type: "Point"; coordinates: Point }
+    | { type: "LineString"; coordinates: Point[] }
+    | { type: "MultiLineString"; coordinates: Point[][] }
+    | { type: "Polygon"; coordinates: Point[][] }
+    | { type: "MultiPolygon"; coordinates: Point[][][] };
+  render_layer: RenderLayer;
+  render_order: number;
+  movement_priority: number;
+  hidden: boolean;
+  discovered: boolean;
   enabled: boolean;
-  root_location_id: string | null;
-  location_id?: string;
-  topology?: "open" | "closed";
-  blocked_reason?: string;
-  locations: SpatialLocation[];
-  anchors: SpatialAnchor[];
-  connections: SpatialConnection[];
-  barriers: SpatialBarrier[];
+  metadata: Record<string, unknown>;
+  properties: Record<string, any>;
 };
-type AmbientData = { variants: AmbientVariant[]; assignments: AmbientAssignment[] };
-type PreviewPlaying = { audio: HTMLAudioElement; gain: number; target: number };
-const emptyAmbientSet = (): AmbientSoundSet => ({ selector_type: "default", selector_value: null, weather_id: null, time_phase_id: null, variant_ids: [] });
-const ambientSetsFor = (assignments: AmbientAssignment[], ownerId?: string): AmbientSoundSet[] => {
-  if (!ownerId) return [emptyAmbientSet()];
-  const grouped = new Map<string, AmbientSoundSet>();
-  assignments.filter(item => item.owner_type === "location" && item.owner_id === ownerId).forEach(item => {
-    const key = [item.selector_type, item.selector_value ?? "", item.weather_id ?? "", item.time_phase_id ?? ""].join("|");
-    const current = grouped.get(key) ?? { selector_type: item.selector_type, selector_value: item.selector_value, weather_id: item.weather_id, time_phase_id: item.time_phase_id, variant_ids: [] };
-    if (!current.variant_ids.includes(item.variant_id)) current.variant_ids.push(item.variant_id);
-    grouped.set(key, current);
-  });
-  const result = [...grouped.values()];
-  if (!result.some(item => item.selector_type === "default" && !item.weather_id && !item.time_phase_id)) result.unshift(emptyAmbientSet());
-  return result;
+type NavigationLayer = {
+  navigation_space_id: string;
+  layer_key: string;
+  label: string;
+  position: number;
+  visible: boolean;
+  labels_mode: LabelsMode;
 };
-function resolveAmbientPreview(
-  location: WorldEntity | null,
-  draft: EnvironmentLocation | null,
-  ambient: AmbientData,
-  localSets: AmbientSoundSet[],
-  weatherId: string,
-  phaseId: string,
-): AmbientVariant[] {
-  if (!location || !draft) return [];
-  const tags = new Set([...location.tags, ...draft.tags, ...draft.image_tags].map(value => String(value).toLocaleLowerCase()));
-  const rules: Array<AmbientAssignment | (Omit<AmbientAssignment, "id"> & { id?: string })> = [
-    ...ambient.assignments.filter(item => !(item.owner_type === "location" && item.owner_id === location.id)),
-    ...localSets.flatMap((set, setIndex) => set.variant_ids.map((variantId, variantIndex) => ({
-      id: `preview-${setIndex}-${variantIndex}`,
-      owner_type: "location" as const,
-      owner_id: location.id,
-      selector_type: set.selector_type,
-      selector_value: set.selector_value ?? null,
-      weather_id: set.weather_id ?? null,
-      time_phase_id: set.time_phase_id ?? null,
-      variant_id: variantId,
-    }))),
-  ];
-  const matched = new Set<string>();
-  for (const rule of rules) {
-    const ownerMatch = rule.owner_type === "location"
-      ? rule.owner_id === location.id
-      : rule.owner_type === "weather"
-        ? rule.owner_id === weatherId
-        : rule.owner_type === "time"
-          ? rule.owner_id === phaseId
-          : rule.owner_type === "action" && rule.owner_id.toLocaleLowerCase() === "standing";
-    if (!ownerMatch) continue;
-    if (draft.exposure === "isolated" && (rule.owner_type === "weather" || rule.owner_type === "time")) continue;
-    const selectorMatch = rule.selector_type === "default"
-      || rule.selector_type === draft.exposure
-      || (rule.selector_type === "tag" && tags.has(String(rule.selector_value ?? "").toLocaleLowerCase()));
-    const conditionMatch = (!rule.weather_id || rule.weather_id === weatherId)
-      && (!rule.time_phase_id || rule.time_phase_id === phaseId);
-    if (selectorMatch && conditionMatch) matched.add(rule.variant_id);
-  }
-  return ambient.variants.filter(item => matched.has(item.id) && item.enabled && item.available);
+type EncounterCandidate = {
+  location_id: string;
+  weight: number;
+  requirements?: Record<string, unknown> | null;
+};
+type EncounterPolicy = {
+  id: string;
+  project_id: string;
+  navigation_space_id?: string | null;
+  feature_id?: string | null;
+  mode: "augment" | "replace" | "disabled";
+  priority: number;
+  trigger_kind: "distance" | "transition";
+  rate_per_100_units: number;
+  probability_per_transition?: number | null;
+  minimum_distance: number;
+  candidates: EncounterCandidate[];
+  conditions?: Record<string, unknown> | null;
+  enabled: boolean;
+};
+type SpaceDetails = {
+  space: NavigationSpace;
+  features: MapFeature[];
+  layers: NavigationLayer[];
+  encounter_policies: EncounterPolicy[];
+};
+type MigrationPreview = {
+  spaces?: unknown[];
+  features?: unknown[];
+  encounter_policies?: unknown[];
+  counts?: Record<string, number>;
+  [key: string]: unknown;
+};
+type SpatialPreset = {
+  key: string;
+  label: string;
+  description: string;
+  parameters: string[];
+  requires_semantic_location?: boolean;
+  requires_target_space?: boolean;
+};
+
+const renderLayers: RenderLayer[] = ["topology", "regions", "roads", "places", "barriers", "connections"];
+const connectorKinds = ["generic", "door", "gate", "stairs", "ladder", "bridge", "climb", "portal"] as const;
+const emptyTraversal = (allowed = true): TraversalPolicy => ({ default_allowed: allowed, travel_multiplier: 1, options: [] });
+const newId = (prefix: string) => `${prefix}-${crypto.randomUUID()}`;
+const round = (value: number) => Math.round(value * 10) / 10;
+const parseCsv = (value: string) => value.split(",").map(item => item.trim()).filter(Boolean);
+const formatCsv = (value: unknown) => Array.isArray(value) ? value.join(", ") : "";
+const presetDefaults = (key: string) => ({
+  name: "",
+  semantic_location_id: "",
+  center_x: 50,
+  center_y: 50,
+  width: key === "road" ? 6 : key === "river" ? 10 : 60,
+  height: 60,
+  target_space_id: "",
+  target_x: 50,
+  target_y: 50,
+});
+const locationName = (world: WorldProjection | null, id?: string | null) =>
+  id ? world?.entities[id]?.name ?? id : "Unbound";
+
+function defaultProperties(kind: FeatureKind): Record<string, any> {
+  if (kind === "surface") return { traversal: emptyTraversal(true), ambience_tags: [], environment_tags: [] };
+  if (kind === "corridor") return { width: 4, traversal: emptyTraversal(true), ambience_tags: [] };
+  if (kind === "barrier") return { traversal: emptyTraversal(false) };
+  if (kind === "spot") return { interaction_kind: "generic" };
+  return {
+    connector_kind: "door",
+    source: { navigation_space_id: "", point: [0, 0] as Point },
+    target: { navigation_space_id: "", point: [0, 0] as Point },
+    traversal: emptyTraversal(true),
+    travel_minutes: null,
+    bidirectional: true,
+  };
 }
 
-type BackgroundRecord = {
-  media_asset_id: string;
-  file_path?: string | null;
-  status: string;
-  prompt: string;
-  negative_prompt: string;
-  weather_id?: string | null;
-  time_phase_id?: string | null;
-};
-type DragLocation = {
-  id: string;
-  start: Point;
-  x: number;
-  y: number;
-  footprint: Point[];
-};
-type VertexDrag = { locationId: string; index: number };
-type VertexMenuState = { mouseX: number; mouseY: number; locationId: string; index: number } | null;
-type EndpointKind = "coordinate" | "area" | "area_border" | "spot";
-type EndpointChoice = {
-  key: string;
-  kind: EndpointKind;
-  label: string;
-  targetId?: string | null;
-  point: Point;
-  offsetX?: number;
-  offsetY?: number;
-  segmentIndex?: number;
-  segmentT?: number;
-};
-type RouteDialogState = {
-  points: [Point, Point];
-  options: [EndpointChoice[], EndpointChoice[]];
-  selections: [string, string];
-  kind: SpatialConnection["kind"];
-  travelMinutes: number;
-  modes: string;
-  bidirectional: boolean;
-  enabled: boolean;
-  discovered: boolean;
-  hidden: boolean;
-} | null;
-type ConnectionDraft = {
-  kind: SpatialConnection["kind"];
-  travelMinutes: number;
-  modes: string;
-  bidirectional: boolean;
-  hidden: boolean;
-  discovered: boolean;
-  enabled: boolean;
-  locked: boolean;
-  minigameKey: string;
-  difficulty: number;
-};
-type HitCandidate = { id: string; label: string; detail: string };
-type HitMenuState = { mouseX: number; mouseY: number; candidates: HitCandidate[] } | null;
-type LocationAuthoringDefaults = {
-  exposure: EnvironmentLocation["exposure"];
-  enabled: boolean;
-  discovered: boolean;
-  hidden: boolean;
-  randomEncounter: boolean;
-};
-type ConnectionAuthoringDefaults = {
-  kind: SpatialConnection["kind"];
-  bidirectional: boolean;
-  enabled: boolean;
-  discovered: boolean;
-  hidden: boolean;
-};
+function defaultLayer(kind: FeatureKind): RenderLayer {
+  if (kind === "surface") return "regions";
+  if (kind === "corridor") return "roads";
+  if (kind === "barrier") return "barriers";
+  if (kind === "connector") return "connections";
+  return "places";
+}
 
-const clamp = (value: number) => Math.max(0, Math.min(100, value));
-const round = (value: number) => Math.round(value * 10) / 10;
-const centroid = (points: Point[]): Point => {
-  if (!points.length) return { x: 50, y: 50 };
-  return {
-    x: points.reduce((sum, point) => sum + point.x, 0) / points.length,
-    y: points.reduce((sum, point) => sum + point.y, 0) / points.length,
-  };
-};
-const triangleAt = (center: Point, radius = 4): Point[] => [
-  { x: clamp(round(center.x)), y: clamp(round(center.y - radius)) },
-  { x: clamp(round(center.x - radius)), y: clamp(round(center.y + radius)) },
-  { x: clamp(round(center.x + radius)), y: clamp(round(center.y + radius)) },
-];
-const distance = (left: Point, right: Point) => Math.hypot(left.x - right.x, left.y - right.y);
-const pointInPolygon = (point: Point, polygon: Point[]) => {
-  if (polygon.length < 3) return false;
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-    const a = polygon[i], b = polygon[j];
-    const intersects = ((a.y > point.y) !== (b.y > point.y))
-      && point.x < ((b.x - a.x) * (point.y - a.y)) / ((b.y - a.y) || Number.EPSILON) + a.x;
-    if (intersects) inside = !inside;
-  }
-  return inside;
-};
-const closestPointOnSegment = (point: Point, a: Point, b: Point): Point => {
-  const dx = b.x - a.x, dy = b.y - a.y;
-  const lengthSq = dx * dx + dy * dy;
-  if (!lengthSq) return a;
-  const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / lengthSq));
-  return { x: round(a.x + t * dx), y: round(a.y + t * dy) };
-};
-const closestBorderPoint = (point: Point, points: Point[]): { point: Point; distance: number; segmentIndex: number; segmentT: number } | null => {
-  if (points.length < 2) return null;
-  let best: { point: Point; distance: number; segmentIndex: number; segmentT: number } | null = null;
-  for (let index = 0; index < points.length; index++) {
-    const left = points[index], right = points[(index + 1) % points.length];
-    const dx = right.x - left.x, dy = right.y - left.y;
-    const lengthSq = dx * dx + dy * dy;
-    const segmentT = lengthSq
-      ? Math.max(0, Math.min(1, ((point.x - left.x) * dx + (point.y - left.y) * dy) / lengthSq))
-      : 0;
-    const candidate = { x: round(left.x + segmentT * dx), y: round(left.y + segmentT * dy) };
-    const candidateDistance = distance(point, candidate);
-    if (!best || candidateDistance < best.distance) best = { point: candidate, distance: candidateDistance, segmentIndex: index, segmentT };
-  }
-  return best;
-};
-const distanceToSegment = (point: Point, left: Point, right: Point) => distance(point, closestPointOnSegment(point, left, right));
-const areaPriority = (entity?: WorldEntity | null) => Number(entity?.state.priority_layer ?? 0);
-const compareAreaPriority = (left: WorldEntity, right: WorldEntity) => {
-  const priority = areaPriority(left) - areaPriority(right);
-  if (priority) return priority;
-  if (left.name !== right.name) return left.name < right.name ? -1 : 1;
-  return left.id === right.id ? 0 : left.id < right.id ? -1 : 1;
-};
-const connectionKindLabel = (kind: SpatialConnection["kind"]) =>
-  kind === "route" ? "Route / shortcut" : kind === "portal" ? "Portal / teleporter" : "Door";
-const geometryPoints = (entity?: WorldEntity | null): Point[] => {
-  const raw = entity?.state.footprint as Geometry | null | undefined;
-  return Array.isArray(raw?.points)
-    ? raw.points.filter(point => typeof point?.x === "number" && typeof point?.y === "number")
-    : [];
-};
-const locationDraft = (entity: WorldEntity): EnvironmentLocation => {
-  const state = entity.state;
-  return {
-    id: entity.id,
-    name: entity.name,
-    tags: entity.tags ?? [],
-    parent_location_id: String(state.parent_location_id || "") || null,
-    exposure: state.exposure === "indoor" || state.exposure === "isolated" ? state.exposure : "outdoor",
-    description: String(state.description ?? ""),
-    imagegen_description: String(state.imagegen_description ?? ""),
-    image_tags: Array.isArray(state.image_tags) ? state.image_tags.map(String) : [],
-    enabled: state.enabled !== false,
-    random_encounter: Boolean(state.random_encounter),
-    hidden: Boolean(state.hidden),
-    discovered: state.discovered == null ? !state.random_encounter : Boolean(state.discovered),
-    x: typeof state.x === "number" ? state.x : null,
-    y: typeof state.y === "number" ? state.y : null,
-    topology: state.topology === "open" ? "open" : "closed",
-    occupancy: state.occupancy === "child_required" ? "child_required" : "direct_allowed",
-    boundary_access: state.boundary_access === "connection_required" ? "connection_required" : "free",
-    spatial_kind: state.spatial_kind === "area" ? "area" : "spot",
-    priority_layer: typeof state.priority_layer === "number" ? state.priority_layer : 0,
-    minutes_per_unit: typeof state.minutes_per_unit === "number" ? state.minutes_per_unit : 1,
-    base_visibility_units: typeof state.base_visibility_units === "number" ? state.base_visibility_units : null,
-    encounter_rate: typeof state.encounter_rate === "number" ? state.encounter_rate : 0,
-    footprint: state.footprint && typeof state.footprint === "object" ? state.footprint as Record<string, unknown> : null,
-    local_bounds: state.local_bounds && typeof state.local_bounds === "object" ? state.local_bounds as Record<string, unknown> : null,
-  };
-};
+function traversalOf(feature: MapFeature): TraversalPolicy | null {
+  return feature.feature_kind === "spot" ? null : feature.properties.traversal ?? emptyTraversal(feature.feature_kind !== "barrier");
+}
+
+function featurePoints(feature: MapFeature): Point[] {
+  if (feature.geometry.type === "Point") return [feature.geometry.coordinates];
+  if (feature.geometry.type === "LineString") return feature.geometry.coordinates;
+  if (feature.geometry.type === "Polygon") return feature.geometry.coordinates[0] ?? [];
+  if (feature.geometry.type === "MultiLineString") return feature.geometry.coordinates.flat();
+  return feature.geometry.coordinates.flat(2) as Point[];
+}
+
+function TraversalEditor({
+  value,
+  stats,
+  abilities,
+  locations,
+  onChange,
+}: {
+  value: TraversalPolicy;
+  stats: StatDefinition[];
+  abilities: AbilityDefinition[];
+  locations: Array<{ id: string; name: string }>;
+  onChange: (value: TraversalPolicy) => void;
+}) {
+  return <section className="panel">
+    <h3>Traversal</h3>
+    <Stack direction="row" spacing={2} flexWrap="wrap">
+      <FormControlLabel control={<Switch checked={value.default_allowed} onChange={event => onChange({ ...value, default_allowed: event.target.checked })}/>} label="Default allowed"/>
+      <TextField size="small" type="number" label="Travel multiplier" value={value.travel_multiplier} onChange={event => onChange({ ...value, travel_multiplier: Math.max(.01, Number(event.target.value) || 1) })}/>
+    </Stack>
+    <h4>Conditional alternatives</h4>
+    {value.options.map((option, index) => <Paper key={index} variant="outlined" sx={{ p: 1.5, mb: 1 }}>
+      <Stack direction="row" spacing={1} flexWrap="wrap">
+        <TextField size="small" label="Key" value={option.key} onChange={event => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, key: event.target.value } : item) })}/>
+        <TextField size="small" label="Label" value={option.label} onChange={event => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, label: event.target.value } : item) })}/>
+        <TextField size="small" type="number" label="Multiplier" value={option.travel_multiplier} onChange={event => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, travel_multiplier: Math.max(.01, Number(event.target.value) || 1) } : item) })}/>
+        <TextField size="small" type="number" label="Fixed minutes" value={option.fixed_minutes ?? ""} onChange={event => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, fixed_minutes: event.target.value === "" ? null : Math.max(0, Number(event.target.value)) } : item) })}/>
+        <Button color="error" onClick={() => onChange({ ...value, options: value.options.filter((_, itemIndex) => itemIndex !== index) })}>Remove</Button>
+      </Stack>
+      <div style={{ marginTop: 8 }}>
+        {option.requirements
+          ? <ConditionExpressionEditor node={conditionExpressionFromPayload(option.requirements as Record<string, unknown>, stats)} stats={stats} abilities={abilities} locations={locations} onChange={requirements => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })} onRemove={() => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: null } : item) })}/>
+          : <Button size="small" onClick={() => onChange({ ...value, options: value.options.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: blankConditionExpression("compare", stats) } : item) })}>Add requirement</Button>}
+      </div>
+    </Paper>)}
+    <Button onClick={() => onChange({ ...value, options: [...value.options, { key: `option_${value.options.length + 1}`, label: "Alternative", requirements: null, travel_multiplier: 1, fixed_minutes: null }] })}>Add traversal option</Button>
+  </section>;
+}
 
 export function LocationMapStudio({
   projectId,
   revision,
-  workflows,
+  workflows: _workflows,
   fail,
 }: {
   projectId: string;
@@ -337,1881 +223,601 @@ export function LocationMapStudio({
   workflows: WorkflowPreset[];
   fail: (message: string) => void;
 }) {
-  const [map, setMap] = useState<SpatialMap | null>(null);
   const [world, setWorld] = useState<WorldProjection | null>(null);
-  const [environmentSettings, setEnvironmentSettings] = useState<EnvironmentSettings | null>(null);
-  const [environmentSettingsOpen, setEnvironmentSettingsOpen] = useState(false);
-  const [ambient, setAmbient] = useState<AmbientData>({ variants: [], assignments: [] });
-  const [ambientSets, setAmbientSets] = useState<AmbientSoundSet[]>([emptyAmbientSet()]);
-  const [ambientSavedSnapshot, setAmbientSavedSnapshot] = useState("");
-  const [previewWeatherId, setPreviewWeatherId] = useState("");
-  const [previewTimePhaseId, setPreviewTimePhaseId] = useState("");
-  const [soundPreviewEnabled, setSoundPreviewEnabled] = useState(false);
-  const previewAudio = useRef(new Map<string, PreviewPlaying>());
-  const [layerId, setLayerId] = useState<string | null>(null);
+  const [ruleData, setRuleData] = useState<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>({ stats: [], abilities: [] });
+  const [spaces, setSpaces] = useState<NavigationSpace[]>([]);
+  const [spaceId, setSpaceId] = useState("");
+  const [details, setDetails] = useState<SpaceDetails | null>(null);
   const [tool, setTool] = useState<Tool>("select");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [routePoints, setRoutePoints] = useState<Point[]>([]);
-  const [routeDialog, setRouteDialog] = useState<RouteDialogState>(null);
-  const [vertexMenu, setVertexMenu] = useState<VertexMenuState>(null);
-  const [areaDraft, setAreaDraft] = useState<Point[]>([]);
-  const [zoom, setZoom] = useState(1);
-  const [dragLocation, setDragLocation] = useState<DragLocation | null>(null);
-  const [dragOffset, setDragOffset] = useState<Point>({ x: 0, y: 0 });
-  const [vertexDrag, setVertexDrag] = useState<VertexDrag | null>(null);
-  const [vertexPreview, setVertexPreview] = useState<Point | null>(null);
-  const [editorDraft, setEditorDraft] = useState<EnvironmentLocation | null>(null);
-  const [backgrounds, setBackgrounds] = useState<BackgroundRecord[]>([]);
-  const [backgroundSelection, setBackgroundSelection] = useState<string>("new");
-  const [backgroundWeatherId, setBackgroundWeatherId] = useState("");
-  const [backgroundTimePhaseId, setBackgroundTimePhaseId] = useState("");
-  const [imageBusy, setImageBusy] = useState(false);
-  const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
-  const [hitMenu, setHitMenu] = useState<HitMenuState>(null);
-  const [locationDefaults, setLocationDefaults] = useState<LocationAuthoringDefaults>({
-    exposure: "outdoor",
-    enabled: true,
-    discovered: true,
-    hidden: false,
-    randomEncounter: false,
-  });
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-  const [connectionDefaults, setConnectionDefaults] = useState<ConnectionAuthoringDefaults>({
-    kind: "route",
-    bidirectional: true,
-    enabled: true,
-    discovered: true,
-    hidden: false,
-  });
+  const [draftPoints, setDraftPoints] = useState<Point[]>([]);
+  const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null);
+  const [featureDraft, setFeatureDraft] = useState<MapFeature | null>(null);
+  const [spaceDraft, setSpaceDraft] = useState<NavigationSpace | null>(null);
+  const [createSpaceOpen, setCreateSpaceOpen] = useState(false);
+  const [createSpaceLocation, setCreateSpaceLocation] = useState("");
+  const [createSpaceMode, setCreateSpaceMode] = useState<"free" | "routed">("free");
+  const [connectorPoint, setConnectorPoint] = useState<Point | null>(null);
+  const [connectorTargetSpace, setConnectorTargetSpace] = useState("");
+  const [connectorTargetPoint, setConnectorTargetPoint] = useState<Point>([50, 50]);
+  const [migration, setMigration] = useState<MigrationPreview | null>(null);
+  const [presets, setPresets] = useState<SpatialPreset[]>([]);
+  const [presetOpen, setPresetOpen] = useState(false);
+  const [presetKey, setPresetKey] = useState("open_region");
+  const [presetParams, setPresetParams] = useState(presetDefaults("open_region"));
+  const [encounterDraft, setEncounterDraft] = useState<EncounterPolicy | null>(null);
+  const [vertexDrag, setVertexDrag] = useState<number | null>(null);
 
-  useEffect(() => {
-    const node = canvasRef.current;
-    if (!node) return;
-    const handleWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setZoom(value => Math.max(.5, Math.min(2, round(value - event.deltaY * .001))));
-    };
-    node.addEventListener("wheel", handleWheel, { passive: false });
-    return () => node.removeEventListener("wheel", handleWheel);
-  }, []);
-
-  const load = useCallback(async () => {
-    const [nextMap, nextWorld, nextSettings, nextAmbient] = await Promise.all([
-      api<SpatialMap>(`/projects/${projectId}/spatial/map${layerId ? `?location_id=${layerId}` : ""}`),
-      api<WorldProjection>(`/projects/${projectId}/world`),
-      api<EnvironmentSettings>(`/projects/${projectId}/environment/settings`),
-      api<AmbientData>(`/projects/${projectId}/environment/ambient`),
-    ]);
-    setMap(nextMap);
-    setWorld(nextWorld);
-    setEnvironmentSettings(nextSettings);
-    setAmbient(nextAmbient);
-    setPreviewWeatherId(current => nextSettings.weather.some(item => item.id === current && item.enabled)
-      ? current
-      : (nextSettings.weather.find(item => item.id === nextSettings.initial_weather_id && item.enabled)?.id
-        ?? nextSettings.weather.find(item => item.enabled)?.id
-        ?? ""));
-    setPreviewTimePhaseId(current => nextSettings.time_phases.some(item => item.id === current && item.enabled)
-      ? current
-      : (nextSettings.time_phases.find(item => item.enabled)?.id ?? ""));
-    if (!layerId && nextMap.root_location_id) setLayerId(nextMap.root_location_id);
-  }, [projectId, layerId]);
-
-  useEffect(() => {
-    void load().catch(cause => fail(String(cause)));
-  }, [load, revision, fail]);
-
-  const currentLayer = layerId ? world?.entities[layerId] : null;
-  const selectedEntity = selectedId ? world?.entities[selectedId] : null;
-  const selectedLocation = selectedEntity?.kind === "location" ? selectedEntity : null;
-
-  useEffect(() => {
-    setEditorDraft(selectedLocation ? locationDraft(selectedLocation) : null);
-    const nextSets = ambientSetsFor(ambient.assignments, selectedLocation?.id);
-    setAmbientSets(nextSets);
-    setAmbientSavedSnapshot(JSON.stringify(nextSets));
-  // Ambient drafts intentionally survive map/world refreshes until selection changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedLocation?.id]);
-
-  const loadBackgrounds = useCallback(async (locationId: string) => {
-    const rows = await api<BackgroundRecord[]>(`/projects/${projectId}/environment/locations/${locationId}/backgrounds`);
-    setBackgrounds(rows);
-    setBackgroundSelection(current => current !== "new" && rows.some(row => row.media_asset_id === current)
-      ? current
-      : (rows[0]?.media_asset_id ?? "new"));
-  }, [projectId]);
-
-  useEffect(() => {
-    if (!selectedLocation) {
-      setBackgrounds([]);
-      setBackgroundSelection("new");
-      setBackgroundWeatherId("");
-      setBackgroundTimePhaseId("");
-      return;
-    }
-    void loadBackgrounds(selectedLocation.id).catch(cause => fail(String(cause)));
-  }, [selectedLocation?.id, loadBackgrounds, fail]);
-
-  useEffect(() => {
-    if (backgroundSelection === "new") return;
-    const row = backgrounds.find(item => item.media_asset_id === backgroundSelection);
-    if (!row) return;
-    setBackgroundWeatherId(row.weather_id ?? "");
-    setBackgroundTimePhaseId(row.time_phase_id ?? "");
-  }, [backgroundSelection, backgrounds]);
-
-  const breadcrumbs = useMemo(() => {
-    const result: Array<{ id: string; name: string }> = [];
-    const seen = new Set<string>();
-    let current = currentLayer;
-    while (current && !seen.has(current.id)) {
-      seen.add(current.id);
-      result.unshift({ id: current.id, name: current.name });
-      current = world?.entities[String(current.state.parent_location_id || "")];
-    }
-    return result;
-  }, [currentLayer, world]);
-
-  const validation = useMemo(() => {
-    if (!world) return [];
-    const locations = Object.values(world.entities).filter(item => item.kind === "location" && !item.state.archived);
-    const ids = new Set(locations.map(item => item.id));
-    const messages: string[] = [];
-    if (!map?.root_location_id) messages.push("Missing world root: placement and travel are disabled.");
-    locations.forEach(item => {
-      const parent = String(item.state.parent_location_id || "");
-      if (parent && !ids.has(parent)) messages.push(`${item.name} has an unavailable parent.`);
-      if (item.state.occupancy === "child_required" && !locations.some(child => child.state.parent_location_id === item.id)) {
-        messages.push(`${item.name} requires a child but has none.`);
-      }
-      const points = geometryPoints(item);
-      if (!points.length && (typeof item.state.x !== "number" || typeof item.state.y !== "number")) {
-        messages.push(`${item.name} has no canonical map position; drag it once to adopt its drop coordinates.`);
-      }
-    });
-    map?.anchors.filter(item => (item.binding_kind ?? "coordinate") === "coordinate" && (item.x == null || item.y == null)).forEach(item => {
-      messages.push(`${item.name} needs map review: its position is incomplete.`);
-    });
-    return messages;
-  }, [map, world]);
-
-  const selectedSpatial = map?.anchors.find(item => item.id === selectedId)
-    ?? map?.barriers.find(item => item.id === selectedId)
-    ?? map?.connections.find(item => item.id === selectedId)
-    ?? null;
-  const selectedConnection = map?.connections.find(item => item.id === selectedId) ?? null;
-
-  useEffect(() => {
-    if (!selectedConnection) {
-      setConnectionDraft(null);
-      return;
-    }
-    setConnectionDraft({
-      kind: selectedConnection.kind,
-      travelMinutes: selectedConnection.travel_minutes,
-      modes: (selectedConnection.modes ?? ["walk"]).join(", "),
-      bidirectional: selectedConnection.bidirectional !== false,
-      hidden: Boolean(selectedConnection.hidden),
-      discovered: selectedConnection.discovered !== false,
-      enabled: selectedConnection.enabled !== false,
-      locked: Boolean(selectedConnection.lock?.locked),
-      minigameKey: selectedConnection.lock?.minigame_key ?? "",
-      difficulty: Number(selectedConnection.lock?.difficulty ?? 1),
-    });
-  }, [selectedConnection]);
-
-  const backgroundAsset = useMemo<MediaAsset | null>(() => {
-    if (!selectedLocation || !backgrounds.length || backgroundSelection === "new") return null;
-    const row = backgrounds.find(item => item.media_asset_id === backgroundSelection);
-    if (!row) return null;
-    return {
-      id: row.media_asset_id,
-      entity_id: selectedLocation.id,
-      kind: "location",
-      status: row.status,
-      file_path: row.file_path,
-      prompt: row.prompt,
-      negative_prompt: row.negative_prompt,
-    };
-  }, [backgrounds, selectedLocation, backgroundSelection]);
-
-  const previewAmbient = useMemo(
-    () => resolveAmbientPreview(
-      selectedLocation,
-      editorDraft,
-      ambient,
-      ambientSets,
-      previewWeatherId,
-      previewTimePhaseId,
-    ),
-    [selectedLocation, editorDraft, ambient, ambientSets, previewWeatherId, previewTimePhaseId],
+  const locations = useMemo(
+    () => Object.values(world?.entities ?? {}).filter((item: WorldEntity) => item.kind === "location" && !item.state.archived),
+    [world],
   );
 
-  useEffect(() => {
-    const desired = new Map((soundPreviewEnabled && selectedLocation ? previewAmbient : []).map(item => [item.id, item]));
-    for (const [id, item] of desired) {
-      let playing = previewAudio.current.get(id);
-      if (!playing) {
-        const audio = new Audio(item.url);
-        audio.loop = true;
-        audio.preload = "auto";
-        audio.volume = 0;
-        audio.playbackRate = item.playback_rate;
-        playing = { audio, gain: 0, target: item.default_gain };
-        previewAudio.current.set(id, playing);
-        void audio.play().catch(() => undefined);
-      }
-      playing.audio.playbackRate = item.playback_rate;
-      playing.target = item.default_gain;
-    }
-    for (const [id, playing] of previewAudio.current) {
-      if (!desired.has(id)) playing.target = 0;
-    }
-  }, [soundPreviewEnabled, selectedLocation?.id, previewAmbient]);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      for (const [id, playing] of previewAudio.current) {
-        playing.gain += Math.sign(playing.target - playing.gain) * Math.min(.05, Math.abs(playing.target - playing.gain));
-        playing.audio.volume = Math.max(0, Math.min(1, playing.gain));
-        if (playing.target === 0 && playing.gain === 0) {
-          playing.audio.pause();
-          playing.audio.src = "";
-          previewAudio.current.delete(id);
-        }
-      }
-    }, 50);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    if (!selectedLocation && soundPreviewEnabled) setSoundPreviewEnabled(false);
-  }, [selectedLocation, soundPreviewEnabled]);
-
-  useEffect(() => {
-    window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: soundPreviewEnabled }));
-    return () => {
-      if (soundPreviewEnabled) window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
-    };
-  }, [soundPreviewEnabled]);
-
-  useEffect(() => () => {
-    window.dispatchEvent(new CustomEvent("storystudio-ambient-preview-active", { detail: false }));
-    for (const playing of previewAudio.current.values()) {
-      playing.audio.pause();
-      playing.audio.src = "";
-    }
-    previewAudio.current.clear();
+  const loadSpaces = useCallback(async () => {
+    const [nextWorld, nextSpaces, nextRules, nextPresets] = await Promise.all([
+      api<WorldProjection>(`/projects/${projectId}/world`),
+      api<NavigationSpace[]>(`/projects/${projectId}/spatial-v3/spaces`),
+      api<{ stats: StatDefinition[]; abilities: AbilityDefinition[] }>(`/projects/${projectId}/rules`),
+      api<SpatialPreset[]>(`/projects/${projectId}/spatial-v3/presets`),
+    ]);
+    setWorld(nextWorld);
+    setSpaces(nextSpaces);
+    setRuleData({ stats: nextRules.stats ?? [], abilities: nextRules.abilities ?? [] });
+    setPresets(nextPresets);
+    setSpaceId(current => current && nextSpaces.some(item => item.id === current) ? current : nextSpaces[0]?.id ?? "");
+    if (!nextSpaces.length) {
+      try { setMigration(await api<MigrationPreview>(`/projects/${projectId}/spatial-v3/migration-preview`)); }
+      catch { setMigration(null); }
+    } else setMigration(null);
   }, [projectId]);
 
-  function canvasPoint(clientX: number, clientY: number, element: HTMLElement): Point {
+  const loadDetails = useCallback(async () => {
+    if (!spaceId) { setDetails(null); setSpaceDraft(null); return; }
+    const next = await api<SpaceDetails>(`/projects/${projectId}/spatial-v3/spaces/${spaceId}`);
+    setDetails(next);
+    setSpaceDraft(next.space);
+    setSelectedFeatureId(current => current && next.features.some(item => item.id === current) ? current : null);
+  }, [projectId, spaceId]);
+
+  useEffect(() => { void loadSpaces().catch(cause => fail(String(cause))); }, [loadSpaces, revision, fail]);
+  useEffect(() => { void loadDetails().catch(cause => fail(String(cause))); }, [loadDetails, fail]);
+  useEffect(() => {
+    const next = selectedFeatureId ? details?.features.find(item => item.id === selectedFeatureId) ?? null : null;
+    setFeatureDraft(next ? structuredClone(next) : null);
+  }, [selectedFeatureId, details]);
+
+  async function refresh() {
+    await loadSpaces();
+    await loadDetails();
+  }
+
+  async function saveSpace() {
+    if (!spaceDraft) return;
+    try {
+      await api(`/projects/${projectId}/spatial-v3/spaces/${spaceDraft.id}`, { method: "PUT", body: JSON.stringify(spaceDraft) });
+      await refresh();
+    } catch (cause) { fail(String(cause)); }
+  }
+
+  async function createSpace() {
+    if (!createSpaceLocation) return;
+    const id = newId("space");
+    try {
+      await api(`/projects/${projectId}/spatial-v3/spaces/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          id,
+          project_id: projectId,
+          owner_location_id: createSpaceLocation,
+          navigation_mode: createSpaceMode,
+          base_travel_multiplier: 1,
+          bounds: null,
+          revision: 1,
+        }),
+      });
+      await api(`/projects/${projectId}/spatial-v3/locations/${createSpaceLocation}/binding`, {
+        method: "PUT",
+        body: JSON.stringify({
+          project_id: projectId,
+          location_id: createSpaceLocation,
+          navigation_space_id: id,
+          entrance_policy: createSpaceMode === "routed" ? "connectors" : "open",
+          bounds_mode: "independent",
+        }),
+      });
+      setCreateSpaceOpen(false);
+      await loadSpaces();
+      setSpaceId(id);
+    } catch (cause) { fail(String(cause)); }
+  }
+
+  async function materializeLegacy() {
+    try {
+      await api(`/projects/${projectId}/spatial-v3/materialize`, { method: "POST" });
+      await loadSpaces();
+    } catch (cause) { fail(String(cause)); }
+  }
+
+  function canvasPoint(clientX: number, clientY: number, element: SVGSVGElement): Point {
     const rect = element.getBoundingClientRect();
-    return {
-      x: clamp(round(((clientX - rect.left) / rect.width) * 100 / zoom)),
-      y: clamp(round(((clientY - rect.top) / rect.height) * 100 / zoom)),
-    };
+    return [
+      round(((clientX - rect.left) / rect.width) * 100),
+      round(((clientY - rect.top) / rect.height) * 100),
+    ];
   }
 
-  async function saveEnvironmentSettings(patch: Partial<EnvironmentSettings>) {
-    if (!environmentSettings) return;
-    try {
-      const next = await api<EnvironmentSettings>(`/projects/${projectId}/environment/settings`, {
-        method: "PUT",
-        body: JSON.stringify({
-          enabled: patch.enabled ?? environmentSettings.enabled,
-          ai_create_locations: patch.ai_create_locations ?? environmentSettings.ai_create_locations,
-          ai_propose_weather: patch.ai_propose_weather ?? environmentSettings.ai_propose_weather,
-          auto_generate_backgrounds: patch.auto_generate_backgrounds ?? environmentSettings.auto_generate_backgrounds,
-          background_workflow_id: patch.background_workflow_id !== undefined ? patch.background_workflow_id : environmentSettings.background_workflow_id,
-          initial_weather_id: patch.initial_weather_id ?? environmentSettings.initial_weather_id,
-          perception_stat_key: patch.perception_stat_key !== undefined ? patch.perception_stat_key : (environmentSettings.perception_stat_key ?? null),
-        }),
-      });
-      setEnvironmentSettings(next);
-    } catch (cause) {
-      fail(String(cause));
+  function updateFeatureVertex(index: number, point: Point) {
+    if (!featureDraft) return;
+    const geometry = structuredClone(featureDraft.geometry);
+    if (geometry.type === "Point") geometry.coordinates = point;
+    else if (geometry.type === "LineString") geometry.coordinates[index] = point;
+    else if (geometry.type === "Polygon") {
+      const ring = geometry.coordinates[0];
+      if (!ring?.length) return;
+      ring[index] = point;
+      if (index === 0) ring[ring.length - 1] = point;
+    } else return;
+    setFeatureDraft({ ...featureDraft, geometry });
+  }
+
+  function canvasPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (vertexDrag == null) return;
+    updateFeatureVertex(vertexDrag, canvasPoint(event.clientX, event.clientY, event.currentTarget));
+  }
+
+  function canvasClick(event: React.MouseEvent<SVGSVGElement>) {
+    if (tool === "select") return;
+    const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
+    if (tool === "spot") {
+      void createFeature("spot", [point]);
+      return;
     }
-  }
-
-  async function migrate() {
-    await api(`/projects/${projectId}/spatial/migrate`, { method: "POST" });
-    await load();
-  }
-
-  async function createRoot() {
-    const name = window.prompt("Root location name", "World")?.trim();
-    if (!name) return;
-    await api(`/projects/${projectId}/spatial/root`, {
-      method: "POST",
-      body: JSON.stringify({ name, topology: "closed", occupancy: "child_required", extend_scope: true }),
-    });
-    setLayerId(null);
-    await load();
-  }
-
-  async function createSpot(point: Point) {
-    if (!layerId) return;
-    const name = window.prompt("Spot name")?.trim();
-    if (!name) return;
-    await api(`/projects/${projectId}/environment/locations`, {
-      method: "POST",
-      body: JSON.stringify({
-        name,
-        parent_location_id: layerId,
-        exposure: locationDefaults.exposure,
-        description: "",
-        imagegen_description: "",
-        tags: [],
-        image_tags: [],
-        enabled: locationDefaults.enabled,
-        random_encounter: locationDefaults.randomEncounter,
-        hidden: locationDefaults.hidden,
-        discovered: locationDefaults.discovered,
-        x: point.x,
-        y: point.y,
-        topology: "closed",
-        occupancy: "direct_allowed",
-        boundary_access: "free",
-        spatial_kind: "spot",
-        priority_layer: 0,
-        minutes_per_unit: 1,
-        base_visibility_units: null,
-        encounter_rate: 0,
-        footprint: { location_id: layerId, kind: "point", points: [point] },
-        local_bounds: null,
-      }),
-    });
-    setTool("select");
-    await load();
-  }
-
-  async function finishArea(closed: boolean) {
-    if (!layerId || areaDraft.length < 2) return;
-    if (!closed) {
-      const name = window.prompt("Wall / barrier name", "Wall")?.trim();
-      if (!name) return;
-      await api(`/projects/${projectId}/spatial/barriers`, {
-        method: "PUT",
-        body: JSON.stringify({
-          location_id: layerId,
-          name,
-          blocked_modes: ["walk"],
-          geometry: { location_id: layerId, kind: "polyline", points: areaDraft },
-        }),
-      });
-    } else {
-      const name = window.prompt("Area name")?.trim();
-      if (!name) return;
-      const center = centroid(areaDraft);
-      await api(`/projects/${projectId}/environment/locations`, {
-        method: "POST",
-        body: JSON.stringify({
-          name,
-          parent_location_id: layerId,
-          exposure: locationDefaults.exposure,
-          description: "",
-          imagegen_description: "",
-          tags: [],
-          image_tags: [],
-          enabled: locationDefaults.enabled,
-          random_encounter: locationDefaults.randomEncounter,
-          hidden: locationDefaults.hidden,
-          discovered: locationDefaults.discovered,
-          x: round(center.x),
-          y: round(center.y),
-          topology: "open",
-          occupancy: "direct_allowed",
-          boundary_access: "free",
-          spatial_kind: "area",
-          priority_layer: 0,
-          minutes_per_unit: 1,
-          base_visibility_units: null,
-          encounter_rate: 0,
-          footprint: { location_id: layerId, kind: "polygon", points: areaDraft },
-          local_bounds: null,
-        }),
-      });
+    if (tool === "connector") {
+      setConnectorPoint(point);
+      setConnectorTargetSpace(spaces.find(item => item.id !== spaceId)?.id ?? spaceId);
+      setConnectorTargetPoint(point);
+      return;
     }
-    setAreaDraft([]);
-    setTool("select");
-    await load();
+    setDraftPoints(points => [...points, point]);
   }
 
-  async function saveLocationAmbient() {
-    if (!selectedLocation) return;
-    try {
-      const saved = await api<AmbientSoundSet[]>(
-        `/projects/${projectId}/environment/ambient/assignments/location/${selectedLocation.id}`,
-        {
-          method: "PUT",
-          body: JSON.stringify({ sets: ambientSets.filter(item => item.variant_ids.length) }),
-        },
-      );
-      setAmbientSets(saved.length ? saved : [emptyAmbientSet()]);
-      setAmbientSavedSnapshot(JSON.stringify(saved.length ? saved : [emptyAmbientSet()]));
-      const nextAmbient = await api<AmbientData>(`/projects/${projectId}/environment/ambient`);
-      setAmbient(nextAmbient);
-    } catch (cause) {
-      fail(String(cause));
-    }
-  }
-
-  async function saveLocation(value: EnvironmentLocation) {
-    if (!value.id) return;
-    await api(`/projects/${projectId}/environment/locations/${value.id}`, {
-      method: "PUT",
-      body: JSON.stringify(value),
-    });
-    await load();
-  }
-
-  function fallbackLocationPoint(entity: WorldEntity): Point {
-    const itemIndex = Math.max(0, map?.locations.findIndex(item => item.id === entity.id) ?? 0);
-    const points = geometryPoints(entity);
-    if (points.length) return centroid(points);
-    if (typeof entity.state.x === "number" && typeof entity.state.y === "number") {
-      return { x: Number(entity.state.x), y: Number(entity.state.y) };
-    }
-    return {
-      x: 12 + (itemIndex * 11) % 75,
-      y: 16 + (itemIndex * 9) % 68,
-    };
-  }
-
-  async function convertLocationKind(entity: WorldEntity, kind: "spot" | "area") {
-    const current = editorDraft?.id === entity.id ? editorDraft : locationDraft(entity);
-    if (current.spatial_kind === kind) return;
-    const points = geometryPoints(entity);
-    const center = points.length ? centroid(points) : fallbackLocationPoint(entity);
-    const next: EnvironmentLocation = {
-      ...current,
-      spatial_kind: kind,
-      x: round(center.x),
-      y: round(center.y),
-      footprint: kind === "area"
-        ? { location_id: layerId, kind: "polygon", points: triangleAt(center) }
-        : { location_id: layerId, kind: "point", points: [{ x: round(center.x), y: round(center.y) }] },
-    };
-    await saveLocation(next);
-    setEditorDraft(next);
-  }
-
-  async function deleteLocation(entity: WorldEntity) {
-    const confirmed = window.confirm(
-      `Delete "${entity.name}"? Connected map paths/endpoints will also be removed. Child locations and occupied locations must be cleared first.`
-    );
-    if (!confirmed) return;
-    await api(`/projects/${projectId}/environment/locations/${entity.id}`, { method: "DELETE" });
-    setSelectedId(null);
-    setEditorDraft(null);
-    await load();
-  }
-
-  async function deleteSpatialObject(kind: "anchor" | "barrier", id: string) {
-    await api(`/projects/${projectId}/spatial/${kind}/${id}`, { method: "DELETE" });
-    setSelectedId(null);
-    await load();
-  }
-
-  function routeEndpointOptions(point: Point): EndpointChoice[] {
-    if (!layerId || !world || !map) return [{
-      key: "coordinate",
-      kind: "coordinate",
-      label: `Free coordinates (${point.x}, ${point.y})`,
-      point,
-    }];
-    const options: EndpointChoice[] = [{
-      key: "coordinate",
-      kind: "coordinate",
-      label: `Free coordinates (${point.x}, ${point.y})`,
-      point,
-    }];
-    const areaEntities = map.locations
-      .map(item => world.entities[item.id])
-      .filter((item): item is WorldEntity => Boolean(item && item.kind === "location" && item.state.spatial_kind === "area"))
-      .sort(compareAreaPriority);
-
-    for (const entity of areaEntities) {
-      const points = geometryPoints(entity);
-      if (pointInPolygon(point, points)) {
-        const center = centroid(points);
-        options.push({
-          key: `area:${entity.id}`,
-          kind: "area",
-          targetId: entity.id,
-          label: `Inside area · ${entity.name} (priority ${areaPriority(entity)})`,
-          point,
-          offsetX: round(point.x - center.x),
-          offsetY: round(point.y - center.y),
-        });
-      }
-      const border = closestBorderPoint(point, points);
-      if (border && border.distance <= 2.2) {
-        options.push({
-          key: `area_border:${entity.id}`,
-          kind: "area_border",
-          targetId: entity.id,
-          label: `Area border · ${entity.name}`,
-          point: border.point,
-          segmentIndex: border.segmentIndex,
-          segmentT: border.segmentT,
-        });
-      }
-    }
-
-    for (const item of map.locations) {
-      const entity = world.entities[item.id];
-      if (!entity || entity.state.spatial_kind === "area") continue;
-      const points = geometryPoints(entity);
-      const spot = points[0] ?? { x: Number(item.x ?? entity.state.x ?? 0), y: Number(item.y ?? entity.state.y ?? 0) };
-      if (distance(point, spot) <= 2.6) {
-        options.push({
-          key: `spot:${entity.id}`,
-          kind: "spot",
-          targetId: entity.id,
-          label: `Spot · ${entity.name}`,
-          point: { x: round(spot.x), y: round(spot.y) },
-        });
-      }
-    }
-    return options;
-  }
-
-  function preferredEndpoint(options: EndpointChoice[]) {
-    return options.find(item => item.kind === "spot")
-      ?? options.find(item => item.kind === "area_border")
-      ?? options.find(item => item.kind === "area")
-      ?? options[0];
-  }
-
-  function beginRouteDialog(first: Point, second: Point) {
-    const firstOptions = routeEndpointOptions(first);
-    const secondOptions = routeEndpointOptions(second);
-    setRouteDialog({
-      points: [first, second],
-      options: [firstOptions, secondOptions],
-      selections: [preferredEndpoint(firstOptions).key, preferredEndpoint(secondOptions).key],
-      kind: connectionDefaults.kind,
-      travelMinutes: 0,
-      modes: "walk",
-      bidirectional: connectionDefaults.bidirectional,
-      enabled: connectionDefaults.enabled,
-      discovered: connectionDefaults.discovered,
-      hidden: connectionDefaults.hidden,
-    });
-  }
-
-  async function createConfiguredRoute() {
-    if (!routeDialog || !layerId) return;
-    const sourceChoice = routeDialog.options[0].find(item => item.key === routeDialog.selections[0]) ?? routeDialog.options[0][0];
-    const targetChoice = routeDialog.options[1].find(item => item.key === routeDialog.selections[1]) ?? routeDialog.options[1][0];
-    const choices: [EndpointChoice, EndpointChoice] = [sourceChoice, targetChoice];
-
-    const makeAnchor = async (choice: EndpointChoice, side: "A" | "B") => {
-      const target = choice.targetId ? world?.entities[choice.targetId] : null;
-      return api<{ id: string }>(`/projects/${projectId}/spatial/anchors`, {
-        method: "PUT",
-        body: JSON.stringify({
-          location_id: choice.targetId ?? layerId,
-          coordinate_space_id: layerId,
-          binding_kind: choice.kind,
-          binding_target_id: choice.targetId ?? null,
-          binding_offset_x: choice.offsetX ?? null,
-          binding_offset_y: choice.offsetY ?? null,
-          binding_segment_index: choice.segmentIndex ?? null,
-          binding_segment_t: choice.segmentT ?? null,
-          name: `${target?.name ?? currentLayer?.name ?? "Map"} route ${side}`,
-          kind: "waypoint",
-          x: choice.kind === "coordinate" ? choice.point.x : null,
-          y: choice.kind === "coordinate" ? choice.point.y : null,
-        }),
-      });
-    };
-
-    const sourceAnchor = await makeAnchor(choices[0], "A");
-    const targetAnchor = await makeAnchor(choices[1], "B");
-    const connection = await api<{ id: string }>(`/projects/${projectId}/spatial/connections`, {
-      method: "PUT",
-      body: JSON.stringify({
-        kind: routeDialog.kind,
-        source_anchor_id: sourceAnchor.id,
-        target_anchor_id: targetAnchor.id,
-        travel_minutes: Math.max(0, Math.round(routeDialog.travelMinutes)),
-        modes: routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean).length
-          ? routeDialog.modes.split(",").map(item => item.trim()).filter(Boolean)
-          : ["walk"],
-        bidirectional: routeDialog.bidirectional,
-        enabled: routeDialog.enabled,
-        discovered: routeDialog.discovered,
-        hidden: routeDialog.hidden,
-      }),
-    });
-    setRouteDialog(null);
-    setRoutePoints([]);
-    setTool("select");
-    setSelectedId(connection.id);
-    await load();
-  }
-
-  async function removeVertex(locationId: string, index: number) {
-    if (!world) return;
-    const entity = world.entities[locationId];
-    if (!entity) return;
-    const points = geometryPoints(entity);
-    if (points.length <= 2) return;
-    points.splice(index, 1);
-    const next = locationDraft(entity);
-    const center = centroid(points);
-    next.x = round(center.x);
-    next.y = round(center.y);
-    next.footprint = { location_id: layerId, kind: "polygon", points };
-    setVertexMenu(null);
-    await saveLocation(next);
-  }
-
-  async function createConnectedVertex() {
-    if (!vertexMenu || !world) return;
-    const entity = world.entities[vertexMenu.locationId];
-    if (!entity) return;
-    const points = geometryPoints(entity);
-    if (!points.length) return;
-    const point = points[vertexMenu.index];
-    const next = points[(vertexMenu.index + 1) % points.length];
-    const middle = { x: round((point.x + next.x) / 2), y: round((point.y + next.y) / 2) };
-    const { locationId, index } = vertexMenu;
-    setVertexMenu(null);
-    await insertVertex(locationId, index, middle);
-  }
-
-  async function saveConnection(connection: SpatialConnection) {
-    if (!connectionDraft) return;
-    await api(`/projects/${projectId}/spatial/connections`, {
-      method: "PUT",
-      body: JSON.stringify({
-        id: connection.id,
-        kind: connectionDraft.kind,
-        source_anchor_id: connection.source_anchor_id,
-        target_anchor_id: connection.target_anchor_id,
-        travel_minutes: Math.max(0, Math.round(connectionDraft.travelMinutes)),
-        modes: connectionDraft.modes.split(",").map(item => item.trim()).filter(Boolean).length
-          ? connectionDraft.modes.split(",").map(item => item.trim()).filter(Boolean)
-          : ["walk"],
-        bidirectional: connectionDraft.bidirectional,
-        requirements: connection.requirements ?? null,
-        lock: connectionDraft.locked ? {
-          locked: true,
-          minigame_key: connectionDraft.minigameKey || null,
-          difficulty: Math.max(0, Math.round(connectionDraft.difficulty)),
-          success_behavior: connection.lock?.success_behavior ?? "persistent",
-        } : null,
-        hidden: connectionDraft.hidden,
-        discovered: connectionDraft.discovered,
-        enabled: connectionDraft.enabled,
-      }),
-    });
-    await load();
-  }
-
-  async function deleteConnection(connection: SpatialConnection) {
-    await api(`/projects/${projectId}/spatial/connection/${connection.id}`, { method: "DELETE" });
-    for (const anchorId of [connection.source_anchor_id, connection.target_anchor_id]) {
-      await api(`/projects/${projectId}/spatial/anchor/${anchorId}`, { method: "DELETE" }).catch(() => undefined);
-    }
-    setSelectedId(null);
-    await load();
-  }
-
-  function chooseLocation(id: string) {
-    setSelectedId(id);
-  }
-
-  async function beginLocationDrag(event: ReactPointerEvent<HTMLElement>, id: string) {
-    if ((tool !== "drag" && tool !== "select") || !world || event.button !== 0) return;
-    event.stopPropagation();
-    const entity = world.entities[id];
-    if (!entity) return;
-    const host = event.currentTarget.closest(".location-map-canvas") as HTMLElement | null;
-    if (!host) return;
-    const start = canvasPoint(event.clientX, event.clientY, host);
-    const points = geometryPoints(entity);
-    const base = fallbackLocationPoint(entity);
-    setDragLocation({
+  async function createFeature(kind: FeatureKind, points = draftPoints) {
+    if (!spaceId) return;
+    if (kind === "surface" && points.length < 3) return;
+    if ((kind === "corridor" || kind === "barrier") && points.length < 2) return;
+    const id = newId(kind);
+    const properties = defaultProperties(kind);
+    let geometry: MapFeature["geometry"];
+    if (kind === "surface") {
+      const ring = [...points, points[0]];
+      geometry = { type: "Polygon", coordinates: [ring] };
+    } else if (kind === "spot") geometry = { type: "Point", coordinates: points[0] };
+    else geometry = { type: "LineString", coordinates: points };
+    const feature: MapFeature = {
       id,
-      start,
-      x: base.x,
-      y: base.y,
-      footprint: points,
-    });
-    setDragOffset({ x: 0, y: 0 });
-    event.currentTarget.setPointerCapture?.(event.pointerId);
-  }
-
-  async function finishLocationDrag() {
-    if (!dragLocation || !world) return;
-    const entity = world.entities[dragLocation.id];
-    if (!entity) return;
-    if (Math.abs(dragOffset.x) < .1 && Math.abs(dragOffset.y) < .1) {
-      setDragLocation(null);
-      setDragOffset({ x: 0, y: 0 });
-      return;
-    }
-    const next = locationDraft(entity);
-    next.x = clamp(round(dragLocation.x + dragOffset.x));
-    next.y = clamp(round(dragLocation.y + dragOffset.y));
-    if (dragLocation.footprint.length) {
-      next.footprint = {
-        location_id: layerId,
-        kind: next.spatial_kind === "area" ? "polygon" : "point",
-        points: dragLocation.footprint.map(point => ({
-          x: clamp(round(point.x + dragOffset.x)),
-          y: clamp(round(point.y + dragOffset.y)),
-        })),
-      };
-    } else {
-      // Legacy locations can exist without x/y or footprint geometry. Their
-      // first drag adopts the drop point as canonical map geometry.
-      const center = { x: next.x, y: next.y };
-      next.footprint = next.spatial_kind === "area"
-        ? { location_id: layerId, kind: "polygon", points: triangleAt(center) }
-        : { location_id: layerId, kind: "point", points: [center] };
-    }
-    const footprint = next.footprint;
-    setDragLocation(null);
-    setDragOffset({ x: 0, y: 0 });
-    if (!footprint) return;
-    await api(`/projects/${projectId}/spatial/locations/${entity.id}/placement`, {
-      method: "PUT",
-      body: JSON.stringify({
-        x: next.x,
-        y: next.y,
-        spatial_kind: next.spatial_kind,
-        footprint,
-      }),
-    });
-    await load();
-  }
-
-  async function finishVertexDrag() {
-    if (!vertexDrag || !vertexPreview || !world) return;
-    const entity = world.entities[vertexDrag.locationId];
-    if (!entity) return;
-    const points = geometryPoints(entity);
-    if (!points[vertexDrag.index]) return;
-    points[vertexDrag.index] = vertexPreview;
-    const next = locationDraft(entity);
-    const center = centroid(points);
-    next.x = round(center.x);
-    next.y = round(center.y);
-    next.footprint = { location_id: layerId, kind: "polygon", points };
-    setVertexDrag(null);
-    setVertexPreview(null);
-    await saveLocation(next);
-  }
-
-  async function insertVertex(locationId: string, index: number, point: Point) {
-    if (!world) return;
-    const entity = world.entities[locationId];
-    if (!entity) return;
-    const points = geometryPoints(entity);
-    points.splice(index + 1, 0, point);
-    const next = locationDraft(entity);
-    const center = centroid(points);
-    next.x = round(center.x);
-    next.y = round(center.y);
-    next.footprint = { location_id: layerId, kind: "polygon", points };
-    await saveLocation(next);
-  }
-
-  async function generateBackground(customPrompt: boolean, asset?: MediaAsset | null) {
-    if (!selectedLocation) return;
-    const workflowId = environmentSettings?.background_workflow_id;
-    if (!workflowId) {
-      fail("Choose a background workflow in Environment settings before generating location images.");
-      return;
-    }
-    const fallback = String(selectedLocation.state.imagegen_description || selectedLocation.state.description || selectedLocation.name);
-    const prompt = customPrompt ? window.prompt("Background prompt", asset?.prompt || fallback)?.trim() : (asset?.prompt || fallback).trim();
-    if (!prompt) return;
-    setImageBusy(true);
+      project_id: projectId,
+      navigation_space_id: spaceId,
+      semantic_location_id: null,
+      feature_kind: kind,
+      name: kind[0].toUpperCase() + kind.slice(1),
+      geometry,
+      render_layer: defaultLayer(kind),
+      render_order: 0,
+      movement_priority: kind === "corridor" ? 10 : 0,
+      hidden: false,
+      discovered: true,
+      enabled: true,
+      metadata: {},
+      properties,
+    };
     try {
-      let mediaId = asset?.id;
-      if (!mediaId) {
-        const created = await api<{ media_asset_id: string }>(
-          `/projects/${projectId}/environment/locations/${selectedLocation.id}/backgrounds`,
-          {
-            method: "POST",
-            body: JSON.stringify({ prompt, negative_prompt: "", weather_id: backgroundWeatherId || null, time_phase_id: backgroundTimePhaseId || null }),
-          },
-        );
-        mediaId = created.media_asset_id;
-      }
-      await api(`/media-assets/${mediaId}/generate`, {
+      await api(`/projects/${projectId}/spatial-v3/features/${id}`, { method: "PUT", body: JSON.stringify(feature) });
+      setDraftPoints([]);
+      setTool("select");
+      await loadDetails();
+      setSelectedFeatureId(id);
+    } catch (cause) { fail(String(cause)); }
+  }
+
+  async function createConnector() {
+    if (!connectorPoint || !spaceId || !connectorTargetSpace) return;
+    const id = newId("connector");
+    const feature: MapFeature = {
+      id,
+      project_id: projectId,
+      navigation_space_id: spaceId,
+      semantic_location_id: null,
+      feature_kind: "connector",
+      name: "Connector",
+      geometry: { type: "Point", coordinates: connectorPoint },
+      render_layer: "connections",
+      render_order: 0,
+      movement_priority: 100,
+      hidden: false,
+      discovered: true,
+      enabled: true,
+      metadata: {},
+      properties: {
+        ...defaultProperties("connector"),
+        source: { navigation_space_id: spaceId, point: connectorPoint },
+        target: { navigation_space_id: connectorTargetSpace, point: connectorTargetPoint },
+      },
+    };
+    try {
+      await api(`/projects/${projectId}/spatial-v3/features/${id}`, { method: "PUT", body: JSON.stringify(feature) });
+      setConnectorPoint(null);
+      setTool("select");
+      await loadDetails();
+      setSelectedFeatureId(id);
+    } catch (cause) { fail(String(cause)); }
+  }
+
+  async function saveFeature() {
+    if (!featureDraft) return;
+    try {
+      await api(`/projects/${projectId}/spatial-v3/features/${featureDraft.id}`, { method: "PUT", body: JSON.stringify(featureDraft) });
+      await loadDetails();
+    } catch (cause) { fail(String(cause)); }
+  }
+
+  async function deleteFeature() {
+    if (!featureDraft) return;
+    try {
+      await api(`/projects/${projectId}/spatial-v3/features/${featureDraft.id}`, { method: "DELETE" });
+      setSelectedFeatureId(null);
+      await loadDetails();
+    } catch (cause) { fail(String(cause)); }
+  }
+
+  function openPreset(key = presets[0]?.key ?? "open_region") {
+    setPresetKey(key);
+    setPresetParams({
+      ...presetDefaults(key),
+      semantic_location_id: spaces.find(item => item.id === spaceId)?.owner_location_id ?? "",
+      target_space_id: spaces.find(item => item.id !== spaceId)?.id ?? "",
+    });
+    setPresetOpen(true);
+  }
+
+  async function applyPreset() {
+    if (!spaceId || !presetKey) return;
+    try {
+      await api(`/projects/${projectId}/spatial-v3/presets/${presetKey}/apply`, {
         method: "POST",
         body: JSON.stringify({
-          workflow_preset_id: workflowId,
-          prompt,
-          negative_prompt: asset?.negative_prompt ?? "",
-          width: null,
-          height: null,
+          navigation_space_id: spaceId,
+          ...presetParams,
         }),
       });
-      await loadBackgrounds(selectedLocation.id);
-      if (mediaId) setBackgroundSelection(mediaId);
-    } finally {
-      setImageBusy(false);
-    }
+      setPresetOpen(false);
+      await refresh();
+    } catch (cause) { fail(String(cause)); }
   }
 
-  async function uploadBackground(file: File) {
-    if (!selectedLocation) return;
-    const form = new FormData();
-    form.append("file", file);
-    const conditions = new URLSearchParams({ kind: "location" });
-    if (backgroundSelection === "new" && backgroundWeatherId) conditions.set("weather_id", backgroundWeatherId);
-    if (backgroundSelection === "new" && backgroundTimePhaseId) conditions.set("time_phase_id", backgroundTimePhaseId);
-    setImageBusy(true);
+  async function saveLayer(layer: NavigationLayer) {
     try {
-      const created = await api<MediaAsset>(`/entities/${selectedLocation.id}/media/upload?${conditions.toString()}`, { method: "POST", body: form });
-      await loadBackgrounds(selectedLocation.id);
-      setBackgroundSelection(created.id);
-    } finally {
-      setImageBusy(false);
-    }
+      await api(`/projects/${projectId}/spatial-v3/spaces/${spaceId}/layers/${layer.layer_key}`, {
+        method: "PUT",
+        body: JSON.stringify(layer),
+      });
+      await loadDetails();
+    } catch (cause) { fail(String(cause)); }
   }
 
-  async function deleteBackground(asset: MediaAsset) {
-    if (!selectedLocation) return;
-    await api(`/media-assets/${asset.id}`, { method: "DELETE" });
-    setBackgroundSelection("new");
-    setBackgroundWeatherId("");
-    setBackgroundTimePhaseId("");
-    await loadBackgrounds(selectedLocation.id);
+  async function saveEncounter() {
+    if (!encounterDraft) return;
+    try {
+      await api(`/projects/${projectId}/spatial-v3/encounters/${encounterDraft.id}`, {
+        method: "PUT",
+        body: JSON.stringify(encounterDraft),
+      });
+      setEncounterDraft(null);
+      await loadDetails();
+    } catch (cause) { fail(String(cause)); }
   }
 
-  function renderedGeometryPoints(entity?: WorldEntity | null): Point[] {
-    if (!entity) return [];
-    const points = geometryPoints(entity).map(point => ({ ...point }));
-    if (dragLocation?.id === entity.id) {
-      return points.map(point => ({
-        x: clamp(round(point.x + dragOffset.x)),
-        y: clamp(round(point.y + dragOffset.y)),
-      }));
-    }
-    if (vertexDrag?.locationId === entity.id && vertexPreview && points[vertexDrag.index]) {
-      points[vertexDrag.index] = vertexPreview;
-    }
-    return points;
+  async function deleteEncounter(policy: EncounterPolicy) {
+    try {
+      await api(`/projects/${projectId}/spatial-v3/encounters/${policy.id}`, { method: "DELETE" });
+      await loadDetails();
+    } catch (cause) { fail(String(cause)); }
   }
 
-  function resolvedAnchorPoint(anchor?: SpatialAnchor | null): Point | null {
-    if (!anchor) return null;
-    const fallback = anchor.x != null && anchor.y != null ? { x: Number(anchor.x), y: Number(anchor.y) } : null;
-    if (!anchor.binding_target_id || !anchor.binding_kind || anchor.binding_kind === "coordinate" || !world) return fallback;
-    const target = world.entities[anchor.binding_target_id];
-    if (!target) return fallback;
-    const points = renderedGeometryPoints(target);
+  const visibleFeatures = useMemo(() => {
+    const visibility = new Map((details?.layers ?? []).map(layer => [layer.layer_key, layer.visible]));
+    return (details?.features ?? []).filter(feature => feature.enabled && visibility.get(feature.render_layer) !== false);
+  }, [details]);
 
-    if (anchor.binding_kind === "spot") {
-      if (points.length) return points[0];
-      if (typeof target.state.x === "number" && typeof target.state.y === "number") {
-        const offset = dragLocation?.id === target.id ? dragOffset : { x: 0, y: 0 };
-        return { x: round(target.state.x + offset.x), y: round(target.state.y + offset.y) };
-      }
-      return fallback;
-    }
-
-    if (anchor.binding_kind === "area" && points.length) {
-      const center = centroid(points);
-      if (typeof anchor.binding_offset_x === "number" && typeof anchor.binding_offset_y === "number") {
-        return {
-          x: round(center.x + anchor.binding_offset_x),
-          y: round(center.y + anchor.binding_offset_y),
-        };
-      }
-      return fallback;
-    }
-
-    if (anchor.binding_kind === "area_border" && points.length >= 2) {
-      const index = anchor.binding_segment_index;
-      const ratio = anchor.binding_segment_t;
-      if (typeof index === "number" && typeof ratio === "number") {
-        const left = points[index % points.length];
-        const right = points[(index + 1) % points.length];
-        return {
-          x: round(left.x + (right.x - left.x) * ratio),
-          y: round(left.y + (right.y - left.y) * ratio),
-        };
-      }
-      if (fallback) return closestBorderPoint(fallback, points)?.point ?? fallback;
-    }
-    return fallback;
+  if (!spaces.length) {
+    return <div className="page">
+      <header className="page-header"><p className="eyebrow">SPATIAL V3</p><h1>Map editor</h1><p>No branch-authoritative navigation spaces exist yet.</p></header>
+      <Paper className="panel" sx={{ p: 2 }}>
+        <h2>Start Spatial V3</h2>
+        <p>The old map is no longer edited directly. Materialize it into surfaces, corridors, barriers, connectors and navigation spaces, or create a clean V3 space.</p>
+        {migration && <pre style={{ maxHeight: 220, overflow: "auto" }}>{JSON.stringify(migration.counts ?? migration, null, 2)}</pre>}
+        <Stack direction="row" spacing={1}>
+          <Button variant="contained" onClick={() => void materializeLegacy()}>Materialize legacy map</Button>
+          <Button onClick={() => { setCreateSpaceLocation(locations[0]?.id ?? ""); setCreateSpaceOpen(true); }}>Create blank space</Button>
+        </Stack>
+      </Paper>
+      {renderCreateSpaceDialog()}
+    </div>;
   }
 
-  function hitCandidates(point: Point): HitCandidate[] {
-    if (!map || !world) return [];
-    const candidates: HitCandidate[] = [];
-    for (const item of map.locations) {
-      const entity = world.entities[item.id];
-      if (!entity) continue;
-      const points = renderedGeometryPoints(entity);
-      if (entity.state.spatial_kind === "area") {
-        const border = closestBorderPoint(point, points);
-        if (pointInPolygon(point, points) || (border && border.distance <= 1.8)) {
-          candidates.push({ id: item.id, label: item.name, detail: "area" });
-        }
-      } else {
-        const spot = points[0] ?? { x: Number(item.x ?? entity.state.x ?? 0), y: Number(item.y ?? entity.state.y ?? 0) };
-        if (distance(point, spot) <= 2.7) candidates.push({ id: item.id, label: item.name, detail: "spot" });
-      }
-    }
-    for (const anchor of map.anchors) {
-      if ((anchor.binding_kind ?? "coordinate") !== "coordinate") continue;
-      const anchorPoint = resolvedAnchorPoint(anchor);
-      if (anchorPoint && distance(point, anchorPoint) <= 2.2) {
-        candidates.push({ id: anchor.id, label: anchor.name, detail: "coordinate endpoint" });
-      }
-    }
-    for (const connection of map.connections) {
-      const source = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.source_anchor_id));
-      const target = resolvedAnchorPoint(map.anchors.find(anchor => anchor.id === connection.target_anchor_id));
-      if (source && target && distanceToSegment(point, source, target) <= 1.4) {
-        const label = connectionKindLabel(connection.kind);
-        candidates.push({ id: connection.id, label, detail: "connection" });
-      }
-    }
-    for (const barrier of map.barriers) {
-      const points = barrier.geometry?.points ?? [];
-      if (points.some((segmentStart, index) =>
-        index < points.length - 1 && distanceToSegment(point, segmentStart, points[index + 1]) <= 1.4
-      )) {
-        candidates.push({ id: barrier.id, label: barrier.name, detail: "barrier" });
-      }
-    }
-    return candidates;
-  }
-
-  function openShiftHitMenu(event: MouseEvent<HTMLDivElement>) {
-    if (!event.shiftKey) return;
-    event.preventDefault();
-    event.stopPropagation();
-    const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
-    const candidates = hitCandidates(point);
-    if (candidates.length === 1) {
-      setSelectedId(candidates[0].id);
-      setHitMenu(null);
-      return;
-    }
-    if (candidates.length > 1) {
-      setHitMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, candidates });
-    }
-  }
-
-  function canvasClick(event: MouseEvent<HTMLDivElement>) {
-    if (tool !== "route" && event.target !== event.currentTarget && (event.target as HTMLElement).closest("button")) return;
-    const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
-    if (tool === "spot") void createSpot(point);
-    if (tool === "route") {
-      if (routePoints.length === 0) setRoutePoints([point]);
-      else {
-        beginRouteDialog(routePoints[0], point);
-        setRoutePoints([]);
-      }
-    }
-    if (tool === "area") {
-      if (areaDraft.length >= 3 && distance(point, areaDraft[0]) < 2.5) {
-        void finishArea(true);
-      } else {
-        setAreaDraft(current => [...current, point]);
-      }
-    }
-  }
-
-  function changeTool(next: Tool) {
-    setTool(next);
-    setAreaDraft([]);
-    setRoutePoints([]);
-    setRouteDialog(null);
-    setDragLocation(null);
-    setVertexDrag(null);
-  }
-
-  const areaContents = useMemo(() => {
-    const result: Record<string, SpatialLocation[]> = {};
-    if (!map || !world) return result;
-    for (const area of map.locations) {
-      const entity = world.entities[area.id];
-      if (!entity || entity.state.spatial_kind !== "area") continue;
-      result[area.id] = Object.values(world.entities)
-        .filter(item =>
-          item.kind === "location"
-          && !item.state.archived
-          && String(item.state.parent_location_id || "") === area.id
-        )
-        .map(item => ({
-          id: item.id,
-          name: item.name,
-          parent_location_id: area.id,
-          spatial_kind: item.state.spatial_kind === "area" ? "area" : "spot",
-          priority_layer: Number(item.state.priority_layer ?? 0),
-          x: typeof item.state.x === "number" ? item.state.x : null,
-          y: typeof item.state.y === "number" ? item.state.y : null,
-        }))
-        .sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : left.id < right.id ? -1 : 1);
-    }
-    return result;
-  }, [map, world]);
-
-  if (!map) return <p>Loading location map…</p>;
-  if (!map.enabled) {
-    return <Paper className="panel">
-      <h2>Location Map</h2>
-      <p>Create a root to enable mapping and travel. Weather, time, ambient sound, and music remain available without one.</p>
-      <Button onClick={() => void migrate()}>Adopt existing locations</Button>
-      <Button onClick={() => void createRoot()}>Create world root</Button>
-    </Paper>;
-  }
-
-  const parentId = String(currentLayer?.state.parent_location_id || "");
-  const anchors = new Map(map.anchors.map(anchor => [anchor.id, anchor]));
-  const localBoundsRaw = currentLayer?.state.local_bounds as Geometry | null | undefined;
-  const localBoundsPoints = Array.isArray(localBoundsRaw?.points) ? localBoundsRaw.points : [];
-  const priorityOrderedAreas = map.locations
-    .filter(item => world?.entities[item.id]?.state.spatial_kind === "area")
-    .sort((left, right) => {
-      const leftEntity = world?.entities[left.id];
-      const rightEntity = world?.entities[right.id];
-      if (!leftEntity || !rightEntity) return 0;
-      return compareAreaPriority(rightEntity, leftEntity);
-    });
-  const ambientDirty = JSON.stringify(ambientSets) !== ambientSavedSnapshot;
-  const updateAmbientSet = (index: number, patch: Partial<AmbientSoundSet>) =>
-    setAmbientSets(current => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item));
-  const ambientVariantsFor = (ids: string[]) => ambient.variants.filter(item => ids.includes(item.id));
-  const ambientSoundPicker = (item: AmbientSoundSet, index: number, label: string) => <BoxedMultiselectFilter
-    label={label}
-    tooltipLabel="ambient sounds"
-    options={ambient.variants}
-    value={ambientVariantsFor(item.variant_ids)}
-    getOptionSecondaryText={(variant: AmbientVariant) => `${variant.playback_rate}× · gain ${variant.default_gain}${!variant.available ? " · missing" : !variant.enabled ? " · disabled" : ""}`}
-    getOptionDisabled={(variant: AmbientVariant) => (!variant.enabled || !variant.available) && !item.variant_ids.includes(variant.id)}
-    onChange={(_event, next) => {
-      const variant_ids = next.map((variant: AmbientVariant) => variant.id);
-      if (index >= 0) updateAmbientSet(index, { variant_ids });
-      else setAmbientSets(current => [{ ...item, variant_ids }, ...current]);
-    }}
-  />;
-
-  const renderAmbientEditor = () => {
-    if (!selectedLocation || !environmentSettings) return null;
-    const baseIndex = ambientSets.findIndex(item => item.selector_type === "default" && !item.weather_id && !item.time_phase_id);
-    const base = baseIndex >= 0 ? ambientSets[baseIndex] : emptyAmbientSet();
-    const custom = ambientSets.map((item, index) => ({ item, index })).filter(({ index }) => index !== baseIndex);
-    return <section className="location-map-ambient-editor">
-      <div className="location-map-section-heading">
-        <div><p className="eyebrow">AMBIENCE</p><h4>Location sound sets</h4></div>
-        <Chip size="small" label={ambientDirty ? "Unsaved" : "Saved"} />
-      </div>
-      <p className="location-map-ambient-help">The toolbar preview resolves these draft sets immediately against the selected weather and time. You do not need to save before listening.</p>
-      {ambientSoundPicker(base, baseIndex, "Default ambient sounds")}
-      {custom.map(({ item, index }) => <div className="location-map-ambient-set" key={`${index}-${item.selector_type}`}>
-        <div className="location-map-ambient-condition-row">
-          <TextField
-            select
-            size="small"
-            label="Applies in"
-            value={item.selector_type}
-            onChange={event => updateAmbientSet(index, { selector_type: event.target.value as AmbientSoundSet["selector_type"], selector_value: null })}
-          >
-            <MenuItem value="default">Every exposure</MenuItem>
-            <MenuItem value="outdoor">Outdoor</MenuItem>
-            <MenuItem value="indoor">Indoor</MenuItem>
-            <MenuItem value="isolated">Sealed</MenuItem>
-            <MenuItem value="tag">Location tag</MenuItem>
-          </TextField>
-          {item.selector_type === "tag" && <TextField
-            size="small"
-            label="Location tag"
-            value={item.selector_value ?? ""}
-            onChange={event => updateAmbientSet(index, { selector_value: event.target.value })}
-          />}
-          <TextField
-            select
-            size="small"
-            label="Weather"
-            value={item.weather_id ?? ""}
-            onChange={event => updateAmbientSet(index, { weather_id: event.target.value || null })}
-          >
-            <MenuItem value="">Any weather</MenuItem>
-            {environmentSettings.weather.map(weather => <MenuItem key={weather.id} value={weather.id}>{weather.name}</MenuItem>)}
-          </TextField>
-          <TextField
-            select
-            size="small"
-            label="Time"
-            value={item.time_phase_id ?? ""}
-            onChange={event => updateAmbientSet(index, { time_phase_id: event.target.value || null })}
-          >
-            <MenuItem value="">Any time</MenuItem>
-            {environmentSettings.time_phases.map(phase => <MenuItem key={phase.id} value={phase.id}>{phase.name}</MenuItem>)}
-          </TextField>
-          <Button color="error" size="small" onClick={() => setAmbientSets(current => current.filter((_, itemIndex) => itemIndex !== index))}>Remove</Button>
-        </div>
-        {ambientSoundPicker(item, index, "Sounds")}
-      </div>)}
-      <div className="location-map-ambient-actions">
-        <Button size="small" onClick={() => setAmbientSets(current => [...current, emptyAmbientSet()])}>Add conditional sound set</Button>
-        <span />
-        <Button
-          size="small"
-          disabled={!ambientDirty}
-          onClick={() => {
-            const saved = ambientSetsFor(ambient.assignments, selectedLocation.id);
-            setAmbientSets(saved);
-            setAmbientSavedSnapshot(JSON.stringify(saved));
-          }}
-        >Reset ambience</Button>
-        <Button size="small" variant="contained" disabled={!ambientDirty} onClick={() => void saveLocationAmbient()}>Save ambience</Button>
-      </div>
-    </section>;
-  };
-
-  const toolLabels: Array<{ id: Tool; label: string }> = [
-    { id: "select", label: "Select" },
-    { id: "drag", label: "Drag" },
-    { id: "spot", label: "New Spot" },
-    { id: "area", label: "New Area" },
-    { id: "route", label: "New Route" },
-    { id: "edit", label: "Edit Positions" },
-  ];
-
-  return <div className="location-map-v2">
-    <header className="location-map-header">
-      <div className="location-map-heading">
-        <div>
-          <p className="eyebrow">ENVIRONMENT & MAP</p>
-          <h2>{currentLayer?.name ?? "Environment & Map"}</h2>
-        </div>
-        <Chip size="small" label={`${map.topology ?? "closed"} layer`} />
-      </div>
-      <div className="location-map-breadcrumbs">
-        <Button size="small" disabled={!parentId} onClick={() => parentId && setLayerId(parentId)}>↑ Up</Button>
-        {breadcrumbs.map((item, index) => <span key={item.id}>
-          {index > 0 && <b>›</b>}
-          <Button size="small" onClick={() => setLayerId(item.id)}>{item.name}</Button>
-        </span>)}
-      </div>
-      <div className="location-map-quick-settings">
-        {(tool === "spot" || tool === "area") ? <>
-          <span className="location-map-quick-label">{tool === "spot" ? "New spot defaults" : "New area defaults"}</span>
-          <TextField
-            select
-            size="small"
-            label="Exposure"
-            value={locationDefaults.exposure}
-            onChange={event => setLocationDefaults({ ...locationDefaults, exposure: event.target.value as EnvironmentLocation["exposure"] })}
-          >
-            <MenuItem value="outdoor">Outdoor</MenuItem>
-            <MenuItem value="indoor">Indoor</MenuItem>
-            <MenuItem value="isolated">Sealed / isolated</MenuItem>
-          </TextField>
-          <FormControlLabel control={<Switch size="small" checked={locationDefaults.enabled} onChange={event => setLocationDefaults({ ...locationDefaults, enabled: event.target.checked })} />} label="Enabled" />
-          <FormControlLabel control={<Switch size="small" checked={locationDefaults.discovered} onChange={event => setLocationDefaults({ ...locationDefaults, discovered: event.target.checked })} />} label="Discovered" />
-          <FormControlLabel control={<Switch size="small" checked={locationDefaults.hidden} onChange={event => setLocationDefaults({ ...locationDefaults, hidden: event.target.checked })} />} label="Hidden" />
-          <FormControlLabel control={<Switch size="small" checked={locationDefaults.randomEncounter} onChange={event => setLocationDefaults({ ...locationDefaults, randomEncounter: event.target.checked })} />} label="Random encounter" />
-        </> : tool === "route" ? <>
-          <span className="location-map-quick-label">New connection defaults</span>
-          <TextField
-            select
-            size="small"
-            label="Type"
-            value={connectionDefaults.kind}
-            onChange={event => setConnectionDefaults({ ...connectionDefaults, kind: event.target.value as SpatialConnection["kind"] })}
-          >
-            <MenuItem value="route">Route / shortcut</MenuItem>
-            <MenuItem value="door">Door</MenuItem>
-            <MenuItem value="portal">Portal / teleporter</MenuItem>
-          </TextField>
-          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.bidirectional} onChange={event => setConnectionDefaults({ ...connectionDefaults, bidirectional: event.target.checked })} />} label="Bidirectional" />
-          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.enabled} onChange={event => setConnectionDefaults({ ...connectionDefaults, enabled: event.target.checked })} />} label="Enabled" />
-          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.discovered} onChange={event => setConnectionDefaults({ ...connectionDefaults, discovered: event.target.checked })} />} label="Discovered" />
-          <FormControlLabel control={<Switch size="small" checked={connectionDefaults.hidden} onChange={event => setConnectionDefaults({ ...connectionDefaults, hidden: event.target.checked })} />} label="Hidden" />
-        </> : <span className="location-map-quick-hint">
-          {tool === "select" ? "Select mode · drag location labels to move them · Shift-click overlaps to choose an object" : tool === "edit" ? "Edit geometry · drag vertices or right-click them for point actions" : "Map authoring"}
-        </span>}
-      </div>
-      <div className="location-map-toolbar">
-        <ButtonGroup size="small">
-          {toolLabels.map(item => <Button
-            key={item.id}
-            variant={tool === item.id ? "contained" : "outlined"}
-            onClick={() => changeTool(item.id)}
-          >{item.label}</Button>)}
-        </ButtonGroup>
-        <span className="location-map-toolbar-spacer" />
-        <TextField
-          select
-          size="small"
-          label="Weather"
-          value={previewWeatherId}
-          onChange={event => setPreviewWeatherId(event.target.value)}
-          className="location-map-preview-select"
-        >
-          {environmentSettings?.weather.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+  function renderCreateSpaceDialog() {
+    return <Dialog open={createSpaceOpen} onClose={() => setCreateSpaceOpen(false)} maxWidth="sm" fullWidth>
+      <DialogTitle>Create navigation space</DialogTitle>
+      <DialogContent><Stack spacing={2} sx={{ mt: 1 }}>
+        <TextField select label="Semantic owner location" value={createSpaceLocation} onChange={event => setCreateSpaceLocation(event.target.value)}>
+          {locations.map(location => <MenuItem key={location.id} value={location.id}>{location.name}</MenuItem>)}
         </TextField>
-        <TextField
-          select
-          size="small"
-          label="Time of day"
-          value={previewTimePhaseId}
-          onChange={event => setPreviewTimePhaseId(event.target.value)}
-          className="location-map-preview-select"
-        >
-          {environmentSettings?.time_phases.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+        <TextField select label="Navigation mode" value={createSpaceMode} onChange={event => setCreateSpaceMode(event.target.value as "free" | "routed")}>
+          <MenuItem value="free">FREE — unassigned space is traversable</MenuItem>
+          <MenuItem value="routed">ROUTED — only authored surfaces/corridors are traversable</MenuItem>
         </TextField>
-        <FormControlLabel
-          className="location-map-sound-toggle"
-          control={<Switch
-            size="small"
-            checked={soundPreviewEnabled}
-            disabled={!selectedLocation}
-            onChange={event => setSoundPreviewEnabled(event.target.checked)}
-          />}
-          label={soundPreviewEnabled ? `Sound · ${previewAmbient.length}` : "Toggle sound"}
-        />
-        <Button size="small" variant="outlined" onClick={() => setEnvironmentSettingsOpen(true)}>Environment settings</Button>
-        {tool === "area" && areaDraft.length >= 2 && <Button size="small" onClick={() => void finishArea(false)}>
-          Finish as wall
-        </Button>}
-        {tool === "area" && areaDraft.length >= 2 && <Button size="small" variant="outlined" onClick={() => void finishArea(true)}>
-          Close as area
-        </Button>}
-        {tool === "area" && areaDraft.length > 0 && <Button size="small" onClick={() => setAreaDraft([])}>Cancel drawing</Button>}
-        <TextField
-          select
-          size="small"
-          label="Zoom"
-          value={zoom}
-          onChange={event => setZoom(Number(event.target.value))}
-          className="location-map-zoom"
-        >
-          {[.5, .75, 1, 1.25, 1.5, 2].map(value => <MenuItem key={value} value={value}>{Math.round(value * 100)}%</MenuItem>)}
-        </TextField>
-      </div>
+      </Stack></DialogContent>
+      <DialogActions><Button onClick={() => setCreateSpaceOpen(false)}>Cancel</Button><Button variant="contained" onClick={() => void createSpace()}>Create</Button></DialogActions>
+    </Dialog>;
+  }
+
+  return <div className="page">
+    <header className="page-header">
+      <div><p className="eyebrow">SPATIAL V3</p><h1>Navigation map</h1><p>Semantic locations and traversal geometry are separate. Overlapping surfaces/corridors remain simultaneously active.</p></div>
     </header>
 
-    <div className="location-map-body">
-      <div
-        ref={canvasRef}
-        className={`location-map-canvas tool-${tool}`}
-        onClickCapture={openShiftHitMenu}
-        onClick={canvasClick}
-        onPointerMove={event => {
-          const point = canvasPoint(event.clientX, event.clientY, event.currentTarget);
-          if (dragLocation) {
-            setDragOffset({
-              x: round(point.x - dragLocation.start.x),
-              y: round(point.y - dragLocation.start.y),
-            });
-          }
-          if (vertexDrag) setVertexPreview(point);
-        }}
-        onPointerUp={() => {
-          if (dragLocation) void finishLocationDrag();
-          if (vertexDrag) void finishVertexDrag();
-        }}
-      >
-        <div className="location-map-world" style={{ transform: `scale(${zoom})` }}>
-          <svg className="location-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {localBoundsPoints.length >= 3
-              ? <polygon
-                  points={localBoundsPoints.map(point => `${point.x},${point.y}`).join(" ")}
-                  className="location-map-space-boundary"
-                />
-              : localBoundsPoints.length === 2
-                ? <polyline
-                    points={localBoundsPoints.map(point => `${point.x},${point.y}`).join(" ")}
-                    className="location-map-space-boundary"
-                  />
-                : <rect x=".45" y=".45" width="99.1" height="99.1" className="location-map-space-boundary" />}
-            {priorityOrderedAreas.map(item => {
-              const entity = world?.entities[item.id];
-              const points = geometryPoints(entity);
-              if (points.length < 2) return null;
-              const offset = dragLocation?.id === item.id ? dragOffset : { x: 0, y: 0 };
-              const rendered = points.map(point => ({
-                x: clamp(point.x + offset.x),
-                y: clamp(point.y + offset.y),
-              }));
-              return rendered.length >= 3
-                ? <polygon
-                    key={item.id}
-                    points={rendered.map(point => `${point.x},${point.y}`).join(" ")}
-                    className={`location-map-area${selectedId === item.id ? " selected" : ""}`}
-                  />
-                : <polyline
-                    key={item.id}
-                    points={rendered.map(point => `${point.x},${point.y}`).join(" ")}
-                    className={`location-map-area degenerate${selectedId === item.id ? " selected" : ""}`}
-                  />;
+    <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center" sx={{ mb: 2 }}>
+      <TextField select size="small" label="Navigation space" value={spaceId} onChange={event => { setSpaceId(event.target.value); setSelectedFeatureId(null); }}>
+        {spaces.map(space => <MenuItem key={space.id} value={space.id}>{locationName(world, space.owner_location_id)} · {space.navigation_mode}</MenuItem>)}
+      </TextField>
+      <Button onClick={() => { setCreateSpaceLocation(locations[0]?.id ?? ""); setCreateSpaceOpen(true); }}>New space</Button>
+      <Button variant="outlined" onClick={() => openPreset()}>Apply preset</Button>
+      {spaceDraft && <Chip label={spaceDraft.navigation_mode === "free" ? "FREE map" : "ROUTED map"} color={spaceDraft.navigation_mode === "free" ? "success" : "warning"}/>}
+    </Stack>
+
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 390px", gap: 16, alignItems: "start" }}>
+      <Stack spacing={1.5}>
+        <Paper className="panel" sx={{ p: 1.5 }}>
+          <Stack direction="row" spacing={1} flexWrap="wrap" alignItems="center">
+            <ButtonGroup size="small">
+              {(["select", "surface", "corridor", "barrier", "spot", "connector"] as Tool[]).map(value =>
+                <Button key={value} variant={tool === value ? "contained" : "outlined"} onClick={() => { setTool(value); setDraftPoints([]); }}>{value}</Button>
+              )}
+            </ButtonGroup>
+            {draftPoints.length > 0 && <>
+              <Chip label={`${draftPoints.length} point${draftPoints.length === 1 ? "" : "s"}`}/>
+              {(tool === "surface" && draftPoints.length >= 3 || (tool === "corridor" || tool === "barrier") && draftPoints.length >= 2) &&
+                <Button variant="contained" onClick={() => void createFeature(tool as FeatureKind)}>Finish</Button>}
+              <Button onClick={() => setDraftPoints([])}>Cancel drawing</Button>
+            </>}
+          </Stack>
+        </Paper>
+
+        <Paper className="panel" sx={{ p: 1, overflow: "hidden" }}>
+          <svg
+            viewBox="0 0 100 100"
+            onClick={canvasClick}
+            onPointerMove={canvasPointerMove}
+            onPointerUp={() => setVertexDrag(null)}
+            onPointerLeave={() => setVertexDrag(null)}
+            style={{ width: "100%", aspectRatio: "1.6", background: "var(--surface, #16191f)", cursor: vertexDrag != null ? "grabbing" : tool === "select" ? "default" : "crosshair", display: "block", touchAction: "none" }}
+          >
+            <defs>
+              <pattern id="v3grid" width="5" height="5" patternUnits="userSpaceOnUse"><path d="M 5 0 L 0 0 0 5" fill="none" stroke="currentColor" strokeOpacity=".08" strokeWidth=".2"/></pattern>
+            </defs>
+            <rect width="100" height="100" fill="url(#v3grid)"/>
+            {visibleFeatures.map(feature => {
+              const selected = feature.id === selectedFeatureId;
+              const rendered = selected && featureDraft ? featureDraft : feature;
+              const common = { onClick: (event: React.MouseEvent) => { event.stopPropagation(); setTool("select"); setSelectedFeatureId(feature.id); } };
+              if (rendered.geometry.type === "Polygon") {
+                const points = (rendered.geometry.coordinates[0] ?? []).map(point => point.join(",")).join(" ");
+                return <polygon key={feature.id} {...common} points={points} fill={selected ? "rgba(255,255,255,.24)" : "rgba(255,255,255,.11)"} stroke="currentColor" strokeWidth={selected ? .8 : .35}/>;
+              }
+              if (rendered.geometry.type === "LineString") {
+                const points = rendered.geometry.coordinates.map(point => point.join(",")).join(" ");
+                const width = rendered.feature_kind === "corridor" ? Math.max(.8, Number(rendered.properties.width ?? 4)) : rendered.feature_kind === "barrier" ? 1 : .7;
+                return <polyline key={feature.id} {...common} points={points} fill="none" stroke="currentColor" strokeOpacity={selected ? 1 : .7} strokeWidth={selected ? width + .5 : width} strokeLinecap="round" strokeLinejoin="round"/>;
+              }
+              if (rendered.geometry.type === "Point") {
+                const [x, y] = rendered.geometry.coordinates;
+                return <g key={feature.id} {...common}><circle cx={x} cy={y} r={selected ? 2.1 : 1.5} fill="currentColor"/>{rendered.name && <text x={x + 2} y={y - 2} fontSize="2.2" fill="currentColor">{rendered.name}</text>}</g>;
+              }
+              return null;
             })}
-            {map.barriers.map(item => item.geometry?.points?.length ? <polyline
-              key={item.id}
-              points={item.geometry.points.map(point => `${point.x},${point.y}`).join(" ")}
-              className={`location-map-barrier${item.hidden ? " hidden" : ""}`}
-            /> : null)}
-            {map.connections.map(item => {
-              const source = resolvedAnchorPoint(anchors.get(item.source_anchor_id));
-              const target = resolvedAnchorPoint(anchors.get(item.target_anchor_id));
-              if (!source || !target) return null;
-              return <g key={item.id}>
-                <line
-                  x1={source.x}
-                  y1={source.y}
-                  x2={target.x}
-                  y2={target.y}
-                  className="location-map-connection-hitbox"
-                  onClick={event => {
-                    event.stopPropagation();
-                    setSelectedId(item.id);
-                  }}
-                />
-                <line
-                  x1={source.x}
-                  y1={source.y}
-                  x2={target.x}
-                  y2={target.y}
-                  className={`location-map-connection ${item.kind}${selectedId === item.id ? " selected" : ""}`}
-                  onClick={event => {
-                    event.stopPropagation();
-                    setSelectedId(item.id);
-                  }}
-                />
-              </g>;
-            })}
-            {areaDraft.length > 1 && <polyline
-              points={areaDraft.map(point => `${point.x},${point.y}`).join(" ")}
-              className="location-map-draft"
-            />}
-            {routePoints.length === 1 && <circle cx={routePoints[0].x} cy={routePoints[0].y} r="1.1" className="location-map-route-draft-point" />}
+            {featureDraft && featureDraft.geometry.type !== "MultiLineString" && featureDraft.geometry.type !== "MultiPolygon" && featurePoints(featureDraft)
+              .filter((_point, index) => featureDraft.geometry.type !== "Polygon" || index < featurePoints(featureDraft).length - 1)
+              .map((point, index) => <circle
+                key={`handle-${index}`}
+                cx={point[0]}
+                cy={point[1]}
+                r="1.15"
+                fill="var(--background, #111)"
+                stroke="currentColor"
+                strokeWidth=".45"
+                style={{ cursor: "grab" }}
+                onClick={event => event.stopPropagation()}
+                onPointerDown={event => { event.stopPropagation(); (event.currentTarget as SVGCircleElement).setPointerCapture(event.pointerId); setVertexDrag(index); }}
+              />)}
+            {draftPoints.length > 0 && <>
+              <polyline points={draftPoints.map(point => point.join(",")).join(" ")} fill={tool === "surface" ? "rgba(255,255,255,.08)" : "none"} stroke="currentColor" strokeDasharray="1 1" strokeWidth=".5"/>
+              {draftPoints.map((point, index) => <circle key={index} cx={point[0]} cy={point[1]} r=".8" fill="currentColor"/>)}
+            </>}
           </svg>
+        </Paper>
 
-          {map.locations.map((item, index) => {
-            const entity = world?.entities[item.id];
-            const points = geometryPoints(entity);
-            const base = points.length
-              ? centroid(points)
-              : { x: Number(item.x ?? 12 + (index * 11) % 75), y: Number(item.y ?? 16 + (index * 9) % 68) };
-            const offset = dragLocation?.id === item.id ? dragOffset : { x: 0, y: 0 };
-            const point = { x: clamp(base.x + offset.x), y: clamp(base.y + offset.y) };
-            return <button
-              key={item.id}
-              className={`location-map-node ${entity?.state.spatial_kind === "area" ? "area-node" : "spot-node"}${selectedId === item.id ? " selected" : ""}`}
-              style={{ left: `${point.x}%`, top: `${point.y}%` }}
-              onClick={event => {
-                if (tool === "route") return;
-                event.stopPropagation();
-                chooseLocation(item.id);
-              }}
-              onDoubleClick={event => {
-                event.stopPropagation();
-                if (tool === "select") setLayerId(item.id);
-              }}
-              onPointerDown={event => void beginLocationDrag(event, item.id)}
-            >
-              <b>{item.name}</b>
-              <small>
-                {item.spatial_kind ?? "spot"}
-                {entity?.state.spatial_kind === "area" ? ` · p${areaPriority(entity)} · ${areaContents[item.id]?.length ?? 0} inside` : ""}
-                {entity?.state.parent_location_id ? "" : " · root"}
-              </small>
-              {entity?.state.spatial_kind === "area" && (areaContents[item.id]?.length ?? 0) > 0 && <span className="location-map-node-contents">
-                {areaContents[item.id].slice(0, 3).map(child => child.name).join(" · ")}
-                {areaContents[item.id].length > 3 ? ` +${areaContents[item.id].length - 3}` : ""}
-              </span>}
-            </button>;
-          })}
+        <Paper className="panel" sx={{ p: 2 }}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center"><h2 style={{ margin: 0 }}>Layers</h2><small>Rendering only; not feature types.</small></Stack>
+          <Stack spacing={1} sx={{ mt: 1 }}>
+            {(details?.layers ?? []).map(layer => <Stack key={layer.layer_key} direction="row" spacing={1} alignItems="center">
+              <FormControlLabel control={<Switch checked={layer.visible} onChange={event => void saveLayer({ ...layer, visible: event.target.checked })}/>} label={layer.label}/>
+              <TextField select size="small" label="Labels" value={layer.labels_mode} onChange={event => void saveLayer({ ...layer, labels_mode: event.target.value as LabelsMode })}>
+                {(["hidden", "important", "all"] as LabelsMode[]).map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+              </TextField>
+            </Stack>)}
+          </Stack>
+        </Paper>
 
-          {map.anchors.map((item, index) => {
-            if ((item.binding_kind ?? "coordinate") !== "coordinate") return null;
-            const point = resolvedAnchorPoint(item) ?? {
-              x: Number(item.x ?? 8 + (index * 8) % 80),
-              y: Number(item.y ?? 12 + (index * 7) % 75),
-            };
-            return <button
-              key={item.id}
-              className={`location-map-anchor ${item.kind}${selectedId === item.id ? " selected" : ""}`}
-              style={{ left: `${point.x}%`, top: `${point.y}%` }}
-              title={item.name}
-              onClick={event => {
-                if (tool === "route") return;
-                event.stopPropagation();
-                setSelectedId(item.id);
-              }}
-            >{item.kind === "entrance" || item.kind === "exit" ? "▮" : "◇"}</button>;
-          })}
+        <Paper className="panel" sx={{ p: 2 }}>
+          <Stack direction="row" justifyContent="space-between" alignItems="center">
+            <div><h2 style={{ margin: 0 }}>Encounter policies</h2><small>Space or feature scoped; evaluated through Rules V2.</small></div>
+            <Button onClick={() => setEncounterDraft({
+              id: newId("encounter"), project_id: projectId, navigation_space_id: spaceId, feature_id: null,
+              mode: "augment", priority: 0, trigger_kind: "distance", rate_per_100_units: 1,
+              probability_per_transition: null, minimum_distance: 0, candidates: [], conditions: null, enabled: true,
+            })}>Add</Button>
+          </Stack>
+          <Stack spacing={1} sx={{ mt: 1 }}>{(details?.encounter_policies ?? []).map(policy => <Paper key={policy.id} variant="outlined" sx={{ p: 1 }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center"><div><b>{policy.id}</b><div><small>{policy.trigger_kind} · {policy.mode} · {policy.feature_id ? `feature ${policy.feature_id}` : "space"}</small></div></div><div><Button size="small" onClick={() => setEncounterDraft(structuredClone(policy))}>Edit</Button><Button size="small" color="error" onClick={() => void deleteEncounter(policy)}>Delete</Button></div></Stack>
+          </Paper>)}</Stack>
+        </Paper>
+      </Stack>
 
-          {tool === "edit" && map.locations.flatMap(item => {
-            const entity = world?.entities[item.id];
-            const points = geometryPoints(entity);
-            if (points.length < 2) return [];
-            return points.flatMap((point, index) => {
-              const next = points[(index + 1) % points.length];
-              const shownPoint = vertexDrag?.locationId === item.id && vertexDrag.index === index && vertexPreview ? vertexPreview : point;
-              const middle = { x: (point.x + next.x) / 2, y: (point.y + next.y) / 2 };
-              return [
-                <button
-                  key={`${item.id}:vertex:${index}`}
-                  className="location-map-vertex"
-                  style={{ left: `${shownPoint.x}%`, top: `${shownPoint.y}%` }}
-                  title="Drag vertex"
-                  onPointerDown={event => {
-                    if (event.button !== 0) return;
-                    event.stopPropagation();
-                    setSelectedId(item.id);
-                    setVertexDrag({ locationId: item.id, index });
-                    setVertexPreview(point);
-                    event.currentTarget.setPointerCapture?.(event.pointerId);
-                  }}
-                  onContextMenu={event => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setSelectedId(item.id);
-                    setVertexMenu({ mouseX: event.clientX + 2, mouseY: event.clientY - 6, locationId: item.id, index });
-                  }}
-                />,
-                <button
-                  key={`${item.id}:mid:${index}`}
-                  className="location-map-midpoint"
-                  style={{ left: `${middle.x}%`, top: `${middle.y}%` }}
-                  title="Add vertex"
-                  onClick={event => {
-                    event.stopPropagation();
-                    void insertVertex(item.id, index, middle);
-                  }}
-                />,
-              ];
-            });
-          })}
-
-          {areaDraft.map((point, index) => <span
-            key={`draft-${index}`}
-            className="location-map-draft-point"
-            style={{ left: `${point.x}%`, top: `${point.y}%` }}
-          />)}
-        </div>
-      </div>
-
-      <aside className="location-map-inspector">
-        {selectedLocation && editorDraft ? <>
-          <section className="location-map-inspector-heading">
-            <div>
-              <p className="eyebrow">LOCATION</p>
-              <h3>{selectedLocation.name}</h3>
-            </div>
-            <Chip size="small" label={editorDraft.spatial_kind} />
-          </section>
-
-          <section className="location-map-background-manager">
-            <div className="location-map-section-heading">
-              <div><p className="eyebrow">BACKGROUNDS</p><h4>Scene image variants</h4></div>
-              <Chip size="small" label={backgrounds.length} />
-            </div>
-            <TextField
-              select
-              size="small"
-              label="Background variant"
-              value={backgroundSelection}
-              onChange={event => {
-                const value = event.target.value;
-                setBackgroundSelection(value);
-                if (value === "new") {
-                  setBackgroundWeatherId("");
-                  setBackgroundTimePhaseId("");
-                }
-              }}
-            >
-              <MenuItem value="new">+ New background variant</MenuItem>
-              {backgrounds.map(row => {
-                const weather = environmentSettings?.weather.find(item => item.id === row.weather_id)?.name ?? "Any weather";
-                const phase = environmentSettings?.time_phases.find(item => item.id === row.time_phase_id)?.name ?? "Any time";
-                return <MenuItem key={row.media_asset_id} value={row.media_asset_id}>{weather} · {phase}</MenuItem>;
-              })}
+      <Stack spacing={1.5}>
+        {spaceDraft && <Paper className="panel" sx={{ p: 2 }}>
+          <h2>Space</h2>
+          <TextField select fullWidth size="small" label="Semantic owner" value={spaceDraft.owner_location_id ?? ""} onChange={event => setSpaceDraft({ ...spaceDraft, owner_location_id: event.target.value || null })}>
+            <MenuItem value="">None</MenuItem>{locations.map(location => <MenuItem key={location.id} value={location.id}>{location.name}</MenuItem>)}
+          </TextField>
+          <Stack direction="row" spacing={1} sx={{ mt: 1 }}>
+            <TextField select fullWidth size="small" label="Mode" value={spaceDraft.navigation_mode} onChange={event => setSpaceDraft({ ...spaceDraft, navigation_mode: event.target.value as "free" | "routed" })}>
+              <MenuItem value="free">FREE</MenuItem><MenuItem value="routed">ROUTED</MenuItem>
             </TextField>
-            <div className="location-map-two-column">
-              <TextField
-                select
-                size="small"
-                label="Weather"
-                disabled={backgroundSelection !== "new"}
-                value={backgroundWeatherId}
-                onChange={event => setBackgroundWeatherId(event.target.value)}
-              >
-                <MenuItem value="">Any weather</MenuItem>
-                {environmentSettings?.weather.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
-              </TextField>
-              <TextField
-                select
-                size="small"
-                label="Time"
-                disabled={backgroundSelection !== "new"}
-                value={backgroundTimePhaseId}
-                onChange={event => setBackgroundTimePhaseId(event.target.value)}
-              >
-                <MenuItem value="">Any time</MenuItem>
-                {environmentSettings?.time_phases.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
-              </TextField>
-            </div>
-            <small>{backgroundSelection === "new" ? "Generate or upload a new condition-specific background." : "Select New background variant to create a different weather/time image."}</small>
-          </section>
+            <TextField fullWidth size="small" type="number" label="Base travel multiplier" value={spaceDraft.base_travel_multiplier} onChange={event => setSpaceDraft({ ...spaceDraft, base_travel_multiplier: Math.max(.01, Number(event.target.value) || 1) })}/>
+          </Stack>
+          <Button sx={{ mt: 1 }} variant="contained" onClick={() => void saveSpace()}>Save space</Button>
+        </Paper>}
 
-          <EntityImageSurface
-            asset={backgroundAsset}
-            alt={`${selectedLocation.name} background`}
-            className="location-map-background-surface"
-            placeholder="Background"
-            onGenerate={() => void generateBackground(false, null)}
-            onGenerateWithPrompt={() => void generateBackground(true, null)}
-            onRegenerate={asset => void generateBackground(false, asset)}
-            onRegenerateWithPrompt={asset => void generateBackground(true, asset)}
-            onDelete={asset => void deleteBackground(asset)}
-            onUpload={file => void uploadBackground(file)}
-            loading={imageBusy}
-            loadingLabel="Working on background…"
-          />
+        {featureDraft ? <Paper className="panel" sx={{ p: 2 }}>
+          <Stack direction="row" justifyContent="space-between"><div><p className="eyebrow">{featureDraft.feature_kind}</p><h2>{featureDraft.name || featureDraft.id}</h2></div><Button color="error" onClick={() => void deleteFeature()}>Delete</Button></Stack>
+          <Stack spacing={1.2}>
+            <TextField size="small" label="Name" value={featureDraft.name} onChange={event => setFeatureDraft({ ...featureDraft, name: event.target.value })}/>
+            <TextField select size="small" label="Semantic location" value={featureDraft.semantic_location_id ?? ""} onChange={event => setFeatureDraft({ ...featureDraft, semantic_location_id: event.target.value || null })}>
+              <MenuItem value="">None</MenuItem>{locations.map(location => <MenuItem key={location.id} value={location.id}>{location.name}</MenuItem>)}
+            </TextField>
+            <Stack direction="row" spacing={1}>
+              <TextField select fullWidth size="small" label="Render layer" value={featureDraft.render_layer} onChange={event => setFeatureDraft({ ...featureDraft, render_layer: event.target.value as RenderLayer })}>{renderLayers.map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>
+              <TextField fullWidth size="small" type="number" label="Render order" value={featureDraft.render_order} onChange={event => setFeatureDraft({ ...featureDraft, render_order: Number(event.target.value) })}/>
+            </Stack>
+            <TextField size="small" type="number" label="Movement priority" value={featureDraft.movement_priority} onChange={event => setFeatureDraft({ ...featureDraft, movement_priority: Number(event.target.value) })}/>
+            <Stack direction="row" flexWrap="wrap">
+              <FormControlLabel control={<Switch checked={featureDraft.enabled} onChange={event => setFeatureDraft({ ...featureDraft, enabled: event.target.checked })}/>} label="Enabled"/>
+              <FormControlLabel control={<Switch checked={featureDraft.discovered} onChange={event => setFeatureDraft({ ...featureDraft, discovered: event.target.checked })}/>} label="Discovered"/>
+              <FormControlLabel control={<Switch checked={featureDraft.hidden} onChange={event => setFeatureDraft({ ...featureDraft, hidden: event.target.checked })}/>} label="Hidden"/>
+            </Stack>
 
-          <div className="location-map-inspector-form">
-            <TextField
-              size="small"
-              label="Name"
-              value={editorDraft.name}
-              onChange={event => setEditorDraft({ ...editorDraft, name: event.target.value })}
-            />
-            <TextField
-              size="small"
-              multiline
-              minRows={3}
-              label="Description"
-              value={editorDraft.description}
-              onChange={event => setEditorDraft({ ...editorDraft, description: event.target.value })}
-            />
-            <TextField
-              size="small"
-              multiline
-              minRows={2}
-              label="Image generation description"
-              value={editorDraft.imagegen_description}
-              onChange={event => setEditorDraft({ ...editorDraft, imagegen_description: event.target.value })}
-            />
-            <TextField
-              size="small"
-              label="Tags"
-              helperText="Comma separated"
-              value={editorDraft.tags.join(", ")}
-              onChange={event => setEditorDraft({ ...editorDraft, tags: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })}
-            />
-            <TextField
-              size="small"
-              label="Image tags"
-              helperText="Comma separated; used for generation and later media search."
-              value={editorDraft.image_tags.join(", ")}
-              onChange={event => setEditorDraft({ ...editorDraft, image_tags: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })}
-            />
-            <TextField
-              select
-              size="small"
-              label="Parent location"
-              value={editorDraft.parent_location_id ?? ""}
-              onChange={event => setEditorDraft({ ...editorDraft, parent_location_id: event.target.value || null })}
-            >
-              <MenuItem value="">No parent</MenuItem>
-              {Object.values(world?.entities ?? {})
-                .filter(item => item.kind === "location" && item.id !== selectedLocation.id && !item.state.archived)
-                .map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
-            </TextField>
-            <TextField
-              select
-              size="small"
-              label="Map representation"
-              helperText="Canonical backend type: spot or area."
-              value={editorDraft.spatial_kind}
-              onChange={event => void convertLocationKind(selectedLocation, event.target.value as "spot" | "area")}
-            >
-              <MenuItem value="spot">Spot</MenuItem>
-              <MenuItem value="area">Area</MenuItem>
-            </TextField>
-            <div className="location-map-two-column">
-              <TextField select size="small" label="Topology" value={editorDraft.topology} onChange={event => setEditorDraft({ ...editorDraft, topology: event.target.value as EnvironmentLocation["topology"] })}>
-                <MenuItem value="open">Open</MenuItem>
-                <MenuItem value="closed">Closed / routed</MenuItem>
-              </TextField>
-              <TextField select size="small" label="Occupancy" value={editorDraft.occupancy} onChange={event => setEditorDraft({ ...editorDraft, occupancy: event.target.value as EnvironmentLocation["occupancy"] })}>
-                <MenuItem value="direct_allowed">Direct occupancy allowed</MenuItem>
-                <MenuItem value="child_required">Child required</MenuItem>
-              </TextField>
-              <TextField select size="small" label="Boundary access" value={editorDraft.boundary_access} onChange={event => setEditorDraft({ ...editorDraft, boundary_access: event.target.value as EnvironmentLocation["boundary_access"] })}>
-                <MenuItem value="free">Free boundary</MenuItem>
-                <MenuItem value="connection_required">Connection required</MenuItem>
-              </TextField>
-              <TextField select size="small" label="Exposure" value={editorDraft.exposure} onChange={event => setEditorDraft({ ...editorDraft, exposure: event.target.value as EnvironmentLocation["exposure"] })}>
-                <MenuItem value="indoor">Indoor</MenuItem>
-                <MenuItem value="outdoor">Outdoor</MenuItem>
-                <MenuItem value="isolated">Isolated</MenuItem>
-              </TextField>
-              <TextField size="small" type="number" label="Minutes per map unit" value={editorDraft.minutes_per_unit} onChange={event => setEditorDraft({ ...editorDraft, minutes_per_unit: Number(event.target.value) })} />
-              <TextField size="small" type="number" label="Visibility radius" value={editorDraft.base_visibility_units ?? ""} onChange={event => setEditorDraft({ ...editorDraft, base_visibility_units: event.target.value === "" ? null : Number(event.target.value) })} />
-              <TextField size="small" type="number" label="Encounter rate" value={editorDraft.encounter_rate} onChange={event => setEditorDraft({ ...editorDraft, encounter_rate: Number(event.target.value) })} />
-              {editorDraft.spatial_kind === "area" && <TextField
-                size="small"
-                type="number"
-                label="Priority layer"
-                helperText="Lower wins overlaps; ties use raw name, then id."
-                value={editorDraft.priority_layer}
-                onChange={event => setEditorDraft({ ...editorDraft, priority_layer: Number(event.target.value) })}
-              />}
-            </div>
-            <div className="location-map-switches">
-              <FormControlLabel control={<Switch size="small" checked={editorDraft.enabled} onChange={event => setEditorDraft({ ...editorDraft, enabled: event.target.checked })} />} label="Enabled" />
-              <FormControlLabel control={<Switch size="small" checked={editorDraft.discovered} onChange={event => setEditorDraft({ ...editorDraft, discovered: event.target.checked })} />} label="Discovered" />
-              <FormControlLabel control={<Switch size="small" checked={editorDraft.hidden} onChange={event => setEditorDraft({ ...editorDraft, hidden: event.target.checked })} />} label="Hidden" />
-              <FormControlLabel control={<Switch size="small" checked={editorDraft.random_encounter} onChange={event => setEditorDraft({ ...editorDraft, random_encounter: event.target.checked })} />} label="Random encounter" />
-            </div>
-          </div>
-          {renderAmbientEditor()}
-          {editorDraft.spatial_kind === "area" && <section className="location-map-contents">
-            <div className="location-map-contents-heading">
-              <div><p className="eyebrow">CONTENTS</p><h4>Resolved contents</h4></div>
-              <Chip size="small" label={areaContents[selectedLocation.id]?.length ?? 0} />
-            </div>
-            {(areaContents[selectedLocation.id] ?? []).length
-              ? (areaContents[selectedLocation.id] ?? []).map(item => <div className="location-map-content-row" key={item.id}>
-                  <span><b>{item.name}</b><small>{item.spatial_kind ?? "spot"}</small></span>
-                  <small>Read only · double-click area to enter</small>
-                </div>)
-              : <p className="location-map-content-empty">No child locations are configured inside this area.</p>}
-          </section>}
-          <div className="location-map-inspector-actions">
-            <FavoriteLibraryButton projectId={projectId} sourceKind="location" sourceKey={selectedLocation.id} compact={false} />
-            <Button color="error" onClick={() => void deleteLocation(selectedLocation)}>Delete location</Button>
-            <Button onClick={() => setEditorDraft(locationDraft(selectedLocation))}>Reset</Button>
-            <Button variant="contained" onClick={() => void saveLocation(editorDraft)}>Save</Button>
-          </div>
-        </> : selectedConnection && connectionDraft ? <>
-          <section className="location-map-inspector-heading">
-            <div><p className="eyebrow">CONNECTION</p><h3>{connectionKindLabel(selectedConnection.kind)}</h3><small>backend kind: <code>{selectedConnection.kind}</code></small></div>
-            <Chip size="small" label={connectionDraft.bidirectional ? "two-way" : "one-way"} />
-          </section>
-          <div className="location-map-route-endpoints">
-            {([
-              ["A", anchors.get(selectedConnection.source_anchor_id)],
-              ["B", anchors.get(selectedConnection.target_anchor_id)],
-            ] as const).map(([side, anchor]) => <div className="location-map-route-endpoint" key={side}>
-              <b>Endpoint {side}</b>
-              <span>{anchor?.name ?? "Missing anchor"}</span>
-              <small>{(anchor?.binding_kind ?? "coordinate").replaceAll("_", " ")}{anchor?.binding_target_id && world?.entities[anchor.binding_target_id] ? ` · ${world.entities[anchor.binding_target_id].name}` : ""}</small>
-              {anchor?.x != null && anchor?.y != null && <small>{round(anchor.x)}, {round(anchor.y)}</small>}
-            </div>)}
-          </div>
-          <div className="location-map-inspector-form">
-            <TextField
-              select
-              size="small"
-              label="Connection type"
-              value={connectionDraft.kind}
-              onChange={event => setConnectionDraft({ ...connectionDraft, kind: event.target.value as SpatialConnection["kind"] })}
-            >
-              <MenuItem value="route">Route / shortcut</MenuItem>
-              <MenuItem value="door">Door</MenuItem>
-              <MenuItem value="portal">Portal / teleporter</MenuItem>
-            </TextField>
-            <TextField size="small" type="number" label="Travel minutes" value={connectionDraft.travelMinutes} onChange={event => setConnectionDraft({ ...connectionDraft, travelMinutes: Number(event.target.value) })} />
-            <TextField size="small" label="Travel modes" helperText="Comma separated, e.g. walk, fly" value={connectionDraft.modes} onChange={event => setConnectionDraft({ ...connectionDraft, modes: event.target.value })} />
-            <div className="location-map-switches">
-              <FormControlLabel control={<Switch size="small" checked={connectionDraft.bidirectional} onChange={event => setConnectionDraft({ ...connectionDraft, bidirectional: event.target.checked })} />} label="Bidirectional" />
-              <FormControlLabel control={<Switch size="small" checked={connectionDraft.enabled} onChange={event => setConnectionDraft({ ...connectionDraft, enabled: event.target.checked })} />} label="Enabled" />
-              <FormControlLabel control={<Switch size="small" checked={connectionDraft.discovered} onChange={event => setConnectionDraft({ ...connectionDraft, discovered: event.target.checked })} />} label="Discovered" />
-              <FormControlLabel control={<Switch size="small" checked={connectionDraft.hidden} onChange={event => setConnectionDraft({ ...connectionDraft, hidden: event.target.checked })} />} label="Hidden" />
-              <FormControlLabel control={<Switch size="small" checked={connectionDraft.locked} onChange={event => setConnectionDraft({ ...connectionDraft, locked: event.target.checked })} />} label="Locked" />
-            </div>
-            {connectionDraft.locked && <div className="location-map-two-column">
-              <TextField size="small" label="Lock minigame" value={connectionDraft.minigameKey} onChange={event => setConnectionDraft({ ...connectionDraft, minigameKey: event.target.value })} />
-              <TextField size="small" type="number" label="Difficulty" value={connectionDraft.difficulty} onChange={event => setConnectionDraft({ ...connectionDraft, difficulty: Number(event.target.value) })} />
-            </div>}
-          </div>
-          <div className="location-map-object-summary">
-            <p><b>Source owner</b><span>{world?.entities[selectedConnection.source_location_id ?? ""]?.name ?? selectedConnection.source_location_id ?? "Map"}</span></p>
-            <p><b>Target owner</b><span>{world?.entities[selectedConnection.target_location_id ?? ""]?.name ?? selectedConnection.target_location_id ?? "Map"}</span></p>
-            <small>Endpoint bindings preserve whether each point is free, inside an area, on an area border, or attached to a spot.</small>
-          </div>
-          <div className="location-map-inspector-actions">
-            <Button color="error" onClick={() => void deleteConnection(selectedConnection)}>Delete connection</Button>
-            <Button variant="contained" onClick={() => void saveConnection(selectedConnection)}>Save route</Button>
-          </div>
-        </> : selectedSpatial ? <>
-          <section className="location-map-inspector-heading">
-            <div><p className="eyebrow">MAP OBJECT</p><h3>{"name" in selectedSpatial ? selectedSpatial.name : selectedSpatial.kind}</h3></div>
-          </section>
-          <div className="location-map-object-summary">
-            {"kind" in selectedSpatial && <p><b>Type</b><span>{selectedSpatial.kind}</span></p>}
-            {"blocked_modes" in selectedSpatial && <p><b>Blocks</b><span>{String((selectedSpatial as SpatialBarrier).blocked_modes ?? "walk")}</span></p>}
-            {"binding_kind" in selectedSpatial && <p><b>Binding</b><span>{String((selectedSpatial as SpatialAnchor).binding_kind ?? "coordinate").replaceAll("_", " ")}</span></p>}
-          </div>
-          <div className="location-map-inspector-actions">
-            {"blocked_modes" in selectedSpatial && <Button color="error" onClick={() => void deleteSpatialObject("barrier", selectedSpatial.id)}>Delete barrier</Button>}
-            {"binding_kind" in selectedSpatial && <Button color="error" onClick={() => void deleteSpatialObject("anchor", selectedSpatial.id)}>Delete endpoint</Button>}
-          </div>
-        </> : <>
-          <section className="location-map-inspector-heading">
-            <div><p className="eyebrow">INSPECTOR</p><h3>Nothing selected</h3></div>
-          </section>
-          <div className="location-map-empty">
-            <p>Click a spot or area to edit it.</p>
-            <p>Double-click a location to enter its child layer.</p>
-            <p>Parent/child hierarchy is separate from map geometry: children are shown on their parent layer, not drawn inside the parent's polygon.</p>
-          </div>
-        </>}
-
-        <section className="location-map-validation">
-          <h4>Validation</h4>
-          {validation.length
-            ? validation.map(message => <p key={message}>⚠ {message}</p>)
-            : <p>No structural issues detected in this layer.</p>}
-        </section>
-      </aside>
+            {featureDraft.feature_kind === "corridor" && <TextField size="small" type="number" label="Width" value={featureDraft.properties.width ?? 4} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, width: Math.max(.1, Number(event.target.value) || 1) } })}/>}
+            {(featureDraft.feature_kind === "surface" || featureDraft.feature_kind === "corridor") && <TextField size="small" label="Ambience tags" value={formatCsv(featureDraft.properties.ambience_tags)} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, ambience_tags: parseCsv(event.target.value) } })}/>}
+            {featureDraft.feature_kind === "surface" && <TextField size="small" label="Environment tags" value={formatCsv(featureDraft.properties.environment_tags)} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, environment_tags: parseCsv(event.target.value) } })}/>}
+            {featureDraft.feature_kind === "spot" && <TextField size="small" label="Interaction kind" value={featureDraft.properties.interaction_kind ?? "generic"} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, interaction_kind: event.target.value } })}/>}
+            {featureDraft.feature_kind === "connector" && <>
+              <TextField select size="small" label="Connector kind" value={featureDraft.properties.connector_kind ?? "generic"} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, connector_kind: event.target.value } })}>{connectorKinds.map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>
+              <TextField select size="small" label="Target space" value={featureDraft.properties.target?.navigation_space_id ?? ""} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, target: { ...featureDraft.properties.target, navigation_space_id: event.target.value } } })}>{spaces.map(space => <MenuItem key={space.id} value={space.id}>{locationName(world, space.owner_location_id)}</MenuItem>)}</TextField>
+              <Stack direction="row" spacing={1}><TextField size="small" type="number" label="Target X" value={featureDraft.properties.target?.point?.[0] ?? 0} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, target: { ...featureDraft.properties.target, point: [Number(event.target.value), featureDraft.properties.target?.point?.[1] ?? 0] } } })}/><TextField size="small" type="number" label="Target Y" value={featureDraft.properties.target?.point?.[1] ?? 0} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, target: { ...featureDraft.properties.target, point: [featureDraft.properties.target?.point?.[0] ?? 0, Number(event.target.value)] } } })}/></Stack>
+              <TextField size="small" type="number" label="Travel minutes override" value={featureDraft.properties.travel_minutes ?? ""} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, travel_minutes: event.target.value === "" ? null : Math.max(0, Number(event.target.value)) } })}/>
+              <FormControlLabel control={<Switch checked={featureDraft.properties.bidirectional !== false} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, bidirectional: event.target.checked } })}/>} label="Bidirectional"/>
+            </>}
+            {traversalOf(featureDraft) && <TraversalEditor value={traversalOf(featureDraft)!} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={traversal => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, traversal } })}/>}
+            <Button variant="contained" onClick={() => void saveFeature()}>Save feature</Button>
+            {featureDraft.semantic_location_id && !spaces.some(space => space.owner_location_id === featureDraft.semantic_location_id) && <Button onClick={() => { setCreateSpaceLocation(featureDraft.semantic_location_id!); setCreateSpaceMode("routed"); setCreateSpaceOpen(true); }}>Create ROUTED interior for this location</Button>}
+          </Stack>
+        </Paper> : <Paper className="panel" sx={{ p: 2 }}><h2>Feature inspector</h2><p>Select a feature on the map, or choose a drawing tool.</p><ul><li><b>Surface:</b> area membership / terrain / building footprint.</li><li><b>Corridor:</b> thick traversable route such as road, alley, river or hall.</li><li><b>Barrier:</b> crossing blocker such as a wall or cliff.</li><li><b>Connector:</b> door, gate, bridge, stairs or portal between spaces.</li><li><b>Spot:</b> landmark or interaction point.</li></ul></Paper>}
+      </Stack>
     </div>
 
-    <Menu
-      open={Boolean(hitMenu)}
-      onClose={() => setHitMenu(null)}
-      anchorReference="anchorPosition"
-      anchorPosition={hitMenu ? { top: hitMenu.mouseY, left: hitMenu.mouseX } : undefined}
-    >
-      {hitMenu?.candidates.map(candidate => <MenuItem
-        key={candidate.id}
-        onClick={() => {
-          setSelectedId(candidate.id);
-          setHitMenu(null);
-        }}
-      >
-        <span className="location-map-hit-choice">
-          <b>{candidate.label}</b>
-          <small>{candidate.detail}</small>
-        </span>
-      </MenuItem>)}
-    </Menu>
-
-    <Menu
-      open={Boolean(vertexMenu)}
-      onClose={() => setVertexMenu(null)}
-      anchorReference="anchorPosition"
-      anchorPosition={vertexMenu ? { top: vertexMenu.mouseY, left: vertexMenu.mouseX } : undefined}
-    >
-      <MenuItem onClick={() => void createConnectedVertex()}>Create connected point</MenuItem>
-      <MenuItem
-        disabled={!vertexMenu || geometryPoints(world?.entities[vertexMenu.locationId]).length <= 2}
-        onClick={() => vertexMenu && void removeVertex(vertexMenu.locationId, vertexMenu.index)}
-      >
-        Remove point
-      </MenuItem>
-    </Menu>
-
-    <Dialog open={environmentSettingsOpen} onClose={() => setEnvironmentSettingsOpen(false)} fullWidth maxWidth="sm">
-      <DialogTitle>Environment settings</DialogTitle>
-      <DialogContent className="location-map-environment-dialog">
-        {environmentSettings && <>
-          <p className="location-map-route-dialog-intro">Project-wide environment behavior now lives alongside the map. Weather/time catalog editing is still in the transitional Environment settings tab for this first Slice A pass.</p>
-          <div className="location-map-switches">
-            <FormControlLabel control={<Switch checked={environmentSettings.enabled} onChange={event => void saveEnvironmentSettings({ enabled: event.target.checked })} />} label="Environment enabled" />
-            <FormControlLabel control={<Switch checked={environmentSettings.ai_create_locations} onChange={event => void saveEnvironmentSettings({ ai_create_locations: event.target.checked })} />} label="AI may create locations" />
-            <FormControlLabel control={<Switch checked={environmentSettings.ai_propose_weather} onChange={event => void saveEnvironmentSettings({ ai_propose_weather: event.target.checked })} />} label="AI may propose weather" />
-            <FormControlLabel control={<Switch checked={environmentSettings.auto_generate_backgrounds} onChange={event => void saveEnvironmentSettings({ auto_generate_backgrounds: event.target.checked })} />} label="Automatic backgrounds" />
-          </div>
-          <TextField
-            select
-            fullWidth
-            size="small"
-            label="Initial weather"
-            value={environmentSettings.initial_weather_id}
-            onChange={event => void saveEnvironmentSettings({ initial_weather_id: event.target.value })}
-          >
-            {environmentSettings.weather.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
-          </TextField>
-          <TextField
-            select
-            fullWidth
-            size="small"
-            label="Background workflow"
-            value={environmentSettings.background_workflow_id ?? ""}
-            onChange={event => void saveEnvironmentSettings({ background_workflow_id: event.target.value || null, auto_generate_backgrounds: event.target.value ? environmentSettings.auto_generate_backgrounds : false })}
-          >
-            <MenuItem value="">None</MenuItem>
-            {workflows.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
-          </TextField>
-          <TextField
-            fullWidth
-            size="small"
-            label="Perception stat key"
-            helperText="Optional character stat used to scale map discovery."
-            value={environmentSettings.perception_stat_key ?? ""}
-            onChange={event => setEnvironmentSettings({ ...environmentSettings, perception_stat_key: event.target.value })}
-            onBlur={event => void saveEnvironmentSettings({ perception_stat_key: event.target.value.trim() || null })}
-          />
-        </>}
-      </DialogContent>
+    <Dialog open={presetOpen} onClose={() => setPresetOpen(false)} maxWidth="md" fullWidth>
+      <DialogTitle>Apply Spatial V3 preset</DialogTitle>
+      <DialogContent><Stack spacing={2} sx={{ mt: 1 }}>
+        <TextField select label="Preset" value={presetKey} onChange={event => {
+          const key = event.target.value;
+          setPresetKey(key);
+          setPresetParams({
+            ...presetDefaults(key),
+            semantic_location_id: spaces.find(item => item.id === spaceId)?.owner_location_id ?? "",
+            target_space_id: spaces.find(item => item.id !== spaceId)?.id ?? "",
+          });
+        }}>
+          {presets.map(preset => <MenuItem key={preset.key} value={preset.key}>{preset.label}</MenuItem>)}
+        </TextField>
+        {presets.find(item => item.key === presetKey) && <Alert severity="info">{presets.find(item => item.key === presetKey)!.description}</Alert>}
+        {presets.find(item => item.key === presetKey)?.parameters.includes("name") && <TextField label="Name" value={presetParams.name} onChange={event => setPresetParams({ ...presetParams, name: event.target.value })}/>}
+        {presets.find(item => item.key === presetKey)?.parameters.includes("semantic_location_id") && <TextField select label="Semantic location" value={presetParams.semantic_location_id} onChange={event => setPresetParams({ ...presetParams, semantic_location_id: event.target.value })}>
+          <MenuItem value="">Use space owner / none</MenuItem>
+          {locations.map(location => <MenuItem key={location.id} value={location.id}>{location.name}</MenuItem>)}
+        </TextField>}
+        {(presets.find(item => item.key === presetKey)?.parameters.includes("center_x") || presets.find(item => item.key === presetKey)?.parameters.includes("center_y")) && <Stack direction="row" spacing={1}>
+          {presets.find(item => item.key === presetKey)?.parameters.includes("center_x") && <TextField fullWidth type="number" label="Center X" value={presetParams.center_x} onChange={event => setPresetParams({ ...presetParams, center_x: Number(event.target.value) })}/>}
+          {presets.find(item => item.key === presetKey)?.parameters.includes("center_y") && <TextField fullWidth type="number" label="Center Y" value={presetParams.center_y} onChange={event => setPresetParams({ ...presetParams, center_y: Number(event.target.value) })}/>}
+        </Stack>}
+        {(presets.find(item => item.key === presetKey)?.parameters.includes("width") || presets.find(item => item.key === presetKey)?.parameters.includes("height")) && <Stack direction="row" spacing={1}>
+          {presets.find(item => item.key === presetKey)?.parameters.includes("width") && <TextField fullWidth type="number" label={presetKey === "road" || presetKey === "river" ? "Corridor width" : "Width"} value={presetParams.width} onChange={event => setPresetParams({ ...presetParams, width: Math.max(.1, Number(event.target.value)) })}/>}
+          {presets.find(item => item.key === presetKey)?.parameters.includes("height") && <TextField fullWidth type="number" label="Height" value={presetParams.height} onChange={event => setPresetParams({ ...presetParams, height: Math.max(1, Number(event.target.value)) })}/>}
+        </Stack>}
+        {presets.find(item => item.key === presetKey)?.parameters.includes("target_space_id") && <TextField select label="Target navigation space" value={presetParams.target_space_id} onChange={event => setPresetParams({ ...presetParams, target_space_id: event.target.value })}>
+          {spaces.filter(item => item.id !== spaceId).map(space => <MenuItem key={space.id} value={space.id}>{locationName(world, space.owner_location_id)} · {space.navigation_mode}</MenuItem>)}
+        </TextField>}
+        {(presets.find(item => item.key === presetKey)?.parameters.includes("target_x") || presets.find(item => item.key === presetKey)?.parameters.includes("target_y")) && <Stack direction="row" spacing={1}>
+          <TextField fullWidth type="number" label="Target X" value={presetParams.target_x} onChange={event => setPresetParams({ ...presetParams, target_x: Number(event.target.value) })}/>
+          <TextField fullWidth type="number" label="Target Y" value={presetParams.target_y} onChange={event => setPresetParams({ ...presetParams, target_y: Number(event.target.value) })}/>
+        </Stack>}
+        {presets.find(item => item.key === presetKey)?.requires_semantic_location && !presetParams.semantic_location_id && <Alert severity="warning">This preset requires a semantic location.</Alert>}
+        {presets.find(item => item.key === presetKey)?.requires_target_space && !presetParams.target_space_id && <Alert severity="warning">This preset requires another navigation space.</Alert>}
+      </Stack></DialogContent>
       <DialogActions>
-        <Button onClick={() => setEnvironmentSettingsOpen(false)}>Close</Button>
+        <Button onClick={() => setPresetOpen(false)}>Cancel</Button>
+        <Button variant="contained" disabled={
+          Boolean(presets.find(item => item.key === presetKey)?.requires_semantic_location && !presetParams.semantic_location_id)
+          || Boolean(presets.find(item => item.key === presetKey)?.requires_target_space && !presetParams.target_space_id)
+        } onClick={() => void applyPreset()}>Apply preset</Button>
       </DialogActions>
     </Dialog>
 
-    <Dialog open={Boolean(routeDialog)} onClose={() => { setRouteDialog(null); setRoutePoints([]); }} fullWidth maxWidth="sm">
-      <DialogTitle>Configure route endpoints</DialogTitle>
-      <DialogContent>
-        <div className="location-map-route-dialog">
-          <p className="location-map-route-dialog-intro">Only map objects colliding with each placed endpoint are offered. Overlapping areas are ordered by priority, then raw name, then id.</p>
-          {routeDialog && ([0, 1] as const).map(index => <section className="location-map-endpoint-choice" key={index}>
-            <div><p className="eyebrow">ENDPOINT {index === 0 ? "A" : "B"}</p><b>{routeDialog.points[index].x}, {routeDialog.points[index].y}</b></div>
-            <TextField
-              select
-              fullWidth
-              size="small"
-              label="Lock endpoint to"
-              value={routeDialog.selections[index]}
-              onChange={event => {
-                const selections: [string, string] = [routeDialog.selections[0], routeDialog.selections[1]];
-                selections[index] = event.target.value;
-                setRouteDialog({ ...routeDialog, selections });
-              }}
-            >
-              {routeDialog.options[index].map(option => <MenuItem key={option.key} value={option.key}>{option.label}</MenuItem>)}
-            </TextField>
-          </section>)}
-          {routeDialog && <div className="location-map-route-dialog-settings">
-            <TextField
-              select
-              size="small"
-              label="Connection type"
-              value={routeDialog.kind}
-              onChange={event => setRouteDialog({ ...routeDialog, kind: event.target.value as SpatialConnection["kind"] })}
-            >
-              <MenuItem value="route">Route / shortcut</MenuItem>
-              <MenuItem value="door">Door</MenuItem>
-              <MenuItem value="portal">Portal / teleporter</MenuItem>
-            </TextField>
-            <TextField size="small" type="number" label="Travel minutes" value={routeDialog.travelMinutes} onChange={event => setRouteDialog({ ...routeDialog, travelMinutes: Number(event.target.value) })} />
-            <TextField size="small" label="Modes" value={routeDialog.modes} onChange={event => setRouteDialog({ ...routeDialog, modes: event.target.value })} />
-            <FormControlLabel control={<Switch checked={routeDialog.bidirectional} onChange={event => setRouteDialog({ ...routeDialog, bidirectional: event.target.checked })} />} label="Bidirectional" />
-            <FormControlLabel control={<Switch checked={routeDialog.enabled} onChange={event => setRouteDialog({ ...routeDialog, enabled: event.target.checked })} />} label="Enabled" />
-            <FormControlLabel control={<Switch checked={routeDialog.discovered} onChange={event => setRouteDialog({ ...routeDialog, discovered: event.target.checked })} />} label="Discovered" />
-            <FormControlLabel control={<Switch checked={routeDialog.hidden} onChange={event => setRouteDialog({ ...routeDialog, hidden: event.target.checked })} />} label="Hidden" />
-          </div>}
+    {renderCreateSpaceDialog()}
+
+    <Dialog open={Boolean(connectorPoint)} onClose={() => setConnectorPoint(null)} maxWidth="sm" fullWidth>
+      <DialogTitle>Create connector</DialogTitle>
+      <DialogContent><Stack spacing={2} sx={{ mt: 1 }}>
+        <Alert severity="info">Source is {connectorPoint?.join(", ")} in {locationName(world, spaces.find(item => item.id === spaceId)?.owner_location_id)}.</Alert>
+        <TextField select label="Target space" value={connectorTargetSpace} onChange={event => setConnectorTargetSpace(event.target.value)}>{spaces.map(space => <MenuItem key={space.id} value={space.id}>{locationName(world, space.owner_location_id)} · {space.navigation_mode}</MenuItem>)}</TextField>
+        <Stack direction="row" spacing={1}><TextField fullWidth type="number" label="Target X" value={connectorTargetPoint[0]} onChange={event => setConnectorTargetPoint([Number(event.target.value), connectorTargetPoint[1]])}/><TextField fullWidth type="number" label="Target Y" value={connectorTargetPoint[1]} onChange={event => setConnectorTargetPoint([connectorTargetPoint[0], Number(event.target.value)])}/></Stack>
+      </Stack></DialogContent>
+      <DialogActions><Button onClick={() => setConnectorPoint(null)}>Cancel</Button><Button variant="contained" onClick={() => void createConnector()}>Create</Button></DialogActions>
+    </Dialog>
+
+    <Dialog open={Boolean(encounterDraft)} onClose={() => setEncounterDraft(null)} maxWidth="md" fullWidth>
+      <DialogTitle>Encounter policy</DialogTitle>
+      <DialogContent>{encounterDraft && <Stack spacing={1.5} sx={{ mt: 1 }}>
+        <Stack direction="row" spacing={1}>
+          <TextField select fullWidth label="Target" value={encounterDraft.feature_id ? "feature" : "space"} onChange={event => setEncounterDraft(event.target.value === "space" ? { ...encounterDraft, navigation_space_id: spaceId, feature_id: null } : { ...encounterDraft, navigation_space_id: null, feature_id: details?.features[0]?.id ?? null })}><MenuItem value="space">Navigation space</MenuItem><MenuItem value="feature">Feature</MenuItem></TextField>
+          {encounterDraft.feature_id != null && <TextField select fullWidth label="Feature" value={encounterDraft.feature_id} onChange={event => setEncounterDraft({ ...encounterDraft, feature_id: event.target.value })}>{(details?.features ?? []).map(feature => <MenuItem key={feature.id} value={feature.id}>{feature.name || feature.id} · {feature.feature_kind}</MenuItem>)}</TextField>}
+        </Stack>
+        <Stack direction="row" spacing={1}>
+          <TextField select fullWidth label="Mode" value={encounterDraft.mode} onChange={event => setEncounterDraft({ ...encounterDraft, mode: event.target.value as EncounterPolicy["mode"] })}>{["augment", "replace", "disabled"].map(value => <MenuItem key={value} value={value}>{value}</MenuItem>)}</TextField>
+          <TextField select fullWidth label="Trigger" value={encounterDraft.trigger_kind} onChange={event => setEncounterDraft({ ...encounterDraft, trigger_kind: event.target.value as EncounterPolicy["trigger_kind"], probability_per_transition: event.target.value === "transition" ? (encounterDraft.probability_per_transition ?? 1) : null })}><MenuItem value="distance">Distance</MenuItem><MenuItem value="transition">Transition</MenuItem></TextField>
+          <TextField fullWidth type="number" label="Priority" value={encounterDraft.priority} onChange={event => setEncounterDraft({ ...encounterDraft, priority: Number(event.target.value) })}/>
+        </Stack>
+        {encounterDraft.trigger_kind === "distance" ? <Stack direction="row" spacing={1}><TextField fullWidth type="number" label="Rate / 100 units" value={encounterDraft.rate_per_100_units} onChange={event => setEncounterDraft({ ...encounterDraft, rate_per_100_units: Math.max(0, Number(event.target.value)) })}/><TextField fullWidth type="number" label="Minimum distance" value={encounterDraft.minimum_distance} onChange={event => setEncounterDraft({ ...encounterDraft, minimum_distance: Math.max(0, Number(event.target.value)) })}/></Stack> : <TextField type="number" label="Probability per transition (0–1)" value={encounterDraft.probability_per_transition ?? 1} onChange={event => setEncounterDraft({ ...encounterDraft, probability_per_transition: Math.max(0, Math.min(1, Number(event.target.value))) })}/>}
+        <div>
+          <h3>Policy condition</h3>
+          {encounterDraft.conditions
+            ? <ConditionExpressionEditor node={conditionExpressionFromPayload(encounterDraft.conditions as Record<string, unknown>, ruleData.stats)} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={conditions => setEncounterDraft({ ...encounterDraft, conditions })} onRemove={() => setEncounterDraft({ ...encounterDraft, conditions: null })}/>
+            : <Button onClick={() => setEncounterDraft({ ...encounterDraft, conditions: blankConditionExpression("compare", ruleData.stats) })}>Add condition</Button>}
         </div>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => { setRouteDialog(null); setRoutePoints([]); }}>Cancel</Button>
-        <Button variant="contained" onClick={() => void createConfiguredRoute()}>Create route</Button>
-      </DialogActions>
+        <h3>Candidates</h3>
+        {encounterDraft.candidates.map((candidate, index) => <Paper key={index} variant="outlined" sx={{ p: 1 }}>
+          <Stack direction="row" spacing={1}>
+            <TextField select fullWidth label="Encounter location" value={candidate.location_id} onChange={event => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, location_id: event.target.value } : item) })}>{locations.map(location => <MenuItem key={location.id} value={location.id}>{location.name}</MenuItem>)}</TextField>
+            <TextField type="number" label="Weight" value={candidate.weight} onChange={event => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, weight: Math.max(.01, Number(event.target.value) || 1) } : item) })}/>
+            <Button color="error" onClick={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.filter((_, itemIndex) => itemIndex !== index) })}>Remove</Button>
+          </Stack>
+          <div style={{ marginTop: 8 }}>
+            {candidate.requirements
+              ? <ConditionExpressionEditor node={conditionExpressionFromPayload(candidate.requirements as Record<string, unknown>, ruleData.stats)} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={requirements => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements } : item) })} onRemove={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: null } : item) })}/>
+              : <Button size="small" onClick={() => setEncounterDraft({ ...encounterDraft, candidates: encounterDraft.candidates.map((item, itemIndex) => itemIndex === index ? { ...item, requirements: blankConditionExpression("compare", ruleData.stats) } : item) })}>Add requirement</Button>}
+          </div>
+        </Paper>)}
+        <Button onClick={() => setEncounterDraft({ ...encounterDraft, candidates: [...encounterDraft.candidates, { location_id: locations[0]?.id ?? "", weight: 1, requirements: null }] })}>Add candidate</Button>
+        <FormControlLabel control={<Switch checked={encounterDraft.enabled} onChange={event => setEncounterDraft({ ...encounterDraft, enabled: event.target.checked })}/>} label="Enabled"/>
+      </Stack>}</DialogContent>
+      <DialogActions><Button onClick={() => setEncounterDraft(null)}>Cancel</Button><Button variant="contained" onClick={() => void saveEncounter()}>Save</Button></DialogActions>
     </Dialog>
   </div>;
 }
