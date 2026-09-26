@@ -1,0 +1,21 @@
+name: tldraw lockfile generator
+
+on:
+  push:
+    branches: [spatial-v3-tldraw-editor]
+  workflow_dispatch:
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate lockfile
+        working-directory: frontend
+        run: npm install --package-lock-only --ignore-scripts
+      - name: Emit compressed lockfile
+        working-directory: frontend
+        run: gzip -9c package-lock.json | base64 -w0
