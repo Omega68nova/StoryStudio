@@ -737,15 +737,21 @@ export function LocationMapStudio({
               <Button size="small" onClick={() => {
                 const next = structuredClone(featureDraft);
                 const close = (line: Point[]) => line.length >= 3 && (line[0][0] !== line[line.length - 1][0] || line[0][1] !== line[line.length - 1][1]) ? [...line, line[0]] : line;
-                if (next.geometry.type === "LineString") next.geometry.coordinates = close(next.geometry.coordinates);
-                else next.geometry.coordinates = next.geometry.coordinates.map(close);
+                if (next.geometry.type === "LineString") {
+                  next.geometry.coordinates = close(next.geometry.coordinates);
+                } else if (next.geometry.type === "MultiLineString") {
+                  next.geometry.coordinates = next.geometry.coordinates.map(close);
+                }
                 setFeatureDraft(next);
               }}>Close loop</Button>
               <Button size="small" onClick={() => {
                 const next = structuredClone(featureDraft);
                 const open = (line: Point[]) => line.length > 2 && line[0][0] === line[line.length - 1][0] && line[0][1] === line[line.length - 1][1] ? line.slice(0, -1) : line;
-                if (next.geometry.type === "LineString") next.geometry.coordinates = open(next.geometry.coordinates);
-                else next.geometry.coordinates = next.geometry.coordinates.map(open);
+                if (next.geometry.type === "LineString") {
+                  next.geometry.coordinates = open(next.geometry.coordinates);
+                } else if (next.geometry.type === "MultiLineString") {
+                  next.geometry.coordinates = next.geometry.coordinates.map(open);
+                }
                 setFeatureDraft(next);
               }}>Open loop</Button>
             </Stack>}
