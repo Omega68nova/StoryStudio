@@ -1562,6 +1562,42 @@ def _synchronize_spatial_v3_projection(project_id: str) -> dict[str, int]:
     )
 
 
+def _commit_spatial_v3_mutation(
+    project_id: str,
+    tool: str,
+    arguments: dict[str, Any],
+    summary: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    project = require_project(project_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(
+            project_id,
+            project.get("active_node_id"),
+            [{"tool": tool, "arguments": arguments}],
+            provenance="author",
+        )
+        transaction = (
+            scheduler.world.commit_to_existing_node(
+                project_id,
+                project["active_node_id"],
+                mutations,
+                provenance="author",
+                summary=summary,
+            )
+            if project.get("active_node_id")
+            else scheduler.world.commit_root(
+                project_id,
+                mutations,
+                provenance="author",
+                summary=summary,
+            )
+        )
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _synchronize_spatial_v3_projection(project_id)
+    return transaction, mutations[0].arguments
+
+
 @app.post("/api/projects/{project_id}/spatial-v3/materialize")
 async def materialize_spatial_v3(project_id: str) -> dict[str, Any]:
     """Migrate legacy spatial state into branch-authoritative Spatial V3 events."""
@@ -1642,6 +1678,103 @@ async def get_spatial_v3_space(project_id: str, space_id: str) -> dict[str, Any]
             for item in data.spatial_v3.encounter_policies(project_id, space_id)
         ],
     }
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/spaces/{space_id}")
+async def upsert_spatial_v3_space(
+    project_id: str,
+    space_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "id": space_id, "project_id": project_id}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "upsertSpatialV3Space", payload, "Spatial V3 space changed"
+    )
+    return {"transaction_id": transaction["id"], "space": normalized}
+
+
+@app.delete("/api/projects/{project_id}/spatial-v3/spaces/{space_id}", status_code=204)
+async def remove_spatial_v3_space(project_id: str, space_id: str) -> None:
+    _commit_spatial_v3_mutation(
+        project_id, "removeSpatialV3Space", {"id": space_id}, "Spatial V3 space removed"
+    )
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/features/{feature_id}")
+async def upsert_spatial_v3_feature(
+    project_id: str,
+    feature_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "id": feature_id, "project_id": project_id}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "upsertSpatialV3Feature", payload, "Spatial V3 feature changed"
+    )
+    return {"transaction_id": transaction["id"], "feature": normalized}
+
+
+@app.delete("/api/projects/{project_id}/spatial-v3/features/{feature_id}", status_code=204)
+async def remove_spatial_v3_feature(project_id: str, feature_id: str) -> None:
+    _commit_spatial_v3_mutation(
+        project_id, "removeSpatialV3Feature", {"id": feature_id}, "Spatial V3 feature removed"
+    )
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/encounters/{policy_id}")
+async def upsert_spatial_v3_encounter(
+    project_id: str,
+    policy_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "id": policy_id, "project_id": project_id}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "upsertSpatialV3Encounter", payload, "Spatial V3 encounter changed"
+    )
+    return {"transaction_id": transaction["id"], "encounter": normalized}
+
+
+@app.delete("/api/projects/{project_id}/spatial-v3/encounters/{policy_id}", status_code=204)
+async def remove_spatial_v3_encounter(project_id: str, policy_id: str) -> None:
+    _commit_spatial_v3_mutation(
+        project_id, "removeSpatialV3Encounter", {"id": policy_id}, "Spatial V3 encounter removed"
+    )
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/layers/{layer_key}")
+async def update_spatial_v3_layer(
+    project_id: str,
+    space_id: str,
+    layer_key: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "navigation_space_id": space_id, "layer_key": layer_key}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "updateSpatialV3Layer", payload, "Spatial V3 layer changed"
+    )
+    return {"transaction_id": transaction["id"], "layer": normalized}
+
+
+@app.put("/api/projects/{project_id}/spatial-v3/locations/{location_id}/binding")
+async def bind_spatial_v3_location(
+    project_id: str,
+    location_id: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {**request, "project_id": project_id, "location_id": location_id}
+    transaction, normalized = _commit_spatial_v3_mutation(
+        project_id, "bindSpatialV3LocationSpace", payload, "Spatial V3 location binding changed"
+    )
+    return {"transaction_id": transaction["id"], "binding": normalized}
+
+
+@app.delete("/api/projects/{project_id}/spatial-v3/locations/{location_id}/binding", status_code=204)
+async def unbind_spatial_v3_location(project_id: str, location_id: str) -> None:
+    _commit_spatial_v3_mutation(
+        project_id,
+        "unbindSpatialV3LocationSpace",
+        {"location_id": location_id},
+        "Spatial V3 location binding removed",
+    )
 
 
 @app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/resolve")
