@@ -368,6 +368,24 @@ export function LocationMapStudio({
     } catch (cause) { fail(String(cause)); }
   }
 
+  async function saveBoundsMode(boundsMode: "inherit_parent" | "independent") {
+    if (!details?.space.owner_location_id) return;
+    const binding = details.binding ?? {
+      project_id: projectId,
+      location_id: details.space.owner_location_id,
+      navigation_space_id: details.space.id,
+      entrance_policy: details.space.navigation_mode === "routed" ? "connectors" : "open",
+      bounds_mode: boundsMode,
+    };
+    try {
+      await api(`/projects/${projectId}/spatial-v3/locations/${details.space.owner_location_id}/binding`, {
+        method: "PUT",
+        body: JSON.stringify({ ...binding, bounds_mode: boundsMode }),
+      });
+      await loadDetails();
+    } catch (cause) { fail(String(cause)); }
+  }
+
   async function createSpace() {
     if (!createSpaceLocation) return;
     const id = newId("space");
@@ -703,6 +721,17 @@ export function LocationMapStudio({
         variant="outlined"
         label={details.binding.bounds_mode === "inherit_parent" ? "Parent geometry inherited" : "Independent bounds"}
       />}
+      {details?.space.owner_location_id && <TextField
+        select
+        size="small"
+        label="Map boundary"
+        value={details.binding?.bounds_mode ?? "independent"}
+        onChange={event => void saveBoundsMode(event.target.value as "inherit_parent" | "independent")}
+        sx={{ minWidth: 220 }}
+      >
+        <MenuItem value="inherit_parent">Inherited from parent footprint</MenuItem>
+        <MenuItem value="independent">Independent local bounds</MenuItem>
+      </TextField>}
     </Stack>
 
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 390px", gap: 16, alignItems: "start" }}>
