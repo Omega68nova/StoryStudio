@@ -256,6 +256,8 @@ function renderGeometry(
 
 export function SpatialV2Canvas({
   features,
+  contextFeatures = [],
+  contextBoundary = null,
   tool,
   selectedFeatureId,
   draftPoints,
@@ -270,6 +272,8 @@ export function SpatialV2Canvas({
   onConnectorTargetChange,
 }: {
   features: V2CanvasFeature[];
+  contextFeatures?: V2CanvasFeature[];
+  contextBoundary?: V2Geometry | null;
   tool: V2Tool;
   selectedFeatureId: string | null;
   draftPoints: V2Point[];
@@ -448,6 +452,32 @@ export function SpatialV2Canvas({
       <div className="location-map-world" style={{ transform: `scale(${zoom})` }}>
         <svg className="location-map-svg" viewBox="0 0 100 100" preserveAspectRatio="none">
           <rect x=".45" y=".45" width="99.1" height="99.1" className="location-map-space-boundary"/>
+
+          {contextBoundary && <g style={{ opacity: .9, pointerEvents: "none" }}>
+            {renderGeometry(
+              {
+                id: "__inherited-boundary__",
+                feature_kind: "surface",
+                render_layer: "topology",
+                name: "Inherited parent boundary",
+                geometry: contextBoundary,
+                hidden: false,
+                enabled: true,
+                properties: {},
+              },
+              contextBoundary,
+              false,
+              false,
+              false,
+              () => undefined,
+            )}
+          </g>}
+
+          <g style={{ opacity: .38, pointerEvents: "none" }}>
+            {contextFeatures.map(feature => <g key={feature.id}>
+              {renderGeometry(feature, feature.geometry, false, true, false, () => undefined)}
+            </g>)}
+          </g>
 
           {features.map(feature => {
             const geometry = displayedGeometry(feature);

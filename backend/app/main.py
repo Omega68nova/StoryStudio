@@ -1749,8 +1749,33 @@ async def get_spatial_v3_space(project_id: str, space_id: str) -> dict[str, Any]
     space = data.spatial_v3.space(space_id)
     if not space or space.project_id != project_id:
         raise HTTPException(404, "Navigation space not found")
+
+    projection = scheduler.world.projection(project_id, use_cache=False)
+    binding = (
+        data.spatial_v3.location_space(project_id, space.owner_location_id)
+        if space.owner_location_id
+        else None
+    )
+    inherited_context = None
+    if binding and str(binding.get("bounds_mode") or "") == "inherit_parent":
+        from app.services.spatial_v3_context import (
+            SpatialV3ContextError,
+            inherited_parent_context,
+        )
+        try:
+            inherited_context = inherited_parent_context(
+                data.spatial_v3,
+                project_id=project_id,
+                space=space,
+                projection=projection,
+            )
+        except SpatialV3ContextError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
     return {
         "space": space.model_dump(mode="json"),
+        "binding": binding,
+        "inherited_context": inherited_context,
         "features": [
             item.model_dump(mode="json")
             for item in data.spatial_v3.features(project_id, space_id)
