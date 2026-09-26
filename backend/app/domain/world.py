@@ -727,6 +727,49 @@ def resolve_stat_bounds(
     )
 
 
+def validate_stat_dependency_graph(definitions: list[Stat]) -> None:
+    """Validate project-local dynamic stat-bound references as one graph."""
+    by_key = {item.stat_key: item for item in definitions}
+    graph: dict[str, list[str]] = {}
+    for definition in definitions:
+        dependencies = [
+            key
+            for key in (definition.minimum_stat_key, definition.maximum_stat_key)
+            if key
+        ]
+        for key in dependencies:
+            referenced = by_key.get(key)
+            if referenced is None:
+                raise ValueError(
+                    f"Stat {definition.stat_key} references unavailable bound stat {key}"
+                )
+            if not set(map(str, definition.compatible_owner_kinds)).intersection(
+                map(str, referenced.compatible_owner_kinds)
+            ):
+                raise ValueError(
+                    f"Stat {definition.stat_key} has no compatible owner kind "
+                    f"in common with bound stat {key}"
+                )
+        graph[definition.stat_key] = dependencies
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(key: str) -> None:
+        if key in visiting:
+            raise ValueError("Stat bound dependencies contain a cycle")
+        if key in visited:
+            return
+        visiting.add(key)
+        for child in graph.get(key, []):
+            visit(child)
+        visiting.remove(key)
+        visited.add(key)
+
+    for key in graph:
+        visit(key)
+
+
 class RequirementExpression(DomainModel):
     """Recursive requirement tree with legacy leaf compatibility."""
 

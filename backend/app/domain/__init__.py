@@ -52,6 +52,7 @@ from app.domain.world import (
     TypedWorldEntity,
     Weather,
     resolve_stat_bounds,
+    validate_stat_dependency_graph,
 )
 from app.domain.adapters import (
     DomainAdapterError,
@@ -180,4 +181,5 @@ __all__ = [
     "ValueExpressionKind",
     "condition_expression_from_requirement",
     "value_expression_from_formula",
+    "validate_stat_dependency_graph",
 ]
