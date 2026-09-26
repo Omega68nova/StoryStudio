@@ -80,6 +80,77 @@ def test_distance_encounter_is_seed_stable_and_resumable(tmp_path) -> None:
         assert resumed["encounter"]["distance_into_span"] > first["encounter"]["distance_into_span"]
 
 
+def test_resume_then_later_transition_reports_full_progress(tmp_path) -> None:
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    project = db.create_project("resume progress")
+    for location_id in ("outside", "inside", "event"):
+        _location(db, project["id"], location_id)
+    data.spatial_v3.save_space(NavigationSpace(id="outside-space", project_id=project["id"], owner_location_id="outside"))
+    data.spatial_v3.save_space(NavigationSpace(id="inside-space", project_id=project["id"], owner_location_id="inside"))
+    data.spatial_v3.save_feature(MapFeature(
+        id="door",
+        project_id=project["id"],
+        navigation_space_id="outside-space",
+        feature_kind="connector",
+        geometry={"type": "Point", "coordinates": (100, 0)},
+        properties=ConnectorProperties(
+            source=ConnectorEndpoint(navigation_space_id="outside-space", point=(100, 0)),
+            target=ConnectorEndpoint(navigation_space_id="inside-space", point=(0, 0)),
+            travel_minutes=1,
+        ),
+    ))
+    data.spatial_v3.save_encounter_policy(EncounterPolicy(
+        id="field",
+        project_id=project["id"],
+        navigation_space_id="outside-space",
+        rate_per_100_units=100,
+        candidates=[EncounterCandidate(location_id="event")],
+    ))
+    data.spatial_v3.save_encounter_policy(EncounterPolicy(
+        id="door-event",
+        project_id=project["id"],
+        feature_id="door",
+        trigger_kind="transition",
+        probability_per_transition=1,
+        candidates=[EncounterCandidate(location_id="event")],
+    ))
+
+    service = SpatialV3TravelPreview(data.spatial_v3)
+    first = service.preview(
+        project_id=project["id"],
+        start_space_id="outside-space",
+        start=(0, 0),
+        target_space_id="inside-space",
+        target=(1, 0),
+        seed="resume-progress",
+    )
+    assert first["status"] == "interrupted"
+    assert first["encounter"]["trigger_kind"] == "distance"
+
+    cursor = first["resume_cursor"]
+    result = first
+    # Dense distance policies can cause more than one deterministic encounter
+    # before the door. Keep consuming them until the connector interruption.
+    for _ in range(20):
+        result = service.preview(
+            project_id=project["id"],
+            start_space_id="outside-space",
+            start=(0, 0),
+            target_space_id="inside-space",
+            target=(1, 0),
+            seed="resume-progress",
+            resume_cursor=cursor,
+        )
+        if result["status"] == "interrupted" and result["encounter"]["trigger_kind"] == "transition":
+            break
+        cursor = result["resume_cursor"]
+    assert result["encounter"]["trigger_kind"] == "transition"
+    assert result["progress"]["traversed_distance"] == 100
+    assert result["progress"]["traversed_travel_cost"] == 100
+
+
 def test_geometry_step_splits_do_not_change_encounter_span(tmp_path) -> None:
     db = Database(tmp_path)
     db.initialize()

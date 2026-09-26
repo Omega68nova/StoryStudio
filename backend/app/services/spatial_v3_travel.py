@@ -363,17 +363,15 @@ class SpatialV3TravelPreview:
                         "unresolved_requirements": unresolved,
                     }
 
-            traversed_distance += span_distance - current_offset
-            # If resuming inside the span, only count the unconsumed cost.
-            remaining_offset = current_offset
-            for part in unit["parts"]:
-                part_distance = float(part.get("distance") or 0)
-                if remaining_offset >= part_distance:
-                    remaining_offset -= part_distance
-                    continue
-                fraction = 1.0 if part_distance <= 0 else (part_distance - remaining_offset) / part_distance
-                traversed_cost += float(part.get("travel_cost") or 0) * fraction
-                remaining_offset = 0.0
+            # Progress is always reported from the start of the route.
+            # The accumulator excludes the current unit, so after a resumed
+            # span completes we add the whole span rather than only the
+            # unconsumed suffix.
+            traversed_distance += span_distance
+            traversed_cost += sum(
+                float(part.get("travel_cost") or 0)
+                for part in unit["parts"]
+            )
             distance_offset = 0.0
             encounter_ordinal = 0
 
