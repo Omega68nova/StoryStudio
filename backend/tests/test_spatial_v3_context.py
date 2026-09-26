@@ -5,6 +5,7 @@ from app.domain.spatial_v3 import (
     NavigationSpace,
     SurfaceProperties,
 )
+from app.services.spatial_v3 import SpatialV3Service
 from app.services.spatial_v3_context import inherited_parent_context
 
 
@@ -20,6 +21,9 @@ class FakeRepository:
 
     def spaces(self, project_id):
         return self._spaces
+
+    def space(self, space_id):
+        return next((item for item in self._spaces if item.id == space_id), None)
 
     def features(self, project_id, navigation_space_id=None):
         items = self._features
@@ -157,3 +161,54 @@ def test_independent_binding_has_no_inherited_context():
         space=child,
         projection={"project_id": "project", "entities": {}},
     ) is None
+
+
+
+def test_movement_resolver_treats_inherited_shape_as_real_bounds():
+    parent = NavigationSpace(
+        id="parent-space",
+        project_id="project",
+        owner_location_id="city",
+    )
+    child = NavigationSpace(
+        id="child-space",
+        project_id="project",
+        owner_location_id="district",
+    )
+    district = surface(
+        "district-footprint",
+        "parent-space",
+        "district",
+        [(20, 20), (80, 20), (50, 80), (20, 20)],
+    )
+    repository = FakeRepository(
+        [parent, child],
+        [district],
+        {
+            "district": LocationNavigationSpace(
+                project_id="project",
+                location_id="district",
+                navigation_space_id="child-space",
+                bounds_mode="inherit_parent",
+            )
+        },
+    )
+    service = SpatialV3Service(repository)
+
+    inside = service.movement_context(
+        project_id="project",
+        navigation_space_id="child-space",
+        x=50,
+        y=50,
+    )
+    outside = service.movement_context(
+        project_id="project",
+        navigation_space_id="child-space",
+        x=0,
+        y=100,
+    )
+
+    assert inside["movement"]["within_bounds"] is True
+    assert inside["movement"]["default_allowed"] is True
+    assert outside["movement"]["within_bounds"] is False
+    assert outside["movement"]["default_allowed"] is False
