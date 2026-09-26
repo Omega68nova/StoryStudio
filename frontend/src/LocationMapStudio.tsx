@@ -664,7 +664,7 @@ export function LocationMapStudio({
               <TextField size="small" type="number" label="Travel minutes override" value={featureDraft.properties.travel_minutes ?? ""} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, travel_minutes: event.target.value === "" ? null : Math.max(0, Number(event.target.value)) } })}/>
               <FormControlLabel control={<Switch checked={featureDraft.properties.bidirectional !== false} onChange={event => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, bidirectional: event.target.checked } })}/>} label="Bidirectional"/>
             </>}
-            {traversalOf(featureDraft) && <TraversalEditor value={traversalOf(featureDraft)!} onChange={traversal => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, traversal } })}/>}
+            {traversalOf(featureDraft) && <TraversalEditor value={traversalOf(featureDraft)!} stats={ruleData.stats} abilities={ruleData.abilities} locations={locations.map(item => ({ id: item.id, name: item.name }))} onChange={traversal => setFeatureDraft({ ...featureDraft, properties: { ...featureDraft.properties, traversal } })}/>}
             <Button variant="contained" onClick={() => void saveFeature()}>Save feature</Button>
             {featureDraft.semantic_location_id && !spaces.some(space => space.owner_location_id === featureDraft.semantic_location_id) && <Button onClick={() => { setCreateSpaceLocation(featureDraft.semantic_location_id!); setCreateSpaceMode("routed"); setCreateSpaceOpen(true); }}>Create ROUTED interior for this location</Button>}
           </Stack>
