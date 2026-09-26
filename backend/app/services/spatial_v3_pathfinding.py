@@ -205,15 +205,8 @@ class SpatialV3Pathfinder:
         for _feature, geometry in self._movement_geometries(project_id, space_id):
             positions.extend(self._intersection_positions(line, geometry.boundary))
         space = self._space(project_id, space_id)
-        if space.bounds is not None:
-            bounds = self.resolver._geometry(MapFeature(
-                id="__bounds__",
-                project_id=project_id,
-                navigation_space_id=space_id,
-                feature_kind="surface",
-                geometry=space.bounds,
-                properties=SurfaceProperties(),
-            ))
+        bounds = self.resolver.space_bounds_geometry(space)
+        if bounds is not None:
             positions.extend(self._intersection_positions(line, bounds.boundary))
         return sorted({
             max(0.0, min(length, round(position, 9)))
@@ -236,18 +229,9 @@ class SpatialV3Pathfinder:
             return None
 
         space = self._space(project_id, space_id)
-        if space.bounds is not None:
-            bounds_feature = MapFeature(
-                id="__bounds__",
-                project_id=project_id,
-                navigation_space_id=space_id,
-                feature_kind="surface",
-                geometry=space.bounds,
-                properties=SurfaceProperties(),
-            )
-            bounds_geometry = self.resolver._geometry(bounds_feature)
-            if not bounds_geometry.covers(line):
-                return None
+        bounds_geometry = self.resolver.space_bounds_geometry(space)
+        if bounds_geometry is not None and not bounds_geometry.covers(line):
+            return None
 
         blocked, barrier_cost, unresolved, applied_traversals = self._barrier_crossing(
             project_id=project_id,
@@ -374,16 +358,9 @@ class SpatialV3Pathfinder:
                 ])
 
         space = self._space(project_id, space_id)
-        if space.bounds is not None:
-            bounds_feature = MapFeature(
-                id="__bounds__",
-                project_id=project_id,
-                navigation_space_id=space_id,
-                feature_kind="surface",
-                geometry=space.bounds,
-                properties=SurfaceProperties(),
-            )
-            points.extend(self._geometry_vertices(self.resolver._geometry(bounds_feature)))
+        bounds_geometry = self.resolver.space_bounds_geometry(space)
+        if bounds_geometry is not None:
+            points.extend(self._geometry_vertices(bounds_geometry))
 
         for feature in self.repository.features(project_id):
             if feature.feature_kind != "connector" or not feature.enabled:
