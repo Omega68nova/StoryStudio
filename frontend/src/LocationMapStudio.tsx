@@ -22,6 +22,7 @@ import type {
   EnvironmentLocation,
   EnvironmentSettings,
   MediaAsset,
+  WorkflowPreset,
   WorldEntity,
   WorldProjection,
 } from "./types";
@@ -264,15 +265,18 @@ const locationDraft = (entity: WorldEntity): EnvironmentLocation => {
 export function LocationMapStudio({
   projectId,
   revision,
+  workflows,
   fail,
 }: {
   projectId: string;
   revision: number;
+  workflows: WorkflowPreset[];
   fail: (message: string) => void;
 }) {
   const [map, setMap] = useState<SpatialMap | null>(null);
   const [world, setWorld] = useState<WorldProjection | null>(null);
   const [environmentSettings, setEnvironmentSettings] = useState<EnvironmentSettings | null>(null);
+  const [environmentSettingsOpen, setEnvironmentSettingsOpen] = useState(false);
   const [layerId, setLayerId] = useState<string | null>(null);
   const [tool, setTool] = useState<Tool>("select");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -287,6 +291,9 @@ export function LocationMapStudio({
   const [vertexPreview, setVertexPreview] = useState<Point | null>(null);
   const [editorDraft, setEditorDraft] = useState<EnvironmentLocation | null>(null);
   const [backgrounds, setBackgrounds] = useState<BackgroundRecord[]>([]);
+  const [backgroundSelection, setBackgroundSelection] = useState<string>("new");
+  const [backgroundWeatherId, setBackgroundWeatherId] = useState("");
+  const [backgroundTimePhaseId, setBackgroundTimePhaseId] = useState("");
   const [imageBusy, setImageBusy] = useState(false);
   const [connectionDraft, setConnectionDraft] = useState<ConnectionDraft | null>(null);
   const [hitMenu, setHitMenu] = useState<HitMenuState>(null);
@@ -346,15 +353,29 @@ export function LocationMapStudio({
   const loadBackgrounds = useCallback(async (locationId: string) => {
     const rows = await api<BackgroundRecord[]>(`/projects/${projectId}/environment/locations/${locationId}/backgrounds`);
     setBackgrounds(rows);
+    setBackgroundSelection(current => current !== "new" && rows.some(row => row.media_asset_id === current)
+      ? current
+      : (rows[0]?.media_asset_id ?? "new"));
   }, [projectId]);
 
   useEffect(() => {
     if (!selectedLocation) {
       setBackgrounds([]);
+      setBackgroundSelection("new");
+      setBackgroundWeatherId("");
+      setBackgroundTimePhaseId("");
       return;
     }
     void loadBackgrounds(selectedLocation.id).catch(cause => fail(String(cause)));
   }, [selectedLocation?.id, loadBackgrounds, fail]);
+
+  useEffect(() => {
+    if (backgroundSelection === "new") return;
+    const row = backgrounds.find(item => item.media_asset_id === backgroundSelection);
+    if (!row) return;
+    setBackgroundWeatherId(row.weather_id ?? "");
+    setBackgroundTimePhaseId(row.time_phase_id ?? "");
+  }, [backgroundSelection, backgrounds]);
 
   const breadcrumbs = useMemo(() => {
     const result: Array<{ id: string; name: string }> = [];
@@ -417,8 +438,9 @@ export function LocationMapStudio({
   }, [selectedConnection]);
 
   const backgroundAsset = useMemo<MediaAsset | null>(() => {
-    if (!selectedLocation || !backgrounds.length) return null;
-    const row = backgrounds[0];
+    if (!selectedLocation || !backgrounds.length || backgroundSelection === "new") return null;
+    const row = backgrounds.find(item => item.media_asset_id === backgroundSelection);
+    if (!row) return null;
     return {
       id: row.media_asset_id,
       entity_id: selectedLocation.id,
@@ -428,7 +450,7 @@ export function LocationMapStudio({
       prompt: row.prompt,
       negative_prompt: row.negative_prompt,
     };
-  }, [backgrounds, selectedLocation]);
+  }, [backgrounds, selectedLocation, backgroundSelection]);
 
   function canvasPoint(clientX: number, clientY: number, element: HTMLElement): Point {
     const rect = element.getBoundingClientRect();
@@ -436,6 +458,27 @@ export function LocationMapStudio({
       x: clamp(round(((clientX - rect.left) / rect.width) * 100 / zoom)),
       y: clamp(round(((clientY - rect.top) / rect.height) * 100 / zoom)),
     };
+  }
+
+  async function saveEnvironmentSettings(patch: Partial<EnvironmentSettings>) {
+    if (!environmentSettings) return;
+    try {
+      const next = await api<EnvironmentSettings>(`/projects/${projectId}/environment/settings`, {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled: patch.enabled ?? environmentSettings.enabled,
+          ai_create_locations: patch.ai_create_locations ?? environmentSettings.ai_create_locations,
+          ai_propose_weather: patch.ai_propose_weather ?? environmentSettings.ai_propose_weather,
+          auto_generate_backgrounds: patch.auto_generate_backgrounds ?? environmentSettings.auto_generate_backgrounds,
+          background_workflow_id: patch.background_workflow_id !== undefined ? patch.background_workflow_id : environmentSettings.background_workflow_id,
+          initial_weather_id: patch.initial_weather_id ?? environmentSettings.initial_weather_id,
+          perception_stat_key: patch.perception_stat_key !== undefined ? patch.perception_stat_key : (environmentSettings.perception_stat_key ?? null),
+        }),
+      });
+      setEnvironmentSettings(next);
+    } catch (cause) {
+      fail(String(cause));
+    }
   }
 
   async function migrate() {
@@ -912,7 +955,7 @@ export function LocationMapStudio({
     if (!selectedLocation) return;
     const workflowId = environmentSettings?.background_workflow_id;
     if (!workflowId) {
-      fail("Choose a background workflow in Environment before generating location images.");
+      fail("Choose a background workflow in Environment settings before generating location images.");
       return;
     }
     const fallback = String(selectedLocation.state.imagegen_description || selectedLocation.state.description || selectedLocation.name);
@@ -926,7 +969,7 @@ export function LocationMapStudio({
           `/projects/${projectId}/environment/locations/${selectedLocation.id}/backgrounds`,
           {
             method: "POST",
-            body: JSON.stringify({ prompt, negative_prompt: "", weather_id: null, time_phase_id: null }),
+            body: JSON.stringify({ prompt, negative_prompt: "", weather_id: backgroundWeatherId || null, time_phase_id: backgroundTimePhaseId || null }),
           },
         );
         mediaId = created.media_asset_id;
@@ -942,6 +985,7 @@ export function LocationMapStudio({
         }),
       });
       await loadBackgrounds(selectedLocation.id);
+      if (mediaId) setBackgroundSelection(mediaId);
     } finally {
       setImageBusy(false);
     }
@@ -951,10 +995,14 @@ export function LocationMapStudio({
     if (!selectedLocation) return;
     const form = new FormData();
     form.append("file", file);
+    const conditions = new URLSearchParams({ kind: "location" });
+    if (backgroundSelection === "new" && backgroundWeatherId) conditions.set("weather_id", backgroundWeatherId);
+    if (backgroundSelection === "new" && backgroundTimePhaseId) conditions.set("time_phase_id", backgroundTimePhaseId);
     setImageBusy(true);
     try {
-      await api(`/entities/${selectedLocation.id}/media/upload?kind=location`, { method: "POST", body: form });
+      const created = await api<MediaAsset>(`/entities/${selectedLocation.id}/media/upload?${conditions.toString()}`, { method: "POST", body: form });
       await loadBackgrounds(selectedLocation.id);
+      setBackgroundSelection(created.id);
     } finally {
       setImageBusy(false);
     }
@@ -963,6 +1011,9 @@ export function LocationMapStudio({
   async function deleteBackground(asset: MediaAsset) {
     if (!selectedLocation) return;
     await api(`/media-assets/${asset.id}`, { method: "DELETE" });
+    setBackgroundSelection("new");
+    setBackgroundWeatherId("");
+    setBackgroundTimePhaseId("");
     await loadBackgrounds(selectedLocation.id);
   }
 
@@ -1174,8 +1225,8 @@ export function LocationMapStudio({
     <header className="location-map-header">
       <div className="location-map-heading">
         <div>
-          <p className="eyebrow">SPATIAL AUTHORING</p>
-          <h2>{currentLayer?.name ?? "Location Map"}</h2>
+          <p className="eyebrow">ENVIRONMENT & MAP</p>
+          <h2>{currentLayer?.name ?? "Environment & Map"}</h2>
         </div>
         <Chip size="small" label={`${map.topology ?? "closed"} layer`} />
       </div>
@@ -1234,6 +1285,7 @@ export function LocationMapStudio({
           >{item.label}</Button>)}
         </ButtonGroup>
         <span className="location-map-toolbar-spacer" />
+        <Button size="small" variant="outlined" onClick={() => setEnvironmentSettingsOpen(true)}>Environment settings</Button>
         {tool === "area" && areaDraft.length >= 2 && <Button size="small" onClick={() => void finishArea(false)}>
           Finish as wall
         </Button>}
@@ -1466,6 +1518,59 @@ export function LocationMapStudio({
             <Chip size="small" label={editorDraft.spatial_kind} />
           </section>
 
+          <section className="location-map-background-manager">
+            <div className="location-map-section-heading">
+              <div><p className="eyebrow">BACKGROUNDS</p><h4>Scene image variants</h4></div>
+              <Chip size="small" label={backgrounds.length} />
+            </div>
+            <TextField
+              select
+              size="small"
+              label="Background variant"
+              value={backgroundSelection}
+              onChange={event => {
+                const value = event.target.value;
+                setBackgroundSelection(value);
+                if (value === "new") {
+                  setBackgroundWeatherId("");
+                  setBackgroundTimePhaseId("");
+                }
+              }}
+            >
+              <MenuItem value="new">+ New background variant</MenuItem>
+              {backgrounds.map(row => {
+                const weather = environmentSettings?.weather.find(item => item.id === row.weather_id)?.name ?? "Any weather";
+                const phase = environmentSettings?.time_phases.find(item => item.id === row.time_phase_id)?.name ?? "Any time";
+                return <MenuItem key={row.media_asset_id} value={row.media_asset_id}>{weather} · {phase}</MenuItem>;
+              })}
+            </TextField>
+            <div className="location-map-two-column">
+              <TextField
+                select
+                size="small"
+                label="Weather"
+                disabled={backgroundSelection !== "new"}
+                value={backgroundWeatherId}
+                onChange={event => setBackgroundWeatherId(event.target.value)}
+              >
+                <MenuItem value="">Any weather</MenuItem>
+                {environmentSettings?.weather.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+              </TextField>
+              <TextField
+                select
+                size="small"
+                label="Time"
+                disabled={backgroundSelection !== "new"}
+                value={backgroundTimePhaseId}
+                onChange={event => setBackgroundTimePhaseId(event.target.value)}
+              >
+                <MenuItem value="">Any time</MenuItem>
+                {environmentSettings?.time_phases.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+              </TextField>
+            </div>
+            <small>{backgroundSelection === "new" ? "Generate or upload a new condition-specific background." : "Select New background variant to create a different weather/time image."}</small>
+          </section>
+
           <EntityImageSurface
             asset={backgroundAsset}
             alt={`${selectedLocation.name} background`}
@@ -1503,6 +1608,20 @@ export function LocationMapStudio({
               label="Image generation description"
               value={editorDraft.imagegen_description}
               onChange={event => setEditorDraft({ ...editorDraft, imagegen_description: event.target.value })}
+            />
+            <TextField
+              size="small"
+              label="Tags"
+              helperText="Comma separated"
+              value={editorDraft.tags.join(", ")}
+              onChange={event => setEditorDraft({ ...editorDraft, tags: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })}
+            />
+            <TextField
+              size="small"
+              label="Image tags"
+              helperText="Comma separated; used for generation and later media search."
+              value={editorDraft.image_tags.join(", ")}
+              onChange={event => setEditorDraft({ ...editorDraft, image_tags: event.target.value.split(",").map(value => value.trim()).filter(Boolean) })}
             />
             <TextField
               select
@@ -1700,6 +1819,54 @@ export function LocationMapStudio({
         Remove point
       </MenuItem>
     </Menu>
+
+    <Dialog open={environmentSettingsOpen} onClose={() => setEnvironmentSettingsOpen(false)} fullWidth maxWidth="sm">
+      <DialogTitle>Environment settings</DialogTitle>
+      <DialogContent className="location-map-environment-dialog">
+        {environmentSettings && <>
+          <p className="location-map-route-dialog-intro">Project-wide environment behavior now lives alongside the map. Weather/time catalog editing is still in the transitional Environment settings tab for this first Slice A pass.</p>
+          <div className="location-map-switches">
+            <FormControlLabel control={<Switch checked={environmentSettings.enabled} onChange={event => void saveEnvironmentSettings({ enabled: event.target.checked })} />} label="Environment enabled" />
+            <FormControlLabel control={<Switch checked={environmentSettings.ai_create_locations} onChange={event => void saveEnvironmentSettings({ ai_create_locations: event.target.checked })} />} label="AI may create locations" />
+            <FormControlLabel control={<Switch checked={environmentSettings.ai_propose_weather} onChange={event => void saveEnvironmentSettings({ ai_propose_weather: event.target.checked })} />} label="AI may propose weather" />
+            <FormControlLabel control={<Switch checked={environmentSettings.auto_generate_backgrounds} onChange={event => void saveEnvironmentSettings({ auto_generate_backgrounds: event.target.checked })} />} label="Automatic backgrounds" />
+          </div>
+          <TextField
+            select
+            fullWidth
+            size="small"
+            label="Initial weather"
+            value={environmentSettings.initial_weather_id}
+            onChange={event => void saveEnvironmentSettings({ initial_weather_id: event.target.value })}
+          >
+            {environmentSettings.weather.filter(item => item.enabled).map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+          </TextField>
+          <TextField
+            select
+            fullWidth
+            size="small"
+            label="Background workflow"
+            value={environmentSettings.background_workflow_id ?? ""}
+            onChange={event => void saveEnvironmentSettings({ background_workflow_id: event.target.value || null, auto_generate_backgrounds: event.target.value ? environmentSettings.auto_generate_backgrounds : false })}
+          >
+            <MenuItem value="">None</MenuItem>
+            {workflows.map(item => <MenuItem key={item.id} value={item.id}>{item.name}</MenuItem>)}
+          </TextField>
+          <TextField
+            fullWidth
+            size="small"
+            label="Perception stat key"
+            helperText="Optional character stat used to scale map discovery."
+            value={environmentSettings.perception_stat_key ?? ""}
+            onChange={event => setEnvironmentSettings({ ...environmentSettings, perception_stat_key: event.target.value })}
+            onBlur={event => void saveEnvironmentSettings({ perception_stat_key: event.target.value.trim() || null })}
+          />
+        </>}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setEnvironmentSettingsOpen(false)}>Close</Button>
+      </DialogActions>
+    </Dialog>
 
     <Dialog open={Boolean(routeDialog)} onClose={() => { setRouteDialog(null); setRoutePoints([]); }} fullWidth maxWidth="sm">
       <DialogTitle>Configure route endpoints</DialogTitle>
