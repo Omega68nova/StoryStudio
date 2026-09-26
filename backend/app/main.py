@@ -1703,6 +1703,37 @@ async def plan_spatial_v3_path(
         raise HTTPException(422, str(exc)) from exc
 
 
+@app.get("/api/projects/{project_id}/spatial-v3/travel-preview")
+async def preview_spatial_v3_travel(
+    project_id: str,
+    start_space_id: str,
+    start_x: float,
+    start_y: float,
+    target_space_id: str,
+    target_x: float,
+    target_y: float,
+    seed: str,
+    resume_cursor: str | None = None,
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3 import SpatialV3Error
+    from app.services.spatial_v3_travel import SpatialV3TravelPreview
+
+    _synchronize_spatial_v3_projection(project_id)
+    try:
+        return SpatialV3TravelPreview(data.spatial_v3).preview(
+            project_id=project_id,
+            start_space_id=start_space_id,
+            start=(start_x, start_y),
+            target_space_id=target_space_id,
+            target=(target_x, target_y),
+            seed=seed,
+            resume_cursor=resume_cursor,
+        )
+    except SpatialV3Error as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
 @app.get("/api/projects/{project_id}/spatial-v3/spaces/{space_id}/transitions/{feature_id}/encounter")
 async def resolve_spatial_v3_transition_encounter(
     project_id: str,

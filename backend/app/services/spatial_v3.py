@@ -273,8 +273,15 @@ class SpatialV3Service:
 
         candidate_weights: dict[str, float] = defaultdict(float)
         candidate_sources: dict[str, list[str]] = defaultdict(list)
+        unresolved_candidates: list[dict[str, Any]] = []
         for policy in unconditional:
             for candidate in policy.candidates:
+                if candidate.requirements:
+                    unresolved_candidates.append({
+                        "policy_id": policy.id,
+                        "candidate": candidate.model_dump(mode="json"),
+                    })
+                    continue
                 candidate_weights[candidate.location_id] += float(candidate.weight)
                 candidate_sources[candidate.location_id].append(policy.id)
 
@@ -295,6 +302,7 @@ class SpatialV3Service:
             "candidates": candidates,
             "policy_ids": [policy.id for policy in contributors],
             "unresolved_conditions": unresolved,
+            "unresolved_candidates": unresolved_candidates,
         }
 
 
@@ -307,18 +315,24 @@ class SpatialV3Service:
     ) -> dict[str, Any]:
         """Resolve a one-roll encounter for a connector/feature transition."""
         feature = self.repository.feature(feature_id)
-        if (
-            not feature
-            or feature.project_id != project_id
-            or feature.navigation_space_id != navigation_space_id
-        ):
+        if not feature or feature.project_id != project_id:
+            raise SpatialV3Error("Transition feature not found")
+        if feature.feature_kind == "connector":
+            props = feature.properties
+            if not hasattr(props, "source") or navigation_space_id not in {
+                props.source.navigation_space_id,
+                props.target.navigation_space_id,
+            }:
+                raise SpatialV3Error("Transition feature is not reachable from this navigation space")
+        elif feature.navigation_space_id != navigation_space_id:
             raise SpatialV3Error("Transition feature not found")
 
         policies = [
             policy
-            for policy in self.repository.encounter_policies(
+            for policy in self.repository.encounter_policies_for_transition(
                 project_id,
                 navigation_space_id,
+                feature_id,
             )
             if policy.enabled
             and str(policy.trigger_kind) == "transition"
@@ -363,10 +377,17 @@ class SpatialV3Service:
         no_encounter = 1.0
         candidate_weights: dict[str, float] = defaultdict(float)
         candidate_sources: dict[str, list[str]] = defaultdict(list)
+        unresolved_candidates: list[dict[str, Any]] = []
         for policy in unconditional:
             probability = float(policy.probability_per_transition or 0)
             no_encounter *= 1 - probability
             for candidate in policy.candidates:
+                if candidate.requirements:
+                    unresolved_candidates.append({
+                        "policy_id": policy.id,
+                        "candidate": candidate.model_dump(mode="json"),
+                    })
+                    continue
                 candidate_weights[candidate.location_id] += float(candidate.weight)
                 candidate_sources[candidate.location_id].append(policy.id)
 
@@ -385,4 +406,5 @@ class SpatialV3Service:
             "candidates": candidates,
             "policy_ids": [policy.id for policy in contributors],
             "unresolved_conditions": unresolved,
+            "unresolved_candidates": unresolved_candidates,
         }

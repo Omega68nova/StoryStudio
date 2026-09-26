@@ -246,19 +246,42 @@ Still needed in this area:
 - production travel/itinerary integration after encounter segmentation is
   completed.
 
-## 3. Full encounter integration into travel
+## 3. Full encounter integration into travel — experimental core implemented
 
-Current V3 resolves encounter context and probabilities, but does not yet drive
-the production travel itinerary.
+Spatial V3 now has a side-effect-free travel preview that consumes the actual
+segmented V3 route and evaluates encounters along it.
+
+Implemented:
+
+- movement distance is accumulated across consecutive path pieces with the same
+  effective encounter-policy set, so visibility-graph/editor segmentation does
+  not alter encounter odds;
+- distance encounters use deterministic Poisson inter-arrival distances, which
+  locates the first encounter at an exact point along the travelled route;
+- transition encounters are rolled exactly once when traversing a Connector;
+- weighted candidate selection is deterministic;
+- retrying the same route with the same seed returns the same interruption;
+- encounter interruptions return an opaque resume cursor;
+- resuming consumes the previous encounter/transition and continues from the
+  exact distance where travel stopped;
+- resume cursors are bound to both the route signature and seed;
+- bidirectional connectors preserve feature-targeted transition encounter rules
+  when traversed from either side;
+- policy conditions and candidate requirements remain unresolved rather than
+  being guessed before Requirements V2;
+- diagnostic `GET /api/projects/{project_id}/spatial-v3/travel-preview`.
+
+This is deliberately not yet wired into production `travelTo` /
+`travelTowards` / story generation. The preview contract is intended to prove
+determinism and interruption semantics before replacing the existing itinerary
+runtime.
 
 Still needed:
 
-- integrate path length per feature;
-- split a route where encounter contributors change;
-- stable seeded random roll/selection;
-- pause/resume itinerary on encounter;
-- condition evaluation via Requirements V2;
-- preserve current retry stability guarantees.
+- shared Requirements V2 evaluation for policy/candidate conditions;
+- production itinerary/checkpoint persistence using the V3 resume contract;
+- story/minigame encounter handoff and continuation;
+- branch-safe committed travel events once V3 becomes the production runtime.
 
 ## 4. V3 editor
 

@@ -450,6 +450,46 @@ class SpatialV3Repository(BaseRepository):
             }))
         return result
 
+    def encounter_policies_for_transition(
+        self,
+        project_id: str,
+        navigation_space_id: str,
+        feature_id: str,
+    ) -> list[EncounterPolicy]:
+        """Policies that can affect traversing one feature from one space.
+
+        Feature-targeted policies must remain visible when a bidirectional
+        connector is traversed from its target side, so this query cannot rely
+        on the feature being owned by navigation_space_id.
+        """
+        rows = self.db.fetch_all(
+            """
+            SELECT * FROM navigation_encounter_policies_current
+            WHERE project_id=?
+              AND (navigation_space_id=? OR feature_id=?)
+            ORDER BY priority,id
+            """,
+            (project_id, navigation_space_id, feature_id),
+        )
+        return [
+            EncounterPolicy.model_validate({
+                "id": row["id"],
+                "project_id": row["project_id"],
+                "navigation_space_id": row.get("navigation_space_id"),
+                "feature_id": row.get("feature_id"),
+                "mode": row["mode"],
+                "priority": row["priority"],
+                "trigger_kind": row.get("trigger_kind") or "distance",
+                "rate_per_100_units": row["rate_per_100_units"],
+                "probability_per_transition": row.get("probability_per_transition"),
+                "minimum_distance": row["minimum_distance"],
+                "candidates": json.loads(row.get("candidates_json") or "[]"),
+                "conditions": json.loads(row["conditions_json"]) if row.get("conditions_json") else None,
+                "enabled": bool(row["enabled"]),
+            })
+            for row in rows
+        ]
+
     def save_encounter_policy(self, policy: EncounterPolicy) -> EncounterPolicy:
         self.db.execute(
             """
