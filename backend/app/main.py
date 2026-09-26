@@ -1598,6 +1598,41 @@ def _commit_spatial_v3_mutation(
     return transaction, mutations[0].arguments
 
 
+def _commit_spatial_v3_mutations(
+    project_id: str,
+    raw: list[dict[str, Any]],
+    summary: str,
+) -> tuple[dict[str, Any], list[Any]]:
+    project = require_project(project_id)
+    try:
+        mutations = scheduler.world.normalize_mutations(
+            project_id,
+            project.get("active_node_id"),
+            raw,
+            provenance="author",
+        )
+        transaction = (
+            scheduler.world.commit_to_existing_node(
+                project_id,
+                project["active_node_id"],
+                mutations,
+                provenance="author",
+                summary=summary,
+            )
+            if project.get("active_node_id")
+            else scheduler.world.commit_root(
+                project_id,
+                mutations,
+                provenance="author",
+                summary=summary,
+            )
+        )
+    except WorldValidationError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    _synchronize_spatial_v3_projection(project_id)
+    return transaction, mutations
+
+
 @app.post("/api/projects/{project_id}/spatial-v3/materialize")
 async def materialize_spatial_v3(project_id: str) -> dict[str, Any]:
     """Migrate legacy spatial state into branch-authoritative Spatial V3 events."""
@@ -1643,6 +1678,41 @@ async def materialize_spatial_v3(project_id: str) -> dict[str, Any]:
         "branch_authoritative": True,
         "transaction_id": transaction["id"],
         "materialized_counts": materialized_counts,
+    }
+
+
+@app.get("/api/projects/{project_id}/spatial-v3/presets")
+async def list_spatial_v3_presets(project_id: str) -> list[dict[str, Any]]:
+    require_project(project_id)
+    from app.services.spatial_v3_presets import public_spatial_v3_presets
+    return public_spatial_v3_presets()
+
+
+@app.post("/api/projects/{project_id}/spatial-v3/presets/{preset_key}/apply")
+async def apply_spatial_v3_preset(
+    project_id: str,
+    preset_key: str,
+    request: dict[str, Any],
+) -> dict[str, Any]:
+    require_project(project_id)
+    from app.services.spatial_v3_presets import (
+        SpatialV3PresetError,
+        build_spatial_v3_preset,
+    )
+    _synchronize_spatial_v3_projection(project_id)
+    try:
+        raw = build_spatial_v3_preset(
+            data.spatial_v3, project_id, preset_key, request
+        )
+    except SpatialV3PresetError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    transaction, mutations = _commit_spatial_v3_mutations(
+        project_id, raw, f"Apply Spatial V3 preset: {preset_key}"
+    )
+    return {
+        "transaction_id": transaction["id"],
+        "preset": preset_key,
+        "mutation_count": len(mutations),
     }
 
 
