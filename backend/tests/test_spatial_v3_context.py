@@ -1,3 +1,5 @@
+import pytest
+
 from app.domain.spatial_v3 import (
     BarrierProperties,
     CorridorProperties,
