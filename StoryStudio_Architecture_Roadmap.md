@@ -1522,7 +1522,7 @@ Phase 7B — Reusability / branch integrity / Global Library
     IN PROGRESS — revisioned foundation, stat packs, and dependency-aware favorites implemented
 
 Phase 7C — Consistency convergence
-    PLANNED — unify location authoring, rules semantics, and media ownership before Phase 8
+    IN PROGRESS — Spatial V3 foundation started; rules/media convergence follows
 
 Phase 8 — Branch-aware context retrieval (RAG)
     FUTURE — depends on Phase 7 canonical records and Phase 7B reusable-resource/media foundations
@@ -1585,6 +1585,42 @@ fields and sparse historical shapes, and expose canonical references without
 changing persistence or HTTP payloads. Item gameplay semantics, relationship
 definitions, media slots, storage normalization, and planner adoption remain
 separate later slices.
+
+## Phase 7 Spatial V3 foundation status
+
+The location/map audit was refined after testing layered city and building
+examples. The current spatial model is no longer the long-term target.
+
+Spatial V3 separates:
+
+- **Location** — semantic place,
+- **NavigationSpace** — one interactable movement map,
+- **MapFeature** — geometry/traversal/environment behavior inside a map.
+
+Navigation spaces support only two base movement modes:
+
+- `free`: unassigned map space is traversable unless features restrict it;
+- `routed`: only authored traversable surfaces/corridors are occupiable.
+
+The V3 feature vocabulary is intentionally small:
+
+- Surface — Polygon/MultiPolygon regions, including holes;
+- Corridor — width-bearing LineString/MultiLineString roads/alleys/hallways;
+- Barrier — crossing blockers such as walls, fences, and cliff edges;
+- Connector — doors, gates, stairs, bridges, climb points, portals;
+- Spot — point-like interactions/landmarks.
+
+Overlapping surfaces no longer collapse to one priority winner. Semantic
+membership is additive; movement priority only resolves conflicting traversal
+behavior within the movement resolver.
+
+The parallel V3 schema and typed domain contracts are introduced in migration
+047 and `backend/app/domain/spatial_v3.py`. Existing spatial storage remains
+active until a read adapter, visual preview, branch replay tests, and migration
+path prove parity.
+
+Detailed design and migration notes:
+`Changelogs/PHASE7C_SPATIAL_V3_FOUNDATION.md`.
 
 ## Phase 7 consistency-convergence status
 
