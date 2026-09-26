@@ -176,6 +176,25 @@ def test_directed_weather_and_ordered_route(tmp_path: Path) -> None:
     assert world.normalize_mutations(project["id"], None, [{"tool": "setSceneEnvironment", "arguments": {"focused_character_id": hero, "player_action": "waiting", "weather_id": rain}}])
 
 
+def test_scene_for_explicit_location_does_not_follow_focused_character(tmp_path: Path) -> None:
+    db, project, world, environment = setup(tmp_path)
+    square = create(world, project["id"], kind="location", name="Square", state={"exposure": "outdoor"})
+    cellar = create(world, project["id"], kind="location", name="Cellar", state={"exposure": "isolated"})
+    hero = create(world, project["id"], kind="character", name="Hero", state={"player_controlled": True, "current_location_id": square})
+    mutation = world.normalize_mutations(project["id"], None, [{"tool": "setSceneEnvironment", "arguments": {"focused_character_id": hero, "player_action": "standing"}}])
+    world.commit_root(project["id"], mutation, provenance="test", summary="scene")
+
+    scene = environment.scene_for_location(
+        project["id"],
+        world.projection(project["id"]),
+        cellar,
+    )
+
+    assert scene["location"]["id"] == cellar
+    assert scene["location"]["name"] == "Cellar"
+    assert scene["focused_character"]["id"] == hero
+
+
 def test_isolated_location_uses_only_location_ambient(tmp_path: Path) -> None:
     db, project, world, environment = setup(tmp_path); now = utc_now()
     place = create(world, project["id"], kind="location", name="Bunker", state={"exposure": "isolated"})

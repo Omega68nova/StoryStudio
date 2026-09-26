@@ -18,6 +18,7 @@ type Feature = {
   feature_kind: "surface" | "corridor" | "barrier" | "connector" | "spot";
   name: string;
   geometry: Geometry;
+  movement_priority: number;
   hidden: boolean;
   enabled: boolean;
   properties: Record<string, any>;
@@ -203,8 +204,7 @@ export function SpatialPlaytestPage({
             : false
       )
       .sort((a, b) =>
-        Number(b.properties?.movement_priority ?? (b as any).movement_priority ?? 0)
-        - Number(a.properties?.movement_priority ?? (a as any).movement_priority ?? 0)
+        Number(b.movement_priority ?? 0) - Number(a.movement_priority ?? 0)
       );
     return containing[0]?.semantic_location_id
       ?? current.space.owner_location_id
