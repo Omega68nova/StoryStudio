@@ -118,6 +118,7 @@ class RulesRuntime:
         source_id: str | None = None,
         target_id: str | None = None,
         ability: Any | None = None,
+        effect: Any | None = None,
     ) -> RuleEvaluationContext:
         """Build a reusable Rules V2 context from branch-authoritative state.
 
@@ -133,10 +134,14 @@ class RulesRuntime:
             str(relation_id): self.participant(project_id, raw)
             for relation_id, raw in projection.get("relations", {}).items()
         }
+        auxiliary = self.data.rules.rule_objects(project_id)
+        for raw in auxiliary.values():
+            raw["stats"] = self.effective_stats(project_id, raw, str(raw["kind"]))
         normalized_projection = {
             **projection,
             "entities": entities,
             "relations": relations,
+            "rule_objects": auxiliary,
         }
         bindings = {}
         for name, object_id in (
@@ -151,13 +156,29 @@ class RulesRuntime:
                 bindings[name] = RuleObjectResolver.snapshot(raw)
         if ability is not None:
             ability_raw = ability.model_dump(mode="json") if hasattr(ability, "model_dump") else dict(ability)
-            bindings["ability"] = RuleObjectResolver.snapshot({
+            ability_object = {
                 **ability_raw,
                 "id": str(ability_raw.get("ability_key") or ability_raw.get("id") or "ability"),
                 "kind": "ability",
-                "stats": dict(ability_raw.get("stats") or {}),
                 "state": {},
-            })
+            }
+            bindings["ability"] = RuleObjectResolver.snapshot(
+                ability_object,
+                stats=self.effective_stats(project_id, ability_object, "ability"),
+            )
+
+        if effect is not None:
+            effect_raw = effect.model_dump(mode="json") if hasattr(effect, "model_dump") else dict(effect)
+            effect_object = {
+                **effect_raw,
+                "id": str(effect_raw.get("effect_key") or effect_raw.get("id") or "effect"),
+                "kind": "effect",
+                "state": {},
+            }
+            bindings["effect"] = RuleObjectResolver.snapshot(
+                effect_object,
+                stats=self.effective_stats(project_id, effect_object, "effect"),
+            )
 
         return RuleEvaluationContext(
             bindings=bindings,
@@ -225,6 +246,7 @@ class RulesRuntime:
                         source_id=str(participants.get("source", {}).get("id") or "") or None,
                         target_id=str(target.id),
                         ability=ability,
+                        effect=definition,
                     ),
                     stat_lookup=lambda key, owner: self.stat(project_id, key, owner),
                 )
@@ -399,6 +421,7 @@ class RulesRuntime:
                                 source_id=str(instance.get("source_id") or "") or None,
                                 target_id=str(instance["target_id"]),
                                 ability=ability,
+                                effect=definition,
                             ),
                             stat_lookup=lambda key, owner: self.stat(project_id, key, owner),
                         )

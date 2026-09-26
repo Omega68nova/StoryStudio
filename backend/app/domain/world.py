@@ -28,6 +28,12 @@ class EntityKind(StrEnum):
     LORE_SYSTEM = "lore_system"
     FACT = "fact"
     RELATIONSHIP = "relationship"
+    ABILITY = "ability"
+    EFFECT = "effect"
+    WEATHER = "weather"
+    OUTFIT = "outfit"
+    NAVIGATION_SPACE = "navigation_space"
+    MAP_FEATURE = "map_feature"
     PLOT_BEAT = "plot_beat"
 
 
@@ -612,6 +618,7 @@ class Weather(DomainModel):
     tags: list[str] = Field(default_factory=list)
     image_tags: list[str] = Field(default_factory=list)
     enabled: bool = True
+    stats: dict[str, Number] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -1103,6 +1110,7 @@ class Ability(DomainModel):
     timed_attack_line_count: int | None = Field(default=None, ge=1, le=8)
     timed_attack_damage_per_line: Number | None = Field(default=None, ge=0)
     bullethell_skill_ids: list[str] = Field(default_factory=list)
+    stats: dict[str, Number] = Field(default_factory=dict)
     created_at: str | None = None
     updated_at: str | None = None
 

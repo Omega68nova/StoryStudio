@@ -438,3 +438,80 @@ def test_runtime_phase8_effect_uses_current_location_per_target_context() -> Non
     )
     assert result["resolved_magnitude"] == 3
     assert result["value"] == 7
+
+
+def test_ability_and_effect_can_own_stats(tmp_path) -> None:
+    from app.database import Database
+    from app.data import DataProvider
+    from app.domain.world import Ability, EffectDefinition, Stat
+
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    project_id = db.create_project("rule object stats")["id"]
+    data.rules.save_stat(Stat.model_validate({
+        "project_id": project_id, "stat_key": "power", "label": "Power",
+        "compatible_owner_kinds": ["ability", "effect"],
+        "default_value": 1, "minimum": 0, "maximum": 100,
+    }))
+    data.rules.save_effect(EffectDefinition.model_validate({
+        "project_id": project_id, "effect_key": "blast", "name": "Blast",
+        "target_stat_key": "power", "formula": {"kind": "constant", "value": 1},
+        "stats": {"power": 4},
+    }))
+    data.rules.save_ability(Ability.model_validate({
+        "project_id": project_id, "ability_key": "cast", "name": "Cast",
+        "stats": {"power": 9},
+    }))
+    assert data.rules.effect(project_id, "blast").stats["power"] == 4
+    assert data.rules.ability(project_id, "cast").stats["power"] == 9
+
+
+def test_rule_context_exposes_ability_effect_and_auxiliary_objects(tmp_path) -> None:
+    from app.database import Database
+    from app.data import DataProvider
+    from app.domain.world import Ability, EffectDefinition, Stat
+    from app.services.rules import RulesRuntime
+
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    project_id = db.create_project("rule context objects")["id"]
+    data.rules.save_stat(Stat.model_validate({
+        "project_id": project_id, "stat_key": "power", "label": "Power",
+        "compatible_owner_kinds": ["character", "ability", "effect", "weather"],
+        "default_value": 2, "minimum": 0, "maximum": 100,
+    }))
+    ability = data.rules.save_ability(Ability.model_validate({
+        "project_id": project_id, "ability_key": "cast", "name": "Cast", "stats": {"power": 7},
+    }))
+    effect = data.rules.save_effect(EffectDefinition.model_validate({
+        "project_id": project_id, "effect_key": "blast", "name": "Blast",
+        "target_stat_key": "power", "formula": {"kind": "constant", "value": 1}, "stats": {"power": 3},
+    }))
+    data.rules.save_rule_object_stats(project_id, "weather", "storm", {"power": 11})
+    runtime = RulesRuntime(data, lambda *_args: None)
+    projection = {"entities": {}, "relations": {}}
+    context = runtime.rule_context(project_id, projection, ability=ability, effect=effect)
+    expression = ValueExpression.model_validate({
+        "kind": "add",
+        "children": [
+            {"kind": "stat", "selector": {"kind": "ability"}, "stat_key": "power"},
+            {"kind": "stat", "selector": {"kind": "effect"}, "stat_key": "power"},
+        ],
+    })
+    value, _ = ValueExpressionEvaluator().evaluate(
+        expression, context,
+        stat_lookup=lambda key, owner: runtime.stat(project_id, key, owner),
+    )
+    assert value == 10
+    explicit = ValueExpression.model_validate({
+        "kind": "stat",
+        "selector": {"kind": "explicit", "object_kind": "weather", "object_id": "storm"},
+        "stat_key": "power",
+    })
+    weather_value, _ = ValueExpressionEvaluator().evaluate(
+        explicit, context,
+        stat_lookup=lambda key, owner: runtime.stat(project_id, key, owner),
+    )
+    assert weather_value == 11

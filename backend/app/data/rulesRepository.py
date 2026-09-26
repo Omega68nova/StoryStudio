@@ -220,6 +220,69 @@ class RulesRepository(BaseRepository):
     def stat(self, project_id: str, stat_key: str) -> Stat | None:
         return next((item for item in self.stats(project_id) if item.stat_key == stat_key), None)
 
+    def rule_object_stats(self, project_id: str, owner_kind: str, owner_id: str) -> dict[str, float]:
+        return {
+            row["stat_key"]: float(row["value"])
+            for row in self.db.fetch_all(
+                "SELECT stat_key,value FROM rule_object_stats WHERE project_id=? AND owner_kind=? AND owner_id=?",
+                (project_id, owner_kind, owner_id),
+            )
+        }
+
+    def rule_objects(self, project_id: str) -> dict[str, dict[str, Any]]:
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in self.db.fetch_all(
+            "SELECT owner_kind,owner_id,stat_key,value FROM rule_object_stats WHERE project_id=? ORDER BY owner_kind,owner_id,stat_key",
+            (project_id,),
+        ):
+            key = f"{row['owner_kind']}:{row['owner_id']}"
+            item = grouped.setdefault(key, {
+                "id": row["owner_id"],
+                "kind": row["owner_kind"],
+                "name": row["owner_id"],
+                "tags": [],
+                "state": {},
+                "stats": {},
+            })
+            item["stats"][row["stat_key"]] = float(row["value"])
+        return grouped
+
+    def _replace_rule_object_stats(
+        self,
+        connection: Any,
+        project_id: str,
+        owner_kind: str,
+        owner_id: str,
+        values: dict[str, Any],
+    ) -> None:
+        definitions = {item.stat_key: item for item in self.stats(project_id)}
+        for key in values:
+            definition = definitions.get(str(key))
+            if not definition or owner_kind not in map(str, definition.compatible_owner_kinds):
+                raise ValueError(f"Unknown or incompatible {owner_kind} stat: {key}")
+        connection.execute(
+            "DELETE FROM rule_object_stats WHERE project_id=? AND owner_kind=? AND owner_id=?",
+            (project_id, owner_kind, owner_id),
+        )
+        connection.executemany(
+            "INSERT INTO rule_object_stats(project_id,owner_kind,owner_id,stat_key,value) VALUES(?,?,?,?,?)",
+            [
+                (project_id, owner_kind, owner_id, str(key), float(value))
+                for key, value in values.items()
+            ],
+        )
+
+    def save_rule_object_stats(
+        self,
+        project_id: str,
+        owner_kind: str,
+        owner_id: str,
+        values: dict[str, Any],
+    ) -> dict[str, float]:
+        with self.db._lock, self.db.connect() as connection:
+            self._replace_rule_object_stats(connection, project_id, owner_kind, owner_id, values)
+        return self.rule_object_stats(project_id, owner_kind, owner_id)
+
     def save_stat(self, stat: Stat, *, previous_key: str | None = None) -> Stat:
         key = previous_key or stat.stat_key
         self._validate_stat(stat)
@@ -253,6 +316,7 @@ class RulesRepository(BaseRepository):
             "enabled": bool(row["enabled"]),
             "formula": self._formula(project_id, row["effect_key"]),
             "value_expression": json.loads(row["value_expression_json"]) if row.get("value_expression_json") else None,
+            "stats": self.rule_object_stats(project_id, "effect", row["effect_key"]),
         }) for row in rows]
 
     def effect(self, project_id: str, effect_key: str) -> EffectDefinition | None:
@@ -284,7 +348,7 @@ class RulesRepository(BaseRepository):
         now = utc_now()
         with self.db._lock, self.db.connect() as connection:
             existing = connection.execute("SELECT created_at FROM effect_definitions WHERE project_id=? AND effect_key=?", (effect.project_id, effect.effect_key)).fetchone()
-            data = effect.model_dump(mode="json", exclude={"formula", "value_expression"})
+            data = effect.model_dump(mode="json", exclude={"formula", "value_expression", "stats"})
             data["value_expression_json"] = json.dumps(effect.value_expression) if effect.value_expression else None
             data.update(created_at=existing["created_at"] if existing else now, updated_at=now)
             connection.execute(
@@ -294,6 +358,7 @@ class RulesRepository(BaseRepository):
             )
             connection.execute("DELETE FROM effect_formula_nodes WHERE project_id=? AND effect_key=?", (effect.project_id, effect.effect_key))
             self._write_formula(connection, str(effect.project_id), effect.effect_key, effect.formula, None, 0)
+            self._replace_rule_object_stats(connection, str(effect.project_id), "effect", effect.effect_key, effect.stats)
         return self.effect(str(effect.project_id), effect.effect_key)  # type: ignore[return-value]
 
     def _write_formula(self, connection: Any, project_id: str, effect_key: str, node: FormulaNode, parent_id: str | None, position: int) -> None:
@@ -331,7 +396,7 @@ class RulesRepository(BaseRepository):
                 (project_id, key),
             )
         ]
-        return Ability.model_validate({**row, "enabled": bool(row["enabled"]), "compatible_owner_kinds": owners, "requirements": self._requirement(project_id, key), "costs": costs, "rule_costs": rule_costs, "actions": actions, "passive_triggers": triggers, "bullethell_skill_ids": skills})
+        return Ability.model_validate({**row, "enabled": bool(row["enabled"]), "compatible_owner_kinds": owners, "requirements": self._requirement(project_id, key), "costs": costs, "rule_costs": rule_costs, "actions": actions, "passive_triggers": triggers, "bullethell_skill_ids": skills, "stats": self.rule_object_stats(project_id, "ability", key)})
 
     def _requirement(self, project_id: str, ability_key: str) -> dict[str, Any]:
         rows = self.db.fetch_all("SELECT * FROM ability_requirement_nodes WHERE project_id=? AND ability_key=? ORDER BY position", (project_id, ability_key))
@@ -356,7 +421,7 @@ class RulesRepository(BaseRepository):
         now = utc_now()
         with self.db._lock, self.db.connect() as connection:
             existing = connection.execute("SELECT created_at FROM ability_definitions WHERE project_id=? AND ability_key=?", (ability.project_id, ability.ability_key)).fetchone()
-            data = ability.model_dump(mode="json", exclude={"compatible_owner_kinds", "requirements", "costs", "rule_costs", "actions", "passive_triggers", "bullethell_skill_ids"})
+            data = ability.model_dump(mode="json", exclude={"compatible_owner_kinds", "requirements", "costs", "rule_costs", "actions", "passive_triggers", "bullethell_skill_ids", "stats"})
             data.update(created_at=existing["created_at"] if existing else now, updated_at=now)
             connection.execute("INSERT INTO ability_definitions(project_id,ability_key,name,description,ability_kind,target_type,icon,enabled,timed_attack_line_count,timed_attack_damage_per_line,created_at,updated_at) VALUES(:project_id,:ability_key,:name,:description,:ability_kind,:target_type,:icon,:enabled,:timed_attack_line_count,:timed_attack_damage_per_line,:created_at,:updated_at) ON CONFLICT(project_id,ability_key) DO UPDATE SET name=excluded.name,description=excluded.description,ability_kind=excluded.ability_kind,target_type=excluded.target_type,icon=excluded.icon,enabled=excluded.enabled,timed_attack_line_count=excluded.timed_attack_line_count,timed_attack_damage_per_line=excluded.timed_attack_damage_per_line,updated_at=excluded.updated_at", data)
             for table in ("ability_owner_kinds", "ability_requirement_nodes", "ability_costs", "ability_rule_costs", "ability_actions", "ability_passive_triggers", "ability_bullethell_skills"):
@@ -379,6 +444,7 @@ class RulesRepository(BaseRepository):
             connection.executemany("INSERT INTO ability_actions(id,project_id,ability_key,position,action_kind,target,effect_key,destination_id,entity_kind,entity_name,state_json,fact_id,relation,minutes,noise_id,duration_override,tick_override) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", [(new_id(), str(ability.project_id), ability.ability_key, i, str(action.kind), action.target, action.effect_key, action.destination_id, str(action.entity_kind) if action.entity_kind else None, action.entity_name, json.dumps(action.state), action.fact_id, action.relation, action.minutes, action.noise_id, action.duration_override, action.tick_override) for i, action in enumerate(ability.actions)])
             connection.executemany("INSERT INTO ability_passive_triggers(id,project_id,ability_key,trigger_kind,stat_key) VALUES(?,?,?,?,?)", [(new_id(), str(ability.project_id), ability.ability_key, str(trigger.kind), trigger.stat_key) for trigger in ability.passive_triggers])
             connection.executemany("INSERT INTO ability_bullethell_skills(project_id,ability_key,skill_id,position) VALUES(?,?,?,?)", [(str(ability.project_id), ability.ability_key, skill, i) for i, skill in enumerate(ability.bullethell_skill_ids)])
+            self._replace_rule_object_stats(connection, str(ability.project_id), "ability", ability.ability_key, ability.stats)
         return self.ability(str(ability.project_id), ability.ability_key)  # type: ignore[return-value]
 
     def _write_requirement(self, connection: Any, project_id: str, ability_key: str, node: RequirementExpression, parent_id: str | None, position: int) -> None:

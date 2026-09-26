@@ -25,6 +25,7 @@ class RuleSelectorKind(StrEnum):
     TARGET = "target"
     CURRENT_LOCATION = "current_location"
     ABILITY = "ability"
+    EFFECT = "effect"
     EXPLICIT = "explicit"
     RELATIONSHIP_TARGET = "relationship_target"
 
@@ -187,10 +188,16 @@ class RuleObjectResolver:
 
     def resolve(self, selector: RuleObjectSelector, context: RuleEvaluationContext) -> RuleObjectSnapshot | None:
         kind = str(selector.kind)
-        if kind in {"actor", "source", "target", "ability"}:
+        if kind in {"actor", "source", "target", "ability", "effect"}:
             return context.bindings.get(kind)
         if kind == "explicit":
             object_id = str(selector.object_id or "")
+            if selector.object_kind:
+                stored = context.projection.get("rule_objects", {}).get(
+                    f"{selector.object_kind}:{object_id}"
+                )
+                if stored:
+                    return self.snapshot(stored, kind=str(selector.object_kind))
             if selector.object_kind == "relationship":
                 raw = context.projection.get("relations", {}).get(object_id)
                 return self.snapshot(raw, kind="relationship") if raw else None

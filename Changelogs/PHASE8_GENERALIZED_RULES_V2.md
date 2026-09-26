@@ -371,3 +371,26 @@ same ability normalization/transaction.
 
 Timed live effects persist the originating `ability_key` and re-evaluate
 Phase 8 value expressions from current branch state when they fire.
+
+
+### Generic stats for non-world rule objects — implemented foundation
+
+Stat definitions now support additional owner kinds:
+
+- ability;
+- effect;
+- weather;
+- outfit;
+- navigation_space;
+- map_feature.
+
+Non-world resources use the additive `rule_object_stats` store instead of
+requiring a bespoke stats column/table in every subsystem. Ability and effect
+repositories persist these stats immediately; the same repository API can be
+used by environment/outfit/Spatial V3 editors as those integrations are added.
+
+Rules V2 exposes `ability` and `effect` selectors as first-class bindings,
+and explicit selectors can resolve auxiliary rule objects. Effective defaults
+and dynamic bounds are applied consistently through `RulesRuntime.rule_context`.
+
+Migration: `051_extended_rule_stat_owners.sql`.
