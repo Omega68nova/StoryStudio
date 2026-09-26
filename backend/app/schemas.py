@@ -920,6 +920,7 @@ class AbilityDefinitionCreate(BaseModel):
     compatible_owner_kinds: list[Literal["character", "item"]] = Field(default_factory=lambda: ["character"], min_length=1)
     target_type: Literal["self", "character", "choice", "relationship", "location", "all", "party", "allies", "enemies", "nearby_enemies", "faction_members", "random"] = "self"
     requirements: dict[str, Any] = Field(default_factory=dict)
+    condition_expression: dict[str, Any] | None = None
     costs: list[AbilityCost] = Field(default_factory=list, max_length=50)
     rule_costs: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
     actions: list[AbilityAction] = Field(default_factory=list, max_length=50)
@@ -936,6 +937,14 @@ class AbilityDefinitionCreate(BaseModel):
     def validate_requirements(cls, requirements: dict[str, Any]) -> dict[str, Any]:
         RequirementExpression.model_validate(requirements)
         return requirements
+
+    @field_validator("condition_expression")
+    @classmethod
+    def validate_condition_expression(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is not None:
+            from app.domain.rules_v2 import ConditionExpression
+            ConditionExpression.model_validate(value)
+        return value
 
     @field_validator("value_expression", check_fields=False)
     @classmethod

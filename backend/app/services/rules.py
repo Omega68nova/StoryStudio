@@ -331,6 +331,16 @@ class RulesRuntime:
                     offset -= int(phase["duration_minutes"])
             primary = targets.resolve_ability_target(projection, actor, ability, arguments.get("target_id"))
             RequirementEvaluator().ensure_satisfied(actor, ability, projection=projection, primary_target=primary, stat_lookup=lookup, effective_stats=effective)
+            if ability.condition_expression and not self.evaluate_condition(
+                project_id,
+                projection,
+                ability.condition_expression,
+                actor_id=str(actor.id),
+                source_id=str(source_raw["id"]),
+                target_id=str(primary.id),
+                ability=ability,
+            ):
+                raise DomainOperationError(f"{actor.name} does not meet the ability conditions")
             execution = EffectExecutor(targets).normalize(projection=projection, actor=actor, primary_target=primary, ability=ability, next_sequence=int(projection.get("_next_sequence", 0)), elapsed_minutes=int(projection.get("elapsed_minutes", 0)), stat_lookup=lookup, effective_stats=effective, id_factory=new_id)
             rule_cost_events: list[dict[str, Any]] = []
             if ability.rule_costs:

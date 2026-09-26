@@ -1102,6 +1102,7 @@ class Ability(DomainModel):
     )
     target_type: AbilityTarget = AbilityTarget.SELF
     requirements: RequirementExpression = Field(default_factory=RequirementExpression)
+    condition_expression: dict[str, Any] | None = None
     costs: list[AbilityCost] = Field(default_factory=list)
     rule_costs: list[dict[str, Any]] = Field(default_factory=list)
     actions: list[AbilityAction] = Field(default_factory=list)

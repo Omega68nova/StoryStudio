@@ -273,6 +273,22 @@ export type ValueExpression =
   | { kind: "negate"; children: [ValueExpression] }
   | { kind: "add" | "subtract" | "multiply" | "divide" | "minimum" | "maximum"; children: [ValueExpression, ValueExpression] };
 export type RuleCost = { kind?: "stat"; owner: RuleObjectSelector; stat_key: string; amount: ValueExpression };
+export type ConditionExpression = {
+  kind: "and" | "or" | "not" | "compare" | "exists" | "has_tag" | "has_item" | "has_ability" | "relationship" | "location" | "time" | "weather";
+  children?: ConditionExpression[];
+  child?: ConditionExpression | null;
+  left?: ValueExpression | null;
+  right?: ValueExpression | null;
+  comparison?: "eq" | "ne" | "lt" | "lte" | "gt" | "gte";
+  selector?: RuleObjectSelector | null;
+  tag?: string | null;
+  item_id?: string | null;
+  ability_key?: string | null;
+  relation?: string | null;
+  location_id?: string | null;
+  time_phase_id?: string | null;
+  weather_id?: string | null;
+};
 export type EffectDefinition = { project_id?: string; effect_key: string; name: string; description: string; target_stat_key: string; operation: "add" | "subtract" | "set" | "multiply"; formula: FormulaNode; value_expression?: ValueExpression | null; clock: "story_minutes" | "target_actions" | "world_actions"; duration: number; tick_interval: number; evaluation_mode: "snapshot" | "live"; stacking_policy: "replace" | "refresh" | "stack" | "independent"; max_stacks: number; visibility: "public" | "private" | "narrator"; icon?: string | null; enabled: boolean; stats?: Record<string, number> };
 export type AbilityCost = { kind: "stat" | "consume_source" | "consume_fuel"; stat_key?: string | null; item_id?: string | null; amount: number };
 export type RequirementExpression = {
@@ -293,7 +309,7 @@ export type RequirementExpression = {
 };
 export type AbilityActionTarget = "actor" | "target" | "party" | "location" | "nearby_enemies" | "faction_members" | "relationship_target" | "allies" | "enemies" | "all" | "random";
 export type AbilityAction = { kind: "apply_effect" | "move" | "create" | "remove" | "reveal_knowledge" | "change_relationship" | "advance_time" | "play_noise"; target: AbilityActionTarget; effect_key?: string | null; destination_id?: string | null; entity_kind?: string | null; entity_name?: string | null; state?: Record<string, unknown>; fact_id?: string | null; relation?: string | null; minutes?: number | null; noise_id?: string | null; duration_override?: number | null; tick_override?: number | null };
-export type AbilityDefinition = { project_id?: string; ability_key: string; name: string; description: string; ability_kind: "active" | "passive"; compatible_owner_kinds: Array<"character" | "item">; target_type: "self" | "character" | "choice" | "relationship" | "location" | "all" | "party" | "allies" | "enemies" | "nearby_enemies" | "faction_members" | "random"; requirements?: RequirementExpression; costs: AbilityCost[]; rule_costs?: RuleCost[]; actions: AbilityAction[]; passive_triggers: Array<{ kind: "ability_used" | "stat_changed" | "damage" | "owner_action" | "movement" | "time_advanced"; stat_key?: string | null }>; icon?: string | null; enabled: boolean; timed_attack_line_count?: number | null; timed_attack_damage_per_line?: number | null; bullethell_skill_ids: string[]; stats?: Record<string, number> };
+export type AbilityDefinition = { project_id?: string; ability_key: string; name: string; description: string; ability_kind: "active" | "passive"; compatible_owner_kinds: Array<"character" | "item">; target_type: "self" | "character" | "choice" | "relationship" | "location" | "all" | "party" | "allies" | "enemies" | "nearby_enemies" | "faction_members" | "random"; requirements?: RequirementExpression; condition_expression?: ConditionExpression | null; costs: AbilityCost[]; rule_costs?: RuleCost[]; actions: AbilityAction[]; passive_triggers: Array<{ kind: "ability_used" | "stat_changed" | "damage" | "owner_action" | "movement" | "time_advanced"; stat_key?: string | null }>; icon?: string | null; enabled: boolean; timed_attack_line_count?: number | null; timed_attack_damage_per_line?: number | null; bullethell_skill_ids: string[]; stats?: Record<string, number> };
 export type RuleMigrationWarning = { id: string; warning_kind: string; message: string; details: Record<string, unknown>; acknowledged: boolean };
 
 export type GenerationTaskStatus =

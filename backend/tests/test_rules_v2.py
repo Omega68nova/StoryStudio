@@ -543,3 +543,30 @@ def test_phase8_api_schemas_preserve_generalized_fields() -> None:
     })
     assert ability.rule_costs[0]["owner"]["kind"] == "source"
     assert ability.stats["power"] == 7
+
+
+def test_ability_condition_expression_round_trip_and_runtime(tmp_path) -> None:
+    from app.database import Database
+    from app.data import DataProvider
+    from app.domain.world import Ability, Stat
+
+    db = Database(tmp_path)
+    db.initialize()
+    data = DataProvider(db)
+    project_id = db.create_project("ability condition v2")["id"]
+    data.rules.save_stat(Stat.model_validate({
+        "project_id": project_id, "stat_key": "power", "label": "Power",
+        "compatible_owner_kinds": ["character"], "default_value": 1,
+        "minimum": 0, "maximum": 100,
+    }))
+    ability = data.rules.save_ability(Ability.model_validate({
+        "project_id": project_id, "ability_key": "strong_cast", "name": "Strong Cast",
+        "condition_expression": {
+            "kind": "compare",
+            "left": {"kind": "stat", "selector": {"kind": "actor"}, "stat_key": "power"},
+            "comparison": "gte",
+            "right": {"kind": "constant", "value": 5},
+        },
+    }))
+    assert ability.condition_expression is not None
+    assert ability.condition_expression["kind"] == "compare"

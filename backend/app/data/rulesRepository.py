@@ -5,7 +5,7 @@ from typing import Any
 
 from app.data.baseRepository import BaseRepository
 from app.database import new_id, utc_now
-from app.domain.rules_v2 import RuleCost, ValueExpression
+from app.domain.rules_v2 import ConditionExpression, RuleCost, ValueExpression
 from app.domain.world import (
     Ability,
     AbilityAction,
@@ -143,6 +143,28 @@ class RulesRepository(BaseRepository):
         project_id = str(ability.project_id)
         definitions = {item.stat_key: item for item in self.stats(project_id)}
         requirement_stats, requirement_abilities = self._requirement_references(ability.requirements)
+        if ability.condition_expression:
+            condition = ConditionExpression.model_validate(ability.condition_expression)
+            def collect_condition(node: dict[str, Any]) -> tuple[set[str], set[str]]:
+                stats: set[str] = set()
+                abilities: set[str] = set()
+                for side in ("left", "right"):
+                    raw_value = node.get(side)
+                    if isinstance(raw_value, dict):
+                        stats.update(self._value_expression_stat_keys(raw_value))
+                if node.get("ability_key"):
+                    abilities.add(str(node["ability_key"]))
+                for child in node.get("children") or []:
+                    if isinstance(child, dict):
+                        child_stats, child_abilities = collect_condition(child)
+                        stats.update(child_stats); abilities.update(child_abilities)
+                if isinstance(node.get("child"), dict):
+                    child_stats, child_abilities = collect_condition(node["child"])
+                    stats.update(child_stats); abilities.update(child_abilities)
+                return stats, abilities
+            condition_stats, condition_abilities = collect_condition(condition.model_dump(mode="json", exclude_none=True))
+            requirement_stats.update(condition_stats)
+            requirement_abilities.update(condition_abilities)
         missing_stats = requirement_stats.difference(definitions)
         missing_stats.update(str(cost.stat_key) for cost in ability.costs if cost.stat_key and cost.stat_key not in definitions)
         missing_stats.update(str(trigger.stat_key) for trigger in ability.passive_triggers if trigger.stat_key and trigger.stat_key not in definitions)
@@ -396,7 +418,19 @@ class RulesRepository(BaseRepository):
                 (project_id, key),
             )
         ]
-        return Ability.model_validate({**row, "enabled": bool(row["enabled"]), "compatible_owner_kinds": owners, "requirements": self._requirement(project_id, key), "costs": costs, "rule_costs": rule_costs, "actions": actions, "passive_triggers": triggers, "bullethell_skill_ids": skills, "stats": self.rule_object_stats(project_id, "ability", key)})
+        return Ability.model_validate({
+            **row,
+            "enabled": bool(row["enabled"]),
+            "compatible_owner_kinds": owners,
+            "requirements": self._requirement(project_id, key),
+            "condition_expression": json.loads(row["condition_expression_json"]) if row.get("condition_expression_json") else None,
+            "costs": costs,
+            "rule_costs": rule_costs,
+            "actions": actions,
+            "passive_triggers": triggers,
+            "bullethell_skill_ids": skills,
+            "stats": self.rule_object_stats(project_id, "ability", key),
+        })
 
     def _requirement(self, project_id: str, ability_key: str) -> dict[str, Any]:
         rows = self.db.fetch_all("SELECT * FROM ability_requirement_nodes WHERE project_id=? AND ability_key=? ORDER BY position", (project_id, ability_key))
@@ -421,9 +455,10 @@ class RulesRepository(BaseRepository):
         now = utc_now()
         with self.db._lock, self.db.connect() as connection:
             existing = connection.execute("SELECT created_at FROM ability_definitions WHERE project_id=? AND ability_key=?", (ability.project_id, ability.ability_key)).fetchone()
-            data = ability.model_dump(mode="json", exclude={"compatible_owner_kinds", "requirements", "costs", "rule_costs", "actions", "passive_triggers", "bullethell_skill_ids", "stats"})
+            data = ability.model_dump(mode="json", exclude={"compatible_owner_kinds", "requirements", "condition_expression", "costs", "rule_costs", "actions", "passive_triggers", "bullethell_skill_ids", "stats"})
+            data["condition_expression_json"] = json.dumps(ability.condition_expression) if ability.condition_expression else None
             data.update(created_at=existing["created_at"] if existing else now, updated_at=now)
-            connection.execute("INSERT INTO ability_definitions(project_id,ability_key,name,description,ability_kind,target_type,icon,enabled,timed_attack_line_count,timed_attack_damage_per_line,created_at,updated_at) VALUES(:project_id,:ability_key,:name,:description,:ability_kind,:target_type,:icon,:enabled,:timed_attack_line_count,:timed_attack_damage_per_line,:created_at,:updated_at) ON CONFLICT(project_id,ability_key) DO UPDATE SET name=excluded.name,description=excluded.description,ability_kind=excluded.ability_kind,target_type=excluded.target_type,icon=excluded.icon,enabled=excluded.enabled,timed_attack_line_count=excluded.timed_attack_line_count,timed_attack_damage_per_line=excluded.timed_attack_damage_per_line,updated_at=excluded.updated_at", data)
+            connection.execute("INSERT INTO ability_definitions(project_id,ability_key,name,description,ability_kind,target_type,icon,enabled,timed_attack_line_count,timed_attack_damage_per_line,condition_expression_json,created_at,updated_at) VALUES(:project_id,:ability_key,:name,:description,:ability_kind,:target_type,:icon,:enabled,:timed_attack_line_count,:timed_attack_damage_per_line,:condition_expression_json,:created_at,:updated_at) ON CONFLICT(project_id,ability_key) DO UPDATE SET name=excluded.name,description=excluded.description,ability_kind=excluded.ability_kind,target_type=excluded.target_type,icon=excluded.icon,enabled=excluded.enabled,timed_attack_line_count=excluded.timed_attack_line_count,timed_attack_damage_per_line=excluded.timed_attack_damage_per_line,condition_expression_json=excluded.condition_expression_json,updated_at=excluded.updated_at", data)
             for table in ("ability_owner_kinds", "ability_requirement_nodes", "ability_costs", "ability_rule_costs", "ability_actions", "ability_passive_triggers", "ability_bullethell_skills"):
                 connection.execute(f"DELETE FROM {table} WHERE project_id=? AND ability_key=?", (ability.project_id, ability.ability_key))
             connection.executemany("INSERT INTO ability_owner_kinds(project_id,ability_key,owner_kind) VALUES(?,?,?)", [(str(ability.project_id), ability.ability_key, str(kind)) for kind in ability.compatible_owner_kinds])
