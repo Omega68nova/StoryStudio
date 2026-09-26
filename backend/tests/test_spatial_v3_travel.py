@@ -105,7 +105,7 @@ def test_resume_then_later_transition_reports_full_progress(tmp_path) -> None:
         id="field",
         project_id=project["id"],
         navigation_space_id="outside-space",
-        rate_per_100_units=100,
+        rate_per_100_units=1,
         candidates=[EncounterCandidate(location_id="event")],
     ))
     data.spatial_v3.save_encounter_policy(EncounterPolicy(
@@ -118,34 +118,44 @@ def test_resume_then_later_transition_reports_full_progress(tmp_path) -> None:
     ))
 
     service = SpatialV3TravelPreview(data.spatial_v3)
-    first = service.preview(
+    route = service.pathfinder.plan(
+        project_id=project["id"],
+        start_space_id="outside-space",
+        start=(0, 0),
+        target_space_id="inside-space",
+        target=(1, 0),
+    )
+    signature = service._route_signature(route)
+    # Simulate resuming after an already-consumed movement encounter at x=50.
+    # Pick an ordinal whose next exponential interval is beyond the remaining
+    # 50 units, so the next interruption is deterministically the door.
+    ordinal = next(
+        value
+        for value in range(1000)
+        if -__import__("math").log(
+            1.0 - service._stable_uniform(
+                "resume-progress", signature, 0, value, "distance"
+            )
+        ) / 0.01 > 50
+    )
+    cursor = service._encode_cursor({
+        "route_signature": signature,
+        "seed_hash": __import__("hashlib").sha256(b"resume-progress").hexdigest(),
+        "unit_index": 0,
+        "distance_offset": 50,
+        "encounter_ordinal": ordinal,
+    })
+
+    result = service.preview(
         project_id=project["id"],
         start_space_id="outside-space",
         start=(0, 0),
         target_space_id="inside-space",
         target=(1, 0),
         seed="resume-progress",
+        resume_cursor=cursor,
     )
-    assert first["status"] == "interrupted"
-    assert first["encounter"]["trigger_kind"] == "distance"
-
-    cursor = first["resume_cursor"]
-    result = first
-    # Dense distance policies can cause more than one deterministic encounter
-    # before the door. Keep consuming them until the connector interruption.
-    for _ in range(20):
-        result = service.preview(
-            project_id=project["id"],
-            start_space_id="outside-space",
-            start=(0, 0),
-            target_space_id="inside-space",
-            target=(1, 0),
-            seed="resume-progress",
-            resume_cursor=cursor,
-        )
-        if result["status"] == "interrupted" and result["encounter"]["trigger_kind"] == "transition":
-            break
-        cursor = result["resume_cursor"]
+    assert result["status"] == "interrupted"
     assert result["encounter"]["trigger_kind"] == "transition"
     assert result["progress"]["traversed_distance"] == 100
     assert result["progress"]["traversed_travel_cost"] == 100
@@ -171,32 +181,32 @@ def test_geometry_step_splits_do_not_change_encounter_span(tmp_path) -> None:
         rate_per_100_units=10,
         candidates=[EncounterCandidate(location_id="event")],
     ))
-    # A connector-shaped irrelevant feature would change path candidates but
-    # must not reset the encounter policy's accumulated distance.
+    from app.domain.spatial_v3 import BarrierProperties
     data.spatial_v3.save_feature(MapFeature(
-        id="irrelevant",
+        id="wall",
         project_id=project["id"],
         navigation_space_id="space",
-        feature_kind="connector",
-        geometry={"type": "Point", "coordinates": (25, 0)},
-        properties=ConnectorProperties(
-            source=ConnectorEndpoint(navigation_space_id="space", point=(25, 0)),
-            target=ConnectorEndpoint(navigation_space_id="space", point=(25, 1)),
-        ),
+        feature_kind="barrier",
+        geometry={"type": "LineString", "coordinates": [(25, -5), (25, 5)]},
+        properties=BarrierProperties(),
     ))
 
-    result = SpatialV3TravelPreview(data.spatial_v3).preview(
+    service = SpatialV3TravelPreview(data.spatial_v3)
+    route = service.pathfinder.plan(
         project_id=project["id"],
         start_space_id="space",
         start=(0, 0),
         target_space_id="space",
         target=(50, 0),
-        seed="span-seed",
     )
-    # The 50-unit continuous exposure qualifies the minimum_distance=40 policy,
-    # even if the visibility graph/path contains multiple movement steps.
-    assert result["route"]["total_distance"] >= 50
-    assert result["status"] in {"complete", "interrupted"}
+    assert len(route["steps"]) > 1
+    units = service._units(project["id"], route)
+    movement_units = [unit for unit in units if unit["kind"] == "movement"]
+    assert len(movement_units) == 1
+    assert len(movement_units[0]["parts"]) > 1
+    context = service._movement_context(project["id"], movement_units[0])
+    assert context["rate_per_100_units"] == 10
+    assert "slow-start" in context["policy_ids"]
 
 
 def test_transition_encounter_works_from_reverse_connector_side(tmp_path) -> None:

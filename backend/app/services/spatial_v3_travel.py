@@ -135,7 +135,7 @@ class SpatialV3TravelPreview:
     def _point_along(unit: dict[str, Any], distance: float) -> dict[str, Any]:
         remaining = max(0.0, float(distance))
         cumulative = 0.0
-        for part in unit["parts"]:
+        for part_index, part in enumerate(unit["parts"]):
             part_distance = float(part.get("distance") or 0)
             if remaining <= part_distance + 1e-9:
                 ratio = 0.0 if part_distance <= 1e-12 else max(0.0, min(1.0, remaining / part_distance))
@@ -148,7 +148,7 @@ class SpatialV3TravelPreview:
                 return {
                     "navigation_space_id": part["navigation_space_id"],
                     "point": point,
-                    "route_step_index": unit["route_step_indices"][unit["parts"].index(part)],
+                    "route_step_index": unit["route_step_indices"][part_index],
                     "distance_into_step": min(remaining, part_distance),
                     "distance_into_span": cumulative + min(remaining, part_distance),
                 }
