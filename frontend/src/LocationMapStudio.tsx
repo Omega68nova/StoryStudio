@@ -598,6 +598,10 @@ export function LocationMapStudio({
       </TextField>
       <Button onClick={() => { setCreateSpaceLocation(locations[0]?.id ?? ""); setCreateSpaceOpen(true); }}>New space</Button>
       <Button variant="outlined" onClick={() => openPreset()}>Apply preset</Button>
+      <Button variant="outlined" disabled={!spaceId} onClick={() => {
+        const url = `${window.location.origin}${window.location.pathname}#spatial-playtest:${encodeURIComponent(projectId)}:${encodeURIComponent(spaceId)}`;
+        window.open(url, "_blank", "noopener,noreferrer");
+      }}>Playtest map</Button>
       {spaceDraft && <Chip label={spaceDraft.navigation_mode === "free" ? "FREE map" : "ROUTED map"} color={spaceDraft.navigation_mode === "free" ? "success" : "warning"}/>}
     </Stack>
 
@@ -660,6 +664,7 @@ export function LocationMapStudio({
               setConnectorTargetPoint(point);
             }}
             layerSettings={layerSettings}
+            locationNames={Object.fromEntries(locations.map(location => [location.id, location.name]))}
           />
         </Paper>
 

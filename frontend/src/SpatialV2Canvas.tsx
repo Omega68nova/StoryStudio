@@ -251,6 +251,7 @@ export function SpatialV2Canvas({
   onCreateFeature,
   onConnectorPoint,
   layerSettings,
+  locationNames,
 }: {
   features: V2CanvasFeature[];
   tool: V2Tool;
@@ -262,6 +263,7 @@ export function SpatialV2Canvas({
   onCreateFeature: (kind: V2FeatureKind, points: V2Point[]) => void;
   onConnectorPoint: (point: V2Point) => void;
   layerSettings: Record<string, { textured: boolean; editable: boolean; labels_mode: "hidden" | "important" | "all" }>;
+  locationNames: Record<string, string>;
 }) {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -454,6 +456,7 @@ export function SpatialV2Canvas({
           const center = centroid(geometry);
           const settings = layerSettings[feature.render_layer ?? ""];
           const editable = settings?.editable !== false;
+          const displayName = feature.semantic_location_id ? (locationNames[feature.semantic_location_id] ?? feature.name) : feature.name;
           const showLabel = settings?.labels_mode === "all"
             || (settings?.labels_mode !== "hidden" && (feature.id === selectedFeatureId || Boolean(feature.semantic_location_id)));
           if (feature.geometry.type === "Point") {
@@ -475,7 +478,7 @@ export function SpatialV2Canvas({
             disabled={!editable}
             style={{ left: `${center[0]}%`, top: `${center[1]}%`, pointerEvents: editable ? "auto" : "none" }}
           >
-            <b>{feature.name || feature.feature_kind}</b>
+            <b>{displayName || feature.feature_kind}</b>
             <small>{feature.feature_kind}</small>
           </button>;
         })}
