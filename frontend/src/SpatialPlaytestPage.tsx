@@ -28,6 +28,7 @@ type Space = {
   id: string;
   owner_location_id: string | null;
   navigation_mode: "free" | "routed";
+  bounds?: Geometry | null;
 };
 
 type SpaceBinding = {
@@ -172,7 +173,7 @@ function movementWinner(features: Feature[], point: Point) {
 }
 
 function canOccupyIn(details: SpaceDetails, point: Point) {
-  const boundary = details.inherited_context?.boundary;
+  const boundary = details.inherited_context?.boundary ?? details.space.bounds;
   if (boundary && !pointInGeometry(point, boundary)) return false;
   const winner = movementWinner(details.features, point);
   if (winner) return winner.properties.traversal?.default_allowed !== false;
@@ -250,8 +251,8 @@ export function SpatialPlaytestPage({
     [current],
   );
   const barriers = useMemo(
-    () => features.filter(feature => feature.feature_kind === "barrier"),
-    [features],
+    () => current?.features.filter(feature => feature.enabled && feature.feature_kind === "barrier") ?? [],
+    [current],
   );
 
   const activeSemanticLocationId = useMemo(() => {
@@ -488,7 +489,7 @@ export function SpatialPlaytestPage({
             )
             .map(child => {
               const childContext = child.inherited_context!;
-              const sourceFeatures = features.filter(feature => childContext.source_feature_ids.includes(feature.id));
+              const sourceFeatures = current.features.filter(feature => feature.enabled && childContext.source_feature_ids.includes(feature.id));
               const entered = sourceFeatures.some(feature =>
                 feature.feature_kind === "surface"
                 && pointInGeometry(candidate, feature.geometry)
