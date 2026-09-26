@@ -13,6 +13,7 @@ import {
   T,
   TLHandle,
   TLHandleDragInfo,
+  TLEventMapHandler,
   TLShape,
   TLShapeId,
   Tldraw,
@@ -499,7 +500,7 @@ export function SpatialTldrawCanvas({
       }
     }, { source: "user", scope: "document" });
 
-    const handleEditorEvent = (info: Parameters<Parameters<Editor["on"]>[1]>[0]) => {
+    const handleEditorEvent: TLEventMapHandler<"event"> = info => {
       if (info.type === "keyboard") {
         if (info.key?.toLowerCase() === "e") eHeldRef.current = info.name !== "key_up";
         return;
